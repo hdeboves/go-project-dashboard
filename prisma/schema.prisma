@@ -1,0 +1,382 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model AppSetting {
+  id        String   @id @default(cuid())
+  key       String   @unique
+  valueEnc  String
+  isSecret  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model GoogleConnection {
+  id              String   @id @default(cuid())
+  userEmail       String   @unique
+  accessTokenEnc  String
+  refreshTokenEnc String?
+  expiresAt       DateTime
+  scope           String
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+model Project {
+  id                        String   @id @default(cuid())
+  codeProjet                String
+  client                    String
+  nomJeu                    String
+  isSandbox                 Boolean  @default(true)
+  driveInternalRootId       String?
+  driveExternalRootId       String?
+  budgetSheetId             String?
+  retroplanningSheetId      String?
+  reportingSheetId          String?
+  weeklyTemplateSlidesId    String?
+  reportingTemplateSlidesId String?
+  gmailLabelId              String?
+  gmailMatchRulesJson       String   @default("{}")
+  calendarId                String?
+  brandKitJson              String   @default("{}")
+  talentsJson               String   @default("[]")
+  createdAt                 DateTime @default(now())
+  updatedAt                 DateTime @updatedAt
+
+  driveNodes        DriveNode[]
+  syncStatuses      SyncStatus[]
+  budgetLines       BudgetLine[]
+  invoices          Invoice[]
+  retroTasks        RetroTask[]
+  retroProposals    RetroProposal[]
+  retroSnapshots    RetroSnapshot[]
+  calendarRules     CalendarRule[]
+  calendarEvents    CalendarEvent[]
+  weeklyReports     WeeklyReport[]
+  reportingRawFiles ReportingRawFile[]
+  fortniteMetrics   FortniteMetric[]
+  influenceMetrics  InfluenceMetric[]
+  verbatims         Verbatim[]
+  auditLogs         AuditLog[]
+
+  @@unique([codeProjet, client, nomJeu])
+  @@index([codeProjet])
+}
+
+model DriveNode {
+  id                 String    @id @default(cuid())
+  projectId          String
+  code               String
+  name               String
+  driveFileId        String?
+  parentNodeId       String?
+  isFolder           Boolean   @default(true)
+  mimeType           String?
+  isExtEligible      Boolean   @default(false)
+  extMirrorFileId    String?
+  lastSyncedAt       DateTime?
+  internalModifiedAt DateTime?
+  contentHash        String?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  project    Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  parent     DriveNode?  @relation("DriveTree", fields: [parentNodeId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  children   DriveNode[] @relation("DriveTree")
+  syncStatus SyncStatus?
+
+  @@index([projectId, code])
+  @@index([projectId, driveFileId])
+}
+
+model SyncStatus {
+  id                    String    @id @default(cuid())
+  projectId             String
+  driveNodeId           String    @unique
+  validationStatus      String    @default("BROUILLON_INTERNE")
+  driftDetected         Boolean   @default(false)
+  lastExtSyncAt         DateTime?
+  allowPermanentExtSync Boolean   @default(false)
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  project   Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  driveNode DriveNode @relation(fields: [driveNodeId], references: [id], onDelete: Cascade)
+
+  @@index([projectId, validationStatus])
+}
+
+model BudgetLine {
+  id                 String   @id @default(cuid())
+  projectId          String
+  category           String
+  objet              String
+  realisePar         String?
+  expenseType        String   @default("Externe")
+  saleQty            Float    @default(1)
+  saleDays           Float    @default(1)
+  saleUnitPrice      Float    @default(0)
+  saleTotalHt        Float    @default(0)
+  preOpUnitCost      Float    @default(0)
+  preOpTotalHt       Float    @default(0)
+  postOpQty          Float    @default(0)
+  postOpDays         Float    @default(0)
+  postOpUnitCost     Float    @default(0)
+  postOpTotalHt      Float    @default(0)
+  sheetRowIndex      Int?
+  invoiceNumbersNote String?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  project  Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  invoices Invoice[]
+
+  @@index([projectId])
+}
+
+model Invoice {
+  id                 String   @id @default(cuid())
+  projectId          String
+  budgetLineId       String?
+  gmailMessageId     String?
+  originalFilename   String
+  renamedFilename    String?
+  driveFileId        String?
+  vendorName         String?
+  invoiceNumber      String?
+  invoiceDate        String?
+  amountHt           Float    @default(0)
+  tvaAmount          Float    @default(0)
+  amountTtc          Float    @default(0)
+  invoiceType        String   @default("UNIQUE")
+  prestationLabel    String?
+  detectedCodeProjet String?
+  cpConflict         Boolean  @default(false)
+  status             String   @default("PENDING_VALIDATION")
+  pennylaneDraftId   String?
+  extractedJson      String   @default("{}")
+  stepDriveDone      Boolean  @default(false)
+  stepSheetDone      Boolean  @default(false)
+  stepGmailDone      Boolean  @default(false)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  project    Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  budgetLine BudgetLine? @relation(fields: [budgetLineId], references: [id], onDelete: SetNull)
+
+  @@index([projectId, status])
+  @@index([projectId, cpConflict])
+}
+
+model RetroTask {
+  id            String    @id @default(cuid())
+  projectId     String
+  phase         String
+  etape         String?
+  tache         String
+  owner         String?
+  startDate     DateTime?
+  endDate       DateTime?
+  status        String    @default("A_FAIRE")
+  sheetRowIndex Int?
+  isMilestone   Boolean   @default(false)
+  milestoneType String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  project        Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  proposals      RetroProposal[]
+  calendarEvents CalendarEvent[]
+
+  @@index([projectId])
+}
+
+model RetroProposal {
+  id                String    @id @default(cuid())
+  projectId         String
+  retroTaskId       String?
+  sourceType        String
+  sourceRef         String?
+  summary           String
+  evidenceQuote     String?
+  proposedStatus    String?
+  proposedStartDate DateTime?
+  proposedEndDate   DateTime?
+  deltaDays         Int       @default(0)
+  confidence        Float     @default(0.8)
+  status            String    @default("PENDING")
+  createdAt         DateTime  @default(now())
+
+  project   Project    @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  retroTask RetroTask? @relation(fields: [retroTaskId], references: [id], onDelete: SetNull)
+
+  @@index([projectId, status])
+}
+
+model RetroSnapshot {
+  id           String   @id @default(cuid())
+  projectId    String
+  snapshotDate DateTime
+  driveFileId  String?
+  tasksJson    String
+  createdAt    DateTime @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId, snapshotDate])
+}
+
+model CalendarRule {
+  id                  String   @id @default(cuid())
+  projectId           String
+  milestoneType       String
+  offsetDays          Int
+  titleTemplate       String
+  descriptionTemplate String?
+  createdAt           DateTime @default(now())
+
+  project        Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  calendarEvents CalendarEvent[]
+
+  @@index([projectId, milestoneType])
+}
+
+model CalendarEvent {
+  id             String   @id @default(cuid())
+  projectId      String
+  retroTaskId    String?
+  calendarRuleId String?
+  googleEventId  String?
+  title          String
+  startAt        DateTime
+  endAt          DateTime
+  status         String   @default("SCHEDULED")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  project      Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  retroTask    RetroTask?    @relation(fields: [retroTaskId], references: [id], onDelete: Cascade)
+  calendarRule CalendarRule? @relation(fields: [calendarRuleId], references: [id], onDelete: SetNull)
+
+  @@index([projectId])
+}
+
+model WeeklyReport {
+  id                  String   @id @default(cuid())
+  projectId           String
+  weekStart           DateTime
+  weekEnd             DateTime
+  title               String
+  slidesFileId        String?
+  gmailDraftId        String?
+  collectedTasksJson  String   @default("[]")
+  visualsDriveIdsJson String   @default("[]")
+  nextStepsClientJson String   @default("[]")
+  nextStepsGoJson     String   @default("[]")
+  status              String   @default("DRAFT")
+  createdAt           DateTime @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId])
+}
+
+model ReportingRawFile {
+  id               String   @id @default(cuid())
+  projectId        String
+  sourceType       String
+  talentName       String?
+  platform         String?
+  driveFileId      String?
+  localPreviewPath String?
+  processed        Boolean  @default(false)
+  createdAt        DateTime @default(now())
+
+  project          Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  fortniteMetrics  FortniteMetric[]
+  influenceMetrics InfluenceMetric[]
+
+  @@index([projectId, sourceType])
+}
+
+model FortniteMetric {
+  id             String   @id @default(cuid())
+  projectId      String
+  rawFileId      String?
+  date           String
+  uniquePlayers  Int      @default(0)
+  sessions       Int      @default(0)
+  avgPlaytimeSec Float    @default(0)
+  retentionD1    Float?
+  peakConcurrent Int      @default(0)
+  createdAt      DateTime @default(now())
+
+  project Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  rawFile ReportingRawFile? @relation(fields: [rawFileId], references: [id], onDelete: SetNull)
+
+  @@index([projectId, date])
+}
+
+model InfluenceMetric {
+  id              String    @id @default(cuid())
+  projectId       String
+  rawFileId       String?
+  talentName      String
+  platform        String
+  contentUrl      String?
+  sparkCode       String?
+  publishedAt     DateTime?
+  views           Int?
+  likes           Int?
+  comments        Int?
+  shares          Int?
+  reposts         Int?
+  saves           Int?
+  engagementRate  Float?
+  confidenceJson  String?
+  verifiedByHuman Boolean   @default(false)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  project Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  rawFile ReportingRawFile? @relation(fields: [rawFileId], references: [id], onDelete: SetNull)
+
+  @@index([projectId, talentName, platform])
+}
+
+model Verbatim {
+  id                String   @id @default(cuid())
+  projectId         String
+  authorHandle      String
+  platform          String
+  talentName        String?
+  quote             String
+  likesCount        Int      @default(0)
+  selectedForSlides Boolean  @default(false)
+  createdAt         DateTime @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId])
+}
+
+model AuditLog {
+  id          String   @id @default(cuid())
+  projectId   String?
+  actor       String
+  action      String
+  targetType  String
+  targetId    String?
+  detailsJson String   @default("{}")
+  createdAt   DateTime @default(now())
+
+  project Project? @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId, createdAt])
+  @@index([action])
+}
