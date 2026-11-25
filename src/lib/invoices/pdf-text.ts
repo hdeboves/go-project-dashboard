@@ -153,16 +153,45 @@ export function extractTextFromPdfBuffer(buffer: Buffer): string {
   collected.push(...extractTextOperatorsFromChunk(rawLatin1));
 
   // 2. Decompress /FlateDecode streams and extract text operators
+  const isPdfStreamPrefixByte = (b: number): boolean =>
+    b === 0x0a || // \n
+    b === 0x0d || // \r
+    b === 0x20 || // space
+    b === 0x09 || // \t
+    b === 0x3e || // >
+    b === 0x5d || // ]
+    b === 0x2f || // /
+    b === 0x29; // )
+
   let searchOffset = 0;
   while (searchOffset < buffer.length) {
     const streamIdx = buffer.indexOf("stream", searchOffset);
     if (streamIdx === -1) break;
 
-    // Check preceding dictionary (last 512 bytes) for FlateDecode
-    const dictStart = Math.max(0, streamIdx - 512);
-    const dictSlice = buffer.subarray(dictStart, streamIdx).toString("latin1");
+    const validBefore =
+      streamIdx === 0 || isPdfStreamPrefixByte(buffer[streamIdx - 1]);
+    const afterOffset = streamIdx + 6;
+    const validAfter =
+      afterOffset < buffer.length &&
+      (buffer[afterOffset] === 0x0d || buffer[afterOffset] === 0x0a);
 
-    let dataStart = streamIdx + 6;
+    if (!validBefore || !validAfter) {
+      searchOffset = afterOffset;
+      continue;
+    }
+
+    // Check preceding dictionary (up to 4096 bytes, bounded by nearest prior endobj) for FlateDecode
+    const rawDictStart = Math.max(0, streamIdx - 4096);
+    const rawDictSlice = buffer
+      .subarray(rawDictStart, streamIdx)
+      .toString("latin1");
+    const lastEndObjIdx = rawDictSlice.lastIndexOf("endobj");
+    const dictSlice =
+      lastEndObjIdx !== -1
+        ? rawDictSlice.slice(lastEndObjIdx + 6)
+        : rawDictSlice;
+
+    let dataStart = afterOffset;
     if (buffer[dataStart] === 0x0d && buffer[dataStart + 1] === 0x0a) {
       dataStart += 2;
     } else if (buffer[dataStart] === 0x0a || buffer[dataStart] === 0x0d) {

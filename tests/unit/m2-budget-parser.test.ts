@@ -10,6 +10,7 @@ import {
   importBudgetFromSheetCopy,
   importBudgetFromXlsx,
   syncBudgetFromAttachedSheet,
+  upsertManualBudgetLine,
 } from "@/lib/budget/service";
 import { PILOT_SANDBOX_CONFIG } from "@/lib/drive/tree-service";
 import { AppHttpError, PreconditionError } from "@/lib/errors";
@@ -290,6 +291,7 @@ describe("M2 Budget 3-Block Parser & Sheet Import Service", () => {
 
     expect(res.ok).toBe(true);
     expect(res.lines).toHaveLength(3);
+    expect(res.lines[0].sheetRowIndex).toBe(13); // Canonical fallback row index aligned with matrix
     expect(createCallsWithSourceMime[0]).toEqual({
       mimeType: "application/vnd.google-apps.spreadsheet",
       sourceMimeType:
@@ -339,5 +341,72 @@ describe("M2 Budget 3-Block Parser & Sheet Import Service", () => {
     expect(gateway.drive.copyCalls[0].sourceFileId).toBe(
       PILOT_SANDBOX_CONFIG.prodTemplates.budgetSheetId
     );
+  });
+
+  it("preserves postOp* fields, alerts, and fixed-price saleTotalHt when updating an existing BudgetLine via upsertManualBudgetLine", async () => {
+    const project = await prisma.project.create({
+      data: {
+        codeProjet: "326088",
+        client: "Test Preserve",
+        nomJeu: "Fortnite",
+        isSandbox: true,
+      },
+    });
+
+    const created = await upsertManualBudgetLine(prisma, project.id, {
+      category: "MEDIA",
+      objet: "Médiatisation sur Fortnite",
+      realisePar: "GO",
+      expenseType: "Externe",
+      saleQty: 1,
+      saleDays: 1,
+      saleUnitPrice: 0,
+      saleTotalHt: 50000,
+      preOpUnitCost: 2500,
+      preOpTotalHt: 2500,
+      postOpQty: 1,
+      postOpDays: 1,
+      postOpUnitCost: 2671.5,
+      postOpTotalHt: 2671.5,
+    });
+
+    expect(created.line.saleTotalHt).toBe(50000);
+    expect(created.line.postOpTotalHt).toBe(2671.5);
+    expect(created.alerts).toHaveLength(1);
+    expect(created.alerts[0].level).toBe("CRITICAL");
+
+    // Simulate BudgetTable edit omitting postOp* fields
+    const updated = await upsertManualBudgetLine(prisma, project.id, {
+      id: created.line.id,
+      category: created.line.category,
+      objet: created.line.objet,
+      realisePar: "GO Updated",
+      expenseType: created.line.expenseType,
+      saleQty: 1,
+      saleDays: 1,
+      saleUnitPrice: 0,
+      saleTotalHt: 50000,
+      preOpUnitCost: 2500,
+      preOpTotalHt: 2500,
+    });
+
+    expect(updated.line.realisePar).toBe("GO Updated");
+    expect(updated.line.saleTotalHt).toBe(50000);
+    expect(updated.line.postOpQty).toBe(1);
+    expect(updated.line.postOpDays).toBe(1);
+    expect(updated.line.postOpUnitCost).toBe(2671.5);
+    expect(updated.line.postOpTotalHt).toBe(2671.5);
+    expect(updated.alerts).toHaveLength(1);
+    expect(updated.alerts[0].level).toBe("CRITICAL");
+
+    // Partial update omitting both totals and factor fields preserves saleTotalHt & preOpTotalHt
+    const partial = await upsertManualBudgetLine(prisma, project.id, {
+      id: created.line.id,
+      category: created.line.category,
+      objet: "Médiatisation Fortnite V2",
+    });
+    expect(partial.line.saleTotalHt).toBe(50000);
+    expect(partial.line.preOpTotalHt).toBe(2500);
+    expect(partial.line.postOpTotalHt).toBe(2671.5);
   });
 });

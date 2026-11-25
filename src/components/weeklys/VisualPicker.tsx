@@ -1,6 +1,6 @@
 "use client";
 
-import { Image as ImageIcon } from "lucide-react";
+import { ExternalLink, Image as ImageIcon } from "lucide-react";
 
 export interface WeeklyVisualView {
   id: string;
@@ -20,22 +20,29 @@ export function VisualPicker({
   onToggle: (id: string) => void;
 }) {
   return (
-    <section className="rounded-xl border border-[#232b3d] bg-[#11151f] p-5">
-      <div className="flex items-center justify-between border-b border-[#232b3d] pb-3">
+    <section className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-[0_1px_2px_rgba(15,23,42,0.04)] dark:border-slate-800 dark:bg-[#111827]">
+      <div className="flex items-center justify-between border-b border-slate-100 pb-3.5 dark:border-slate-800/80">
         <div className="flex items-center gap-2">
-          <ImageIcon className="h-4 w-4 text-amber-400" />
-          <h2 className="text-base font-bold text-white">
-            Visuels 004. Production (PNG / JPG)
+          <ImageIcon className="h-4 w-4 text-indigo-500" />
+          <h2 className="text-sm font-semibold text-slate-900 dark:text-white">
+            Visuels à intégrer
           </h2>
         </div>
-        <span className="font-mono text-[11px] text-slate-400">
-          {selectedIds.length} sélectionné(s)
+        <span
+          className={`text-xs font-medium ${
+            selectedIds.length > 3
+              ? "text-rose-600 dark:text-rose-400"
+              : "text-slate-400"
+          }`}
+        >
+          {selectedIds.length} / 3 max sur Slides
         </span>
       </div>
 
       {visuals.length === 0 ? (
-        <p className="mt-4 text-xs text-slate-400">
-          Aucune image PNG/JPG trouvée dans <code className="font-mono">004. Production</code>. Le deck sera généré sans visuel inséré.
+        <p className="py-6 text-center text-xs text-slate-500 dark:text-slate-400">
+          Aucune image trouvée dans le dossier Production. Le Weekly sera créé
+          sans visuel.
         </p>
       ) : (
         <div className="mt-3 space-y-2">
@@ -44,19 +51,40 @@ export function VisualPicker({
             return (
               <label
                 key={v.id}
-                className="flex cursor-pointer items-center justify-between gap-2 rounded-lg border border-[#232b3d] bg-[#171d2b] px-3 py-2 text-xs hover:border-cyan-500/40"
+                className={`flex cursor-pointer items-center justify-between gap-2 rounded-xl border px-3.5 py-2.5 text-xs transition-colors ${
+                  checked
+                    ? "border-rose-200 bg-rose-50/40 dark:border-rose-500/30 dark:bg-rose-500/15"
+                    : "border-slate-100 bg-slate-50/60 hover:bg-slate-50 dark:border-slate-800/80 dark:bg-slate-800/60 dark:hover:bg-slate-800/70"
+                }`}
               >
                 <div className="flex min-w-0 items-center gap-2.5">
                   <input
                     type="checkbox"
                     checked={checked}
                     onChange={() => onToggle(v.id)}
+                    className="h-4 w-4 shrink-0 accent-rose-600"
                   />
-                  <span className="truncate font-medium text-white">{v.name}</span>
+                  <span className="truncate font-medium text-slate-800 dark:text-slate-100">
+                    {v.name}
+                  </span>
                 </div>
-                <span className="font-mono text-[10px] text-slate-400">
-                  {v.code}
-                </span>
+                <div className="flex shrink-0 items-center gap-2">
+                  <span className="font-mono text-[10px] text-slate-400">
+                    {v.code}
+                  </span>
+                  {v.driveFileId && (
+                    <a
+                      href={`https://drive.google.com/file/d/${v.driveFileId}/view`}
+                      target="_blank"
+                      rel="noreferrer"
+                      onClick={(e) => e.stopPropagation()}
+                      title="Prévisualiser dans Google Drive"
+                      className="rounded p-1 text-slate-400 hover:bg-white hover:text-indigo-600 dark:hover:bg-slate-900 dark:hover:text-indigo-400"
+                    >
+                      <ExternalLink className="h-3.5 w-3.5" />
+                    </a>
+                  )}
+                </div>
               </label>
             );
           })}

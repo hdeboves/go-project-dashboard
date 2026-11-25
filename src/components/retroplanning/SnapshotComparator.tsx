@@ -54,7 +54,9 @@ export function SnapshotComparator({
   onCreateSnapshot: () => Promise<void>;
   onCompareSnapshots: (fromId: string, toId: string) => Promise<void>;
 }) {
-  const [fromId, setFromId] = useState<string>(snapshots[1]?.id ?? snapshots[0]?.id ?? "");
+  const [fromId, setFromId] = useState<string>(
+    snapshots[1]?.id ?? snapshots[0]?.id ?? ""
+  );
   const [toId, setToId] = useState<string>(snapshots[0]?.id ?? "");
 
   const effectiveFromId =
@@ -67,14 +69,15 @@ export function SnapshotComparator({
       : (snapshots[0]?.id ?? "");
 
   return (
-    <section className="rounded-xl border border-[#232b3d] bg-[#11151f] p-5">
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#232b3d] pb-3">
+    <section className="rounded-2xl border border-slate-200/80 bg-white p-6 shadow-[0_1px_2px_rgba(15,23,42,0.04)] dark:border-slate-800 dark:bg-[#111827]">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 pb-4 dark:border-slate-800/80">
         <div>
-          <h2 className="text-base font-bold text-white">
-            Snapshots 14 jours (002.2) & Comparateur de Dérives
+          <h2 className="text-base font-semibold text-slate-900 dark:text-white">
+            Historique & comparaison des dates
           </h2>
-          <p className="mt-0.5 text-xs text-slate-400">
-            Archivage strictement interne dans <span className="font-mono">002.2 Historique Rétroplanning</span> et comparaison visuelle entre deux dates
+          <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
+            Enregistrez des points d&apos;étape (tous les 14 jours) pour repérer
+            les décalages au fil du projet.
           </p>
         </div>
 
@@ -82,51 +85,52 @@ export function SnapshotComparator({
           type="button"
           disabled={creatingSnapshot}
           onClick={() => void onCreateSnapshot()}
-          className="inline-flex items-center gap-2 rounded-lg border border-[#232b3d] bg-[#171d2b] px-3.5 py-2 text-xs font-semibold text-slate-100 hover:bg-[#232b3d] disabled:opacity-50"
+          className="inline-flex items-center gap-2 rounded-xl bg-rose-600 px-4 py-2 text-xs font-semibold text-white hover:bg-rose-700 disabled:opacity-50"
         >
-          <Camera className="h-3.5 w-3.5 text-cyan-400" />
-          {creatingSnapshot ? "Archivage..." : "Créer Snapshot 14j"}
+          <Camera className="h-3.5 w-3.5" />
+          {creatingSnapshot ? "Enregistrement..." : "Archiver la version du jour"}
         </button>
       </div>
 
       {snapshots.length === 0 ? (
-        <p className="mt-4 text-xs text-slate-400">
-          Aucun snapshot archivé pour le moment (0 snapshot). Créez un premier cliché ci-dessus.
+        <p className="py-8 text-center text-xs text-slate-500 dark:text-slate-400">
+          Aucune archive pour le moment. Cliquez sur « Archiver la version du
+          jour » pour créer votre premier point de repère.
         </p>
       ) : (
         <div className="mt-4 space-y-4">
-          <div className="flex flex-wrap items-end gap-3 rounded-lg border border-[#232b3d] bg-[#171d2b] p-3">
-            <div className="min-w-[190px] flex-1">
-              <label className="block text-[10px] font-semibold text-slate-400">
-                Date A (référence)
+          <div className="flex flex-wrap items-end gap-3 rounded-xl bg-slate-50 p-4 dark:bg-slate-800/60">
+            <div className="min-w-[180px] flex-1">
+              <label className="block text-[11px] font-medium text-slate-500 dark:text-slate-400">
+                Version A (avant)
               </label>
               <select
                 aria-label="Snapshot Date A"
                 value={effectiveFromId}
                 onChange={(e) => setFromId(e.target.value)}
-                className="mt-1 w-full rounded border border-[#232b3d] bg-[#0d111a] px-2.5 py-1.5 font-mono text-xs text-white"
+                className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-800 dark:border-slate-800 dark:bg-[#111827] dark:text-slate-100"
               >
                 {snapshots.map((s) => (
                   <option key={s.id} value={s.id}>
-                    {s.snapshotDate.slice(0, 10)} ({s.id.slice(0, 8)})
+                    Version du {s.snapshotDate.slice(0, 10)}
                   </option>
                 ))}
               </select>
             </div>
 
-            <div className="min-w-[190px] flex-1">
-              <label className="block text-[10px] font-semibold text-slate-400">
-                Date B (comparaison)
+            <div className="min-w-[180px] flex-1">
+              <label className="block text-[11px] font-medium text-slate-500 dark:text-slate-400">
+                Version B (après)
               </label>
               <select
                 aria-label="Snapshot Date B"
                 value={effectiveToId}
                 onChange={(e) => setToId(e.target.value)}
-                className="mt-1 w-full rounded border border-[#232b3d] bg-[#0d111a] px-2.5 py-1.5 font-mono text-xs text-white"
+                className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-800 dark:border-slate-800 dark:bg-[#111827] dark:text-slate-100"
               >
                 {snapshots.map((s) => (
                   <option key={s.id} value={s.id}>
-                    {s.snapshotDate.slice(0, 10)} ({s.id.slice(0, 8)})
+                    Version du {s.snapshotDate.slice(0, 10)}
                   </option>
                 ))}
               </select>
@@ -135,72 +139,65 @@ export function SnapshotComparator({
             <button
               type="button"
               disabled={!effectiveFromId || !effectiveToId || comparing}
-              onClick={() => void onCompareSnapshots(effectiveFromId, effectiveToId)}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-cyan-600 px-4 py-1.5 text-xs font-semibold text-white hover:bg-cyan-500 disabled:opacity-50"
+              onClick={() =>
+                void onCompareSnapshots(effectiveFromId, effectiveToId)
+              }
+              className="inline-flex items-center gap-1.5 rounded-xl bg-slate-900 px-4 py-2 text-xs font-semibold text-white hover:bg-slate-800 disabled:opacity-50 dark:bg-indigo-600 dark:hover:bg-indigo-500"
             >
               <GitCompareArrows className="h-3.5 w-3.5" />
               {comparing ? "Comparaison..." : "Comparer"}
             </button>
           </div>
 
-          {snapshots.length === 1 && !comparison && (
-            <p className="text-xs text-slate-400">
-              1 snapshot archivé ({snapshots[0].snapshotDate.slice(0, 10)}). Créez un second snapshot ultérieur pour mesurer les dérives.
-            </p>
-          )}
-
           {comparison && (
             <div className="space-y-3">
-              <div className="flex flex-wrap gap-2 text-[11px]">
-                <span className="rounded-full border border-red-500/40 bg-red-500/10 px-2.5 py-0.5 font-mono text-red-300">
+              <div className="flex flex-wrap gap-2 text-xs">
+                <span className="rounded-full bg-rose-50 px-3 py-1 font-semibold text-rose-700 dark:bg-rose-500/15 dark:text-rose-300">
                   {comparison.summary.delayedCount} retard(s)
                 </span>
-                <span className="rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-0.5 font-mono text-emerald-300">
+                <span className="rounded-full bg-emerald-50 px-3 py-1 font-semibold text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300">
                   {comparison.summary.aheadCount} avance(s)
                 </span>
-                <span className="rounded-full border border-slate-600 bg-slate-800/70 px-2.5 py-0.5 font-mono text-slate-300">
+                <span className="rounded-full bg-slate-100 px-3 py-1 font-medium text-slate-600 dark:bg-slate-800 dark:text-slate-300">
                   {comparison.summary.onTimeCount} à l&apos;heure
-                </span>
-                <span className="rounded-full border border-cyan-500/40 bg-cyan-500/10 px-2.5 py-0.5 font-mono text-cyan-300">
-                  +{comparison.summary.addedCount} / -{comparison.summary.removedCount}
                 </span>
               </div>
 
-              <div className="overflow-x-auto">
+              <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-800">
                 <table className="w-full text-left text-xs">
                   <thead>
-                    <tr className="border-b border-[#232b3d] text-[11px] text-slate-400">
-                      <th className="py-2 pr-3">Tâche</th>
-                      <th className="py-2 pr-3">Fin Date A</th>
-                      <th className="py-2 pr-3">Fin Date B</th>
-                      <th className="py-2 pr-3">Dérive</th>
+                    <tr className="border-b border-slate-200 bg-slate-50 text-[11px] text-slate-500 dark:border-slate-800 dark:bg-slate-800/60 dark:text-slate-400">
+                      <th className="px-3.5 py-2.5 font-semibold">Tâche</th>
+                      <th className="px-3 py-2.5 font-semibold">Avant</th>
+                      <th className="px-3 py-2.5 font-semibold">Après</th>
+                      <th className="px-3 py-2.5 font-semibold">Écart</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-[#232b3d]/60">
+                  <tbody className="divide-y divide-slate-100 bg-white dark:divide-slate-800/80 dark:bg-[#111827]">
                     {comparison.diffs.map((d) => {
                       const pillClass =
                         d.deltaDays > 0
-                          ? "border-red-500/40 bg-red-500/15 text-red-300"
+                          ? "bg-rose-50 text-rose-700 dark:bg-rose-500/15 dark:text-rose-300"
                           : d.deltaDays < 0
-                            ? "border-emerald-500/40 bg-emerald-500/15 text-emerald-300"
+                            ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300"
                             : d.classification === "ADDED"
-                              ? "border-cyan-500/40 bg-cyan-500/15 text-cyan-300"
-                              : d.classification === "REMOVED"
-                                ? "border-amber-500/40 bg-amber-500/15 text-amber-300"
-                                : "border-slate-600 bg-slate-800/70 text-slate-300";
+                              ? "bg-indigo-50 text-indigo-700 dark:bg-indigo-500/15 dark:text-indigo-300"
+                              : "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300";
 
                       return (
                         <tr key={`${d.taskId}-${d.tache}`}>
-                          <td className="py-2 pr-3 font-medium text-white">{d.tache}</td>
-                          <td className="py-2 pr-3 font-mono text-[11px] text-slate-400">
+                          <td className="px-3.5 py-2.5 font-medium text-slate-800 dark:text-slate-100">
+                            {d.tache}
+                          </td>
+                          <td className="px-3 py-2.5 font-mono text-[11px] text-slate-500 dark:text-slate-400">
                             {d.fromEndDate ?? "—"}
                           </td>
-                          <td className="py-2 pr-3 font-mono text-[11px] text-slate-300">
+                          <td className="px-3 py-2.5 font-mono text-[11px] text-slate-700 dark:text-slate-200">
                             {d.toEndDate ?? "—"}
                           </td>
-                          <td className="py-2 pr-3">
+                          <td className="px-3 py-2.5">
                             <span
-                              className={`inline-block rounded-full border px-2 py-0.5 font-mono text-[11px] font-semibold ${pillClass}`}
+                              className={`inline-block rounded-full px-2.5 py-0.5 text-[11px] font-semibold ${pillClass}`}
                             >
                               {d.label}
                             </span>

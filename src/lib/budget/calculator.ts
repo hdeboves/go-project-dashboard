@@ -40,6 +40,9 @@ export interface BudgetSummary {
   plannedMarginPct: number;
   realMarginHt: number;
   realMarginPct: number;
+  forecastCostHt: number;
+  forecastMarginHt: number;
+  forecastMarginPct: number;
   // French field aliases
   prixVenduHt: number;
   coutsPreOpTotal: number;
@@ -77,7 +80,7 @@ export interface BudgetAlert {
   objet: string;
   category: string;
   level: "WARNING" | "CRITICAL";
-  thresholdPct: 85 | 100;
+  thresholdPct: 90 | 100;
   ratioPct: number;
   preOpTotalHt: number;
   postOpTotalHt: number;
@@ -225,7 +228,7 @@ export function computeBudgetMetrics(
           message: `Dépense hors budget pré-op sur "${line.objet}" (0 € budgété, ${postHt.toFixed(2)} € facturé).`,
         });
       }
-    } else if (linePostCents >= linePreCents) {
+    } else if (linePostCents > linePreCents) {
       const ratioPct = round2((linePostCents / linePreCents) * 100);
       alerts.push({
         budgetLineId: line.id,
@@ -237,21 +240,24 @@ export function computeBudgetMetrics(
         preOpTotalHt: fromCents(linePreCents),
         postOpTotalHt: fromCents(linePostCents),
         unbudgeted: false,
-        message: `Dépassement 100% sur "${line.objet}" (${ratioPct.toFixed(2)}% du budget pré-op consommé).`,
+        message: `Dépassement sur "${line.objet}" (${ratioPct.toFixed(2)}% du budget pré-op consommé).`,
       });
-    } else if (linePostCents * 100 >= linePreCents * 85) {
+    } else if (
+      linePostCents < linePreCents &&
+      linePostCents * 100 >= linePreCents * 90
+    ) {
       const ratioPct = round2((linePostCents / linePreCents) * 100);
       alerts.push({
         budgetLineId: line.id,
         objet: line.objet,
         category: categoryName,
         level: "WARNING",
-        thresholdPct: 85,
+        thresholdPct: 90,
         ratioPct,
         preOpTotalHt: fromCents(linePreCents),
         postOpTotalHt: fromCents(linePostCents),
         unbudgeted: false,
-        message: `Seuil d'alerte 85% atteint sur "${line.objet}" (${ratioPct.toFixed(2)}% du budget pré-op consommé).`,
+        message: `Seuil de vigilance 90% atteint sur "${line.objet}" (${ratioPct.toFixed(2)}% du budget pré-op consommé).`,
       });
     }
   }
@@ -288,6 +294,13 @@ export function computeBudgetMetrics(
   const realMarginPct =
     soldCents > 0 ? round2((realMarginCents / soldCents) * 100) : 0;
 
+  const forecastCostCents = postOpTotalCents + remainingToCommitCents;
+  const forecastCostHt = fromCents(forecastCostCents);
+  const forecastMarginCents = soldCents - forecastCostCents;
+  const forecastMarginHt = fromCents(forecastMarginCents);
+  const forecastMarginPct =
+    soldCents > 0 ? round2((forecastMarginCents / soldCents) * 100) : 0;
+
   const summary: BudgetSummary = {
     soldTotalHt,
     soldHt: soldTotalHt,
@@ -308,6 +321,9 @@ export function computeBudgetMetrics(
     plannedMarginPct,
     realMarginHt,
     realMarginPct,
+    forecastCostHt,
+    forecastMarginHt,
+    forecastMarginPct,
     // French aliases
     prixVenduHt: soldTotalHt,
     coutsPreOpTotal: preOpTotalHt,

@@ -1,10 +1,24 @@
 "use client";
 
-import { AlertTriangle, RefreshCw, Settings, ShieldAlert } from "lucide-react";
+import {
+  AlertTriangle,
+  ExternalLink,
+  GanttChartSquare,
+  History,
+  Kanban,
+  ListTodo,
+  Lock,
+  RefreshCw,
+  Settings,
+  Sparkles,
+} from "lucide-react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
-import { GanttBoard, type RetroTaskView } from "@/components/retroplanning/GanttBoard";
+import {
+  GanttBoard,
+  type RetroTaskView,
+} from "@/components/retroplanning/GanttBoard";
 import {
   SnapshotComparator,
   type RetroSnapshotView,
@@ -14,6 +28,7 @@ import {
   VeilleProposalPanel,
   type RetroProposalView,
 } from "@/components/retroplanning/VeilleProposalPanel";
+import { showToast } from "@/lib/toast";
 
 interface ShellStatusResponse {
   activeProjectId: string | null;
@@ -23,21 +38,36 @@ interface ShellStatusResponse {
     client: string;
     nomJeu: string;
     isSandbox: boolean;
+    retroplanningSheetId?: string | null;
   }>;
   googleConnected: boolean;
   geminiConfigured: boolean;
 }
 
+type AsanaTab = "list" | "kanban" | "timeline" | "ai" | "history";
+
 export function RetroplanningWorkspace() {
   const searchParams = useSearchParams();
   const queryProjectId = searchParams.get("projectId");
+  const queryTab = searchParams.get("tab");
+  const initialTab: AsanaTab =
+    queryTab === "kanban" ||
+    queryTab === "timeline" ||
+    queryTab === "ai" ||
+    queryTab === "history"
+      ? queryTab
+      : "list";
 
+  const [activeTab, setActiveTab] = useState<AsanaTab>(initialTab);
   const [projectId, setProjectId] = useState<string | null>(null);
   const [projectLabel, setProjectLabel] = useState("");
+  const [retroSheetId, setRetroSheetId] = useState<string | null>(null);
   const [tasks, setTasks] = useState<RetroTaskView[]>([]);
   const [proposals, setProposals] = useState<RetroProposalView[]>([]);
   const [snapshots, setSnapshots] = useState<RetroSnapshotView[]>([]);
-  const [comparison, setComparison] = useState<SnapshotComparisonView | null>(null);
+  const [comparison, setComparison] = useState<SnapshotComparisonView | null>(
+    null
+  );
   const [loading, setLoading] = useState(true);
   const [syncingSheet, setSyncingSheet] = useState(false);
   const [runningVeille, setRunningVeille] = useState(false);
@@ -62,6 +92,7 @@ export function RetroplanningWorkspace() {
         const targetId = queryProjectId || shell?.activeProjectId || null;
         if (!targetId) {
           setProjectId(null);
+          setRetroSheetId(null);
           setTasks([]);
           setProposals([]);
           setSnapshots([]);
@@ -72,13 +103,16 @@ export function RetroplanningWorkspace() {
         const proj = shell?.projects.find((p) => p.id === targetId);
         setProjectLabel(
           proj
-            ? `CP ${proj.codeProjet} | ${proj.client} — ${proj.nomJeu}`
-            : `Projet ${targetId}`
+            ? `${proj.client} — ${proj.nomJeu} (CP ${proj.codeProjet})`
+            : `Projet actif`
         );
+        if (proj?.retroplanningSheetId) {
+          setRetroSheetId(proj.retroplanningSheetId);
+        }
 
         if (shell && !shell.googleConnected) {
           setSetupRequiredMsg(
-            "Connecteur Google Workspace non configuré. Connectez OAuth2 et la clé Gemini dans Paramètres."
+            "Connectez Google Workspace dans Paramètres pour synchroniser le planning avec Google Sheets."
           );
         } else {
           setSetupRequiredMsg(null);
@@ -92,6 +126,7 @@ export function RetroplanningWorkspace() {
           tasks?: RetroTaskView[];
           proposals?: RetroProposalView[];
           snapshots?: RetroSnapshotView[];
+          project?: { retroplanningSheetId?: string | null };
           error?: string;
           code?: string;
         };
@@ -105,19 +140,19 @@ export function RetroplanningWorkspace() {
         if (!res.ok) {
           setFeedback({
             type: "error",
-            text: json.error ?? "Impossible de charger le rétroplanning.",
+            text: json.error ?? "Impossible de charger le planning.",
           });
           return;
         }
 
+        if (json.project?.retroplanningSheetId) {
+          setRetroSheetId(json.project.retroplanningSheetId);
+        }
         setTasks(json.tasks ?? []);
         setProposals(json.proposals ?? []);
         setSnapshots(json.snapshots ?? []);
         if (syncFromSheet) {
-          setFeedback({
-            type: "success",
-            text: "Synchronisation depuis Sheet 002.1 (Par semaine) terminée.",
-          });
+          showToast("Planning synchronisé depuis Google Sheets.");
         }
       } finally {
         setLoading(false);
@@ -131,9 +166,7 @@ export function RetroplanningWorkspace() {
     let active = true;
     const init = async () => {
       await Promise.resolve();
-      if (active) {
-        await loadAll(false);
-      }
+      if (active) await loadAll(false);
     };
     void init();
     const onRefresh = () => void loadAll(false);
@@ -144,23 +177,25 @@ export function RetroplanningWorkspace() {
     };
   }, [loadAll]);
 
-  function handleApiError(status: number, json: { error?: string; code?: string }) {
+  function handleApiError(
+    status: number,
+    json: { error?: string; code?: string }
+  ) {
     if (status === 412) {
       setSetupRequiredMsg(
-        json.error ?? "Connecteur Google Workspace / Gemini requis dans Paramètres."
+        json.error ?? "Connectez Google Workspace / IA dans Paramètres."
       );
       return;
     }
     if (status === 409 && json.code === "CP_CONFLICT") {
       setCpConflictMsg(
-        json.error ?? "Conflit de Code Projet détecté : injection automatique bloquée."
+        json.error ?? "Document bloqué : appartient à un autre projet."
       );
       return;
     }
-    setFeedback({
-      type: "error",
-      text: json.error ?? `Erreur HTTP ${status}.`,
-    });
+    const msg = json.error ?? "Une erreur est survenue.";
+    setFeedback({ type: "error", text: msg });
+    showToast(msg, "error");
   }
 
   async function handleSyncFromSheet() {
@@ -193,7 +228,7 @@ export function RetroplanningWorkspace() {
       handleApiError(res.status, json);
       return false;
     }
-    setFeedback({ type: "success", text: `Tâche "${payload.tache}" ajoutée.` });
+    showToast(`Tâche « ${payload.tache} » ajoutée.`);
     await loadAll(false);
     return true;
   }
@@ -220,10 +255,7 @@ export function RetroplanningWorkspace() {
       handleApiError(res.status, json);
       return false;
     }
-    setFeedback({
-      type: "success",
-      text: "Tâche mise à jour et synchronisée avec 002.1.",
-    });
+    showToast("Tâche mise à jour.");
     await loadAll(false);
     return true;
   }
@@ -236,6 +268,7 @@ export function RetroplanningWorkspace() {
       { method: "DELETE" }
     );
     if (res.ok) {
+      showToast("Tâche supprimée.", "info");
       await loadAll(false);
     } else {
       const json = (await res.json()) as { error?: string; code?: string };
@@ -249,11 +282,14 @@ export function RetroplanningWorkspace() {
     setFeedback(null);
     setCpConflictMsg(null);
     try {
-      const res = await fetch(`/api/projects/${projectId}/retroplanning/veille`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ includeDrive: true }),
-      });
+      const res = await fetch(
+        `/api/projects/${projectId}/retroplanning/veille`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ includeDrive: true }),
+        }
+      );
       const json = (await res.json()) as {
         proposals?: RetroProposalView[];
         blockedConflicts?: Array<{ reason: string }>;
@@ -267,10 +303,9 @@ export function RetroplanningWorkspace() {
       if (json.blockedConflicts && json.blockedConflicts.length > 0) {
         setCpConflictMsg(json.blockedConflicts.map((c) => c.reason).join(" | "));
       }
-      setFeedback({
-        type: "success",
-        text: `Veille IA terminée : ${json.proposals?.length ?? 0} proposition(s) générée(s).`,
-      });
+      showToast(
+        `Analyse terminée : ${json.proposals?.length ?? 0} suggestion(s) trouvée(s).`
+      );
       await loadAll(false);
     } finally {
       setRunningVeille(false);
@@ -296,10 +331,7 @@ export function RetroplanningWorkspace() {
       handleApiError(res.status, json);
       return;
     }
-    setFeedback({
-      type: "success",
-      text: "Proposition appliquée à la base, au Sheet 002.1 et aux cascades Agenda.",
-    });
+    showToast("Mise à jour appliquée au planning et à l'agenda.");
     await loadAll(false);
   }
 
@@ -319,6 +351,7 @@ export function RetroplanningWorkspace() {
       handleApiError(res.status, json);
       return;
     }
+    showToast("Suggestion ignorée.", "info");
     await loadAll(false);
   }
 
@@ -344,10 +377,7 @@ export function RetroplanningWorkspace() {
         handleApiError(res.status, json);
         return;
       }
-      setFeedback({
-        type: "success",
-        text: `Snapshot archivé dans 002.2 : ${json.fileName ?? "OK"}`,
-      });
+      showToast(`Archive créée : ${json.fileName ?? "OK"}`);
       await loadAll(false);
     } finally {
       setCreatingSnapshot(false);
@@ -378,43 +408,141 @@ export function RetroplanningWorkspace() {
     }
   }
 
+  const pendingProposalsCount = proposals.filter(
+    (p) => p.status === "PENDING"
+  ).length;
+  const doneCount = tasks.filter((t) => t.status === "TERMINE").length;
+
   return (
-    <div className="mx-auto max-w-7xl space-y-6">
-      <div className="flex flex-wrap items-center justify-between gap-4">
+    <div className="mx-auto max-w-6xl space-y-5">
+      {/* Header */}
+      <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-white">
-            Rétroplanning Gantt, Veille IA & Historique 14j
-          </h1>
-          <p className="mt-1 text-sm text-slate-400">
-            {projectLabel || "Sélectionnez ou initialisez un projet."}
+          <div className="flex flex-wrap items-center gap-2.5">
+            <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-white">
+              Tâches & Planning
+            </h1>
+            {tasks.length > 0 && (
+              <span className="rounded-full bg-indigo-50 px-2.5 py-0.5 text-xs font-semibold text-indigo-700 dark:bg-indigo-500/15 dark:text-indigo-300">
+                {doneCount} / {tasks.length} terminées
+              </span>
+            )}
+            <Link
+              href="/drive"
+              data-testid="retroplanning-lock-banner"
+              title="Planning interne uniquement — jamais synchronisé en continu au client (export PDF manuel dans Drive)"
+              className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2.5 py-0.5 text-[11px] font-medium text-slate-600 hover:bg-slate-200/70 dark:bg-slate-800 dark:text-slate-300"
+            >
+              <Lock className="h-3 w-3 text-indigo-600 dark:text-indigo-400" />
+              Privé agence · Export PDF
+            </Link>
+          </div>
+          <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+            {projectLabel || "Sélectionnez un projet dans le menu de gauche."}
           </p>
         </div>
 
-        <button
-          type="button"
-          disabled={!projectId || syncingSheet}
-          onClick={() => void handleSyncFromSheet()}
-          className="inline-flex items-center gap-2 rounded-lg border border-[#232b3d] bg-[#171d2b] px-3.5 py-2 text-xs font-semibold text-slate-200 hover:bg-[#232b3d] disabled:opacity-50"
-        >
-          <RefreshCw className={`h-3.5 w-3.5 ${syncingSheet ? "animate-spin" : ""}`} />
-          Synchroniser depuis 002.1
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          {retroSheetId && (
+            <a
+              href={`https://docs.google.com/spreadsheets/d/${retroSheetId}/edit`}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-600 shadow-2xs hover:bg-slate-50 hover:text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:text-white"
+            >
+              <span>Ouvrir le Sheet</span>
+              <ExternalLink className="h-3.5 w-3.5 text-slate-400" />
+            </a>
+          )}
+
+          <button
+            type="button"
+            disabled={!projectId || syncingSheet}
+            onClick={() => void handleSyncFromSheet()}
+            className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs font-semibold text-slate-700 shadow-2xs transition-colors hover:bg-slate-50 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+          >
+            <RefreshCw
+              className={`h-3.5 w-3.5 text-indigo-600 dark:text-indigo-400 ${syncingSheet ? "animate-spin" : ""}`}
+            />
+            {syncingSheet ? "Synchronisation..." : "Importer depuis Sheets"}
+          </button>
+        </div>
       </div>
 
-      {/* Mandatory 002.1 Internal-Only Lock Banner */}
-      <div
-        data-testid="retroplanning-lock-banner"
-        className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-500/40 bg-amber-950/25 px-5 py-3.5 text-xs text-amber-100"
-      >
-        <div className="flex items-center gap-2.5">
-          <ShieldAlert className="h-5 w-5 shrink-0 text-amber-400" />
-          <span>
-            <strong>Verrou impératif 002.1 Rétroplanning Actif :</strong>{" "}
-            Strictement interne par défaut (
-            <code className="font-mono">NO_PERMANENT_EXT_SYNC</code>). Jamais
-            synchronisé en permanence vers <code className="font-mono">[EXT]</code>{" "}
-            (seul un Export ponctuel manuel existe dans Drive).
-          </span>
+      {/* Clean Split View Tabs: Primary Task Views (Left) vs Secondary Tools (Right) */}
+      <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-200/80 dark:border-slate-800">
+        <div className="flex flex-wrap items-center gap-5">
+          <button
+            type="button"
+            onClick={() => setActiveTab("list")}
+            className={`inline-flex items-center gap-2 border-b-2 pb-3 text-[13px] font-semibold transition-colors ${
+              activeTab === "list"
+                ? "border-sky-600 text-sky-700 dark:border-sky-400 dark:text-sky-300"
+                : "border-transparent text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white"
+            }`}
+          >
+            <ListTodo className="h-4 w-4" />
+            Liste
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab("kanban")}
+            className={`inline-flex items-center gap-2 border-b-2 pb-3 text-[13px] font-semibold transition-colors ${
+              activeTab === "kanban"
+                ? "border-sky-600 text-sky-700 dark:border-sky-400 dark:text-sky-300"
+                : "border-transparent text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white"
+            }`}
+          >
+            <Kanban className="h-4 w-4" />
+            Kanban
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab("timeline")}
+            className={`inline-flex items-center gap-2 border-b-2 pb-3 text-[13px] font-semibold transition-colors ${
+              activeTab === "timeline"
+                ? "border-sky-600 text-sky-700 dark:border-sky-400 dark:text-sky-300"
+                : "border-transparent text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white"
+            }`}
+          >
+            <GanttChartSquare className="h-4 w-4" />
+            Chronologie
+          </button>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-4">
+          <button
+            type="button"
+            onClick={() => setActiveTab("ai")}
+            className={`inline-flex items-center gap-1.5 border-b-2 pb-3 text-xs font-semibold transition-colors ${
+              activeTab === "ai"
+                ? "border-violet-600 text-violet-700 dark:border-violet-400 dark:text-violet-300"
+                : "border-transparent text-slate-500 hover:text-violet-700 dark:text-slate-400 dark:hover:text-violet-300"
+            }`}
+          >
+            <Sparkles className="h-3.5 w-3.5 text-violet-500 dark:text-violet-400" />
+            Veille IA
+            {pendingProposalsCount > 0 && (
+              <span className="rounded-full bg-rose-100 px-1.5 py-0.5 text-[10px] font-bold text-rose-700 dark:bg-rose-500/20 dark:text-rose-300">
+                {pendingProposalsCount}
+              </span>
+            )}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab("history")}
+            className={`inline-flex items-center gap-1.5 border-b-2 pb-3 text-xs font-semibold transition-colors ${
+              activeTab === "history"
+                ? "border-slate-700 text-slate-900 dark:border-slate-300 dark:text-white"
+                : "border-transparent text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white"
+            }`}
+          >
+            <History className="h-3.5 w-3.5" />
+            Historique ({snapshots.length})
+          </button>
         </div>
       </div>
 
@@ -422,17 +550,17 @@ export function RetroplanningWorkspace() {
         <div
           role="alert"
           data-testid="setup-required-banner"
-          className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-500/50 bg-amber-950/40 p-4 text-xs text-amber-100"
+          className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-indigo-200 bg-indigo-50 p-4 text-xs text-indigo-900 dark:border-indigo-500/30 dark:bg-indigo-500/15 dark:text-indigo-200"
         >
-          <div className="flex items-center gap-2.5">
-            <Settings className="h-4 w-4 text-amber-300" />
+          <div className="flex items-center gap-2">
+            <Settings className="h-4 w-4 text-indigo-600 dark:text-indigo-400" />
             <span>{setupRequiredMsg}</span>
           </div>
           <Link
             href="/settings"
-            className="rounded-lg bg-amber-500 px-3 py-1.5 font-semibold text-slate-950 hover:bg-amber-400"
+            className="rounded-xl bg-indigo-600 px-3.5 py-1.5 font-semibold text-white hover:bg-indigo-700"
           >
-            Configurer dans Paramètres
+            Paramètres
           </Link>
         </div>
       )}
@@ -441,9 +569,9 @@ export function RetroplanningWorkspace() {
         <div
           role="alert"
           data-testid="cp-conflict-banner"
-          className="flex items-center gap-2.5 rounded-xl border border-red-500/50 bg-red-950/50 p-4 text-xs font-medium text-red-200"
+          className="flex items-center gap-2.5 rounded-2xl border border-rose-200 bg-rose-50 p-4 text-xs font-medium text-rose-800 dark:border-rose-500/30 dark:bg-rose-500/15 dark:text-rose-200"
         >
-          <AlertTriangle className="h-4 w-4 shrink-0 text-red-400" />
+          <AlertTriangle className="h-4 w-4 shrink-0 text-rose-600 dark:text-rose-400" />
           <span>{cpConflictMsg}</span>
         </div>
       )}
@@ -451,10 +579,10 @@ export function RetroplanningWorkspace() {
       {feedback && (
         <div
           role="status"
-          className={`rounded-xl border p-3.5 text-xs ${
+          className={`rounded-2xl border p-3.5 text-xs ${
             feedback.type === "success"
-              ? "border-emerald-500/40 bg-emerald-950/30 text-emerald-200"
-              : "border-red-500/40 bg-red-950/40 text-red-200"
+              ? "border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-500/30 dark:bg-emerald-500/15 dark:text-emerald-300"
+              : "border-rose-200 bg-rose-50 text-rose-800 dark:border-rose-500/30 dark:bg-rose-500/15 dark:text-rose-200"
           }`}
         >
           {feedback.text}
@@ -462,26 +590,35 @@ export function RetroplanningWorkspace() {
       )}
 
       {loading ? (
-        <div className="rounded-xl border border-[#232b3d] bg-[#11151f] p-8 text-center text-sm text-slate-400">
-          Chargement du rétroplanning...
+        <div className="rounded-2xl border border-slate-200/80 bg-white p-12 text-center text-sm text-slate-500 dark:border-slate-800 dark:bg-[#111827] dark:text-slate-400">
+          Chargement de vos tâches...
         </div>
       ) : (
         <>
-          <GanttBoard
-            tasks={tasks}
-            onCreateTask={handleCreateTask}
-            onUpdateTask={handleUpdateTask}
-            onDeleteTask={handleDeleteTask}
-          />
+          {(activeTab === "list" ||
+            activeTab === "kanban" ||
+            activeTab === "timeline") && (
+            <GanttBoard
+              viewMode={activeTab}
+              tasks={tasks}
+              onCreateTask={handleCreateTask}
+              onUpdateTask={handleUpdateTask}
+              onDeleteTask={handleDeleteTask}
+            />
+          )}
 
-          <div className="grid gap-6 lg:grid-cols-2">
+          {activeTab === "ai" && (
             <VeilleProposalPanel
               proposals={proposals}
+              tasks={tasks}
               runningVeille={runningVeille}
               onRunVeille={handleRunVeille}
               onApplyProposal={handleApplyProposal}
               onDismissProposal={handleDismissProposal}
             />
+          )}
+
+          {activeTab === "history" && (
             <SnapshotComparator
               snapshots={snapshots}
               comparison={comparison}
@@ -490,7 +627,7 @@ export function RetroplanningWorkspace() {
               onCreateSnapshot={handleCreateSnapshot}
               onCompareSnapshots={handleCompareSnapshots}
             />
-          </div>
+          )}
         </>
       )}
     </div>

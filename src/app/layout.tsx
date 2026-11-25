@@ -3,21 +3,36 @@ import { JetBrains_Mono, Plus_Jakarta_Sans } from "next/font/google";
 import { AppShell } from "@/components/AppShell";
 import "./globals.css";
 
-const plusJakartaSans = Plus_Jakarta_Sans({
-  subsets: ["latin"],
+const plusJakarta = Plus_Jakarta_Sans({
   variable: "--font-plus-jakarta",
+  subsets: ["latin"],
+  weight: ["400", "500", "600", "700", "800"],
 });
 
-const jetBrainsMono = JetBrains_Mono({
-  subsets: ["latin"],
+const jetbrainsMono = JetBrains_Mono({
   variable: "--font-jetbrains-mono",
+  subsets: ["latin"],
+  weight: ["400", "500", "600", "700"],
 });
 
 export const metadata: Metadata = {
-  title: "GO Project Hub — GamersOrigin Agency OS",
+  title: "GO Project Hub — GamersOrigin",
   description:
-    "Cockpit de gestion multi-projets automatisé GamersOrigin (Drive 001→006, Budget, Rétroplanning, Agenda, Weeklys, Reporting)",
+    "Gestion de projet, budget, factures et livrables clients pour les équipes GamersOrigin.",
 };
+
+const THEME_INIT_SCRIPT = `
+(function() {
+  try {
+    var saved = localStorage.getItem('go-theme');
+    if (saved === 'dark') {
+      document.documentElement.classList.add('dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+    }
+  } catch (e) {}
+})();
+`;
 
 export default function RootLayout({
   children,
@@ -25,11 +40,13 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html
-      lang="fr"
-      className={`${plusJakartaSans.variable} ${jetBrainsMono.variable} dark`}
-    >
-      <body className="min-h-screen bg-[#090b10] font-sans text-slate-100 antialiased selection:bg-rose-600/30 selection:text-rose-200">
+    <html lang="fr" suppressHydrationWarning>
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }} />
+      </head>
+      <body
+        className={`${plusJakarta.variable} ${jetbrainsMono.variable} bg-[#f8fafc] text-slate-900 antialiased dark:bg-[#0b0f17] dark:text-slate-50`}
+      >
         <AppShell>{children}</AppShell>
       </body>
     </html>

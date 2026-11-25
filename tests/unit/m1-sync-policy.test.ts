@@ -29,7 +29,7 @@ describe("Drive SyncPolicy, 61-folder tree, [EXT] sync & 002.1 lock", () => {
   beforeAll(() => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "go-sync-test-"));
     const dbPath = path.join(tempDir, "test.db");
-    const baseDb = path.join(process.cwd(), "prisma", "dev.db");
+    const baseDb = path.join(process.cwd(), "prisma", "test.db");
     if (fs.existsSync(baseDb)) {
       fs.copyFileSync(baseDb, dbPath);
     } else {

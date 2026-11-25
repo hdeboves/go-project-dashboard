@@ -36,6 +36,9 @@ export interface BudgetSummaryDto {
   plannedMarginPct: number;
   realMarginHt: number;
   realMarginPct: number;
+  forecastCostHt?: number;
+  forecastMarginHt?: number;
+  forecastMarginPct?: number;
 }
 
 export interface CategoryBreakdownDto {
@@ -53,7 +56,7 @@ export interface BudgetAlertDto {
   objet: string;
   category: string;
   level: "WARNING" | "CRITICAL";
-  thresholdPct: 85 | 100;
+  thresholdPct: 90 | 100;
   ratioPct: number;
   preOpTotalHt: number;
   postOpTotalHt: number;
@@ -99,10 +102,9 @@ export interface InvoiceDto {
 
 export function formatEur(value: number): string {
   const safe = Number.isFinite(value) ? value : 0;
-  return new Intl.NumberFormat("fr-FR", {
-    style: "currency",
-    currency: "EUR",
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  }).format(safe);
+  const fixed = Math.abs(safe).toFixed(2);
+  const [intPart, decPart] = fixed.split(".");
+  const grouped = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, "\u00A0");
+  const sign = safe < 0 ? "-" : "";
+  return `${sign}${grouped},${decPart}\u00A0€`;
 }

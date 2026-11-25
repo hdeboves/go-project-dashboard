@@ -20,6 +20,7 @@ import {
   WeeklyDigestPreview,
   type WeeklyDigestTaskView,
 } from "@/components/weeklys/WeeklyDigestPreview";
+import { showToast } from "@/lib/toast";
 
 interface WeeklyReportView {
   id: string;
@@ -76,15 +77,14 @@ export function WeeklysWorkspace() {
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
   const [setupRequiredMsg, setSetupRequiredMsg] = useState<string | null>(null);
+  const [apiWarnings, setApiWarnings] = useState<string[]>([]);
   const [feedback, setFeedback] = useState<{
     type: "success" | "error";
     text: string;
   } | null>(null);
 
   const loadWeeklys = useCallback(async () => {
-    if (!weekStart || !weekEnd) {
-      return;
-    }
+    if (!weekStart || !weekEnd) return;
     setLoading(true);
     try {
       const shellRes = await fetch("/api/shell/status", { cache: "no-store" });
@@ -113,13 +113,13 @@ export function WeeklysWorkspace() {
       const proj = shell?.projects.find((p) => p.id === targetId);
       setProjectLabel(
         proj
-          ? `CP ${proj.codeProjet} | ${proj.client} — ${proj.nomJeu}`
-          : `Projet ${targetId}`
+          ? `${proj.client} — ${proj.nomJeu} (CP ${proj.codeProjet})`
+          : `Projet actif`
       );
 
       if (shell && !shell.googleConnected) {
         setSetupRequiredMsg(
-          "Connecteur Google Slides / Gmail non configuré. Connectez OAuth2 dans Paramètres."
+          "Connectez Google Workspace dans Paramètres pour créer vos Slides et brouillons Gmail."
         );
       } else {
         setSetupRequiredMsg(null);
@@ -144,9 +144,7 @@ export function WeeklysWorkspace() {
         const avail = json.preview?.availableVisuals ?? [];
         setVisuals(avail);
         setSelectedVisualIds((prev) => {
-          if (isProjectSwitch) {
-            return avail.slice(0, 3).map((v) => v.id);
-          }
+          if (isProjectSwitch) return avail.slice(0, 3).map((v) => v.id);
           const validPrev = prev.filter((id) => avail.some((v) => v.id === id));
           return validPrev.length > 0
             ? validPrev
@@ -155,15 +153,11 @@ export function WeeklysWorkspace() {
       } else {
         setFeedback({
           type: "error",
-          text:
-            json.error ?? "Impossible de charger la prévisualisation du Weekly.",
+          text: json.error ?? "Impossible de charger le Weekly.",
         });
       }
     } catch {
-      setFeedback({
-        type: "error",
-        text: "Erreur réseau lors du chargement des Weeklys.",
-      });
+      setFeedback({ type: "error", text: "Erreur réseau." });
     } finally {
       setLoading(false);
     }
@@ -188,9 +182,7 @@ export function WeeklysWorkspace() {
     let active = true;
     const init = async () => {
       await Promise.resolve();
-      if (active) {
-        await loadWeeklys();
-      }
+      if (active) await loadWeeklys();
     };
     void init();
     const onRefresh = () => void loadWeeklys();
@@ -238,19 +230,18 @@ export function WeeklysWorkspace() {
       if (!res.ok) {
         setFeedback({
           type: "error",
-          text: json.error ?? "Échec de la génération du Weekly.",
+          text: json.error ?? "Impossible de générer le Weekly.",
         });
         return;
       }
 
-      const warnSuffix =
+      setApiWarnings(json.warnings ?? []);
+      const okMsg =
         json.warnings && json.warnings.length > 0
-          ? ` (Avertissement partage : ${json.warnings.join(", ")})`
-          : "";
-      setFeedback({
-        type: "success",
-        text: `Weekly généré dans 003.2 + Brouillon Gmail créé : ${json.weekly?.title ?? "OK"}${warnSuffix}`,
-      });
+          ? `Weekly généré (${json.weekly?.title ?? "OK"}) avec ${json.warnings.length} point(s) à vérifier ci-dessous.`
+          : `Weekly prêt ! Slides et brouillon Gmail créés (${json.weekly?.title ?? "OK"}).`;
+      setFeedback({ type: "success", text: okMsg });
+      showToast(okMsg);
       await loadWeeklys();
     } finally {
       setGenerating(false);
@@ -258,58 +249,22 @@ export function WeeklysWorkspace() {
   }
 
   return (
-    <div className="mx-auto max-w-7xl space-y-6">
+    <div className="mx-auto max-w-6xl space-y-6">
+      {/* Calm Header */}
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-white">
-            Générateur Weeklys Clients (Slides 003.2 + Brouillon Gmail)
-          </h1>
-          <p className="mt-1 text-sm text-slate-400">
-            {projectLabel || "Sélectionnez ou initialisez un projet."}
+          <div className="flex flex-wrap items-center gap-2.5">
+            <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-white">
+              Weeklys Clients
+            </h1>
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-0.5 text-[11px] font-medium text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300">
+              <Mail className="h-3 w-3" />
+              Brouillon Gmail uniquement (zéro envoi auto)
+            </span>
+          </div>
+          <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+            {projectLabel || "Sélectionnez un projet dans la barre latérale."}
           </p>
-        </div>
-
-        <button
-          type="button"
-          disabled={!projectId || generating}
-          onClick={() => void handleGenerateWeekly()}
-          className="inline-flex items-center gap-2 rounded-lg bg-[#e11d48] px-4 py-2 text-xs font-semibold text-white hover:bg-[#ff2e58] disabled:opacity-50"
-        >
-          <Sparkles className="h-4 w-4" />
-          {generating ? "Génération..." : "Générer le Weekly"}
-        </button>
-      </div>
-
-      {/* Period Window J-7 -> J */}
-      <div className="flex flex-wrap items-end justify-between gap-4 rounded-xl border border-[#232b3d] bg-[#11151f] p-4 text-xs">
-        <div className="flex flex-wrap items-center gap-3">
-          <div>
-            <label className="block text-[10px] font-semibold text-slate-400">
-              Début fenêtre (J-7)
-            </label>
-            <input
-              type="date"
-              value={weekStart}
-              onChange={(e) => setWeekStart(e.target.value)}
-              className="mt-1 rounded border border-[#232b3d] bg-[#171d2b] px-2.5 py-1.5 text-xs text-white"
-            />
-          </div>
-          <div>
-            <label className="block text-[10px] font-semibold text-slate-400">
-              Fin fenêtre (J)
-            </label>
-            <input
-              type="date"
-              value={weekEnd}
-              onChange={(e) => setWeekEnd(e.target.value)}
-              className="mt-1 rounded border border-[#232b3d] bg-[#171d2b] px-2.5 py-1.5 text-xs text-white"
-            />
-          </div>
-        </div>
-
-        <div className="inline-flex items-center gap-2 rounded-full border border-emerald-500/40 bg-emerald-500/10 px-3 py-1 font-mono text-[11px] text-emerald-300">
-          <Mail className="h-3.5 w-3.5" />
-          Draft-First : brouillon Gmail uniquement (zéro envoi auto)
         </div>
       </div>
 
@@ -317,17 +272,17 @@ export function WeeklysWorkspace() {
         <div
           role="alert"
           data-testid="setup-required-banner"
-          className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-500/50 bg-amber-950/40 p-4 text-xs text-amber-100"
+          className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-indigo-200 bg-indigo-50 p-4 text-xs text-indigo-900 dark:border-indigo-500/30 dark:bg-indigo-500/15 dark:text-indigo-200"
         >
-          <div className="flex items-center gap-2.5">
-            <Settings className="h-4 w-4 text-amber-300" />
+          <div className="flex items-center gap-2">
+            <Settings className="h-4 w-4 text-indigo-600 dark:text-indigo-400" />
             <span>{setupRequiredMsg}</span>
           </div>
           <Link
             href="/settings"
-            className="rounded-lg bg-amber-500 px-3 py-1.5 font-semibold text-slate-950 hover:bg-amber-400"
+            className="rounded-xl bg-indigo-600 px-3.5 py-1.5 font-semibold text-white hover:bg-indigo-700"
           >
-            Configurer dans Paramètres
+            Paramètres
           </Link>
         </div>
       )}
@@ -335,198 +290,370 @@ export function WeeklysWorkspace() {
       {feedback && (
         <div
           role="status"
-          className={`rounded-xl border p-3.5 text-xs ${
+          className={`rounded-2xl border p-3.5 text-xs ${
             feedback.type === "success"
-              ? "border-emerald-500/40 bg-emerald-950/30 text-emerald-200"
-              : "border-red-500/40 bg-red-950/40 text-red-200"
+              ? "border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-500/30 dark:bg-emerald-500/15 dark:text-emerald-300"
+              : "border-rose-200 bg-rose-50 text-rose-800 dark:border-rose-500/30 dark:bg-rose-500/15 dark:text-rose-200"
           }`}
         >
           {feedback.text}
         </div>
       )}
 
-      {/* 2-Column Prochaines étapes Editor */}
-      <section className="rounded-xl border border-[#232b3d] bg-[#11151f] p-5">
-        <div className="border-b border-[#232b3d] pb-3">
-          <h2 className="text-base font-bold text-white">
-            Prochaines étapes — Structure 2 colonnes
-          </h2>
-          <p className="mt-0.5 text-xs text-slate-400">
-            Injectées sur la slide dédiée du deck Weekly (Côté Client vs Côté GO)
-          </p>
-        </div>
-
-        <div className="mt-4 grid gap-4 md:grid-cols-2">
-          {/* Côté Client */}
-          <div className="rounded-lg border border-[#232b3d] bg-[#171d2b] p-4">
-            <h3 className="text-xs font-bold tracking-wide text-cyan-300 uppercase">
-              Côté Client
-            </h3>
-            <ul className="mt-3 space-y-2">
-              {nextStepsClient.map((step, idx) => (
-                <li
-                  key={`${step}-${idx}`}
-                  className="flex items-center justify-between gap-2 rounded border border-[#232b3d] bg-[#0d111a] px-2.5 py-1.5 text-xs text-slate-200"
-                >
-                  <span>{step}</span>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setNextStepsClient((prev) =>
-                        prev.filter((_, i) => i !== idx)
-                      )
-                    }
-                    className="text-slate-400 hover:text-red-300"
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </button>
-                </li>
-              ))}
-            </ul>
-            <div className="mt-3 flex gap-2">
-              <input
-                type="text"
-                value={newClientStep}
-                onChange={(e) => setNewClientStep(e.target.value)}
-                placeholder="Ajouter action Côté Client..."
-                className="flex-1 rounded border border-[#232b3d] bg-[#0d111a] px-2.5 py-1.5 text-xs text-white"
-              />
-              <button
-                type="button"
-                onClick={() => {
-                  if (!newClientStep.trim()) return;
-                  setNextStepsClient((prev) => [...prev, newClientStep.trim()]);
-                  setNewClientStep("");
-                }}
-                className="inline-flex items-center gap-1 rounded bg-cyan-600 px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-cyan-500"
-              >
-                <Plus className="h-3.5 w-3.5" />
-                Ajouter
-              </button>
-            </div>
-          </div>
-
-          {/* Côté GO */}
-          <div className="rounded-lg border border-[#232b3d] bg-[#171d2b] p-4">
-            <h3 className="text-xs font-bold tracking-wide text-rose-300 uppercase">
-              Côté GO
-            </h3>
-            <ul className="mt-3 space-y-2">
-              {nextStepsGo.map((step, idx) => (
-                <li
-                  key={`${step}-${idx}`}
-                  className="flex items-center justify-between gap-2 rounded border border-[#232b3d] bg-[#0d111a] px-2.5 py-1.5 text-xs text-slate-200"
-                >
-                  <span>{step}</span>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setNextStepsGo((prev) => prev.filter((_, i) => i !== idx))
-                    }
-                    className="text-slate-400 hover:text-red-300"
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </button>
-                </li>
-              ))}
-            </ul>
-            <div className="mt-3 flex gap-2">
-              <input
-                type="text"
-                value={newGoStep}
-                onChange={(e) => setNewGoStep(e.target.value)}
-                placeholder="Ajouter action Côté GO..."
-                className="flex-1 rounded border border-[#232b3d] bg-[#0d111a] px-2.5 py-1.5 text-xs text-white"
-              />
-              <button
-                type="button"
-                onClick={() => {
-                  if (!newGoStep.trim()) return;
-                  setNextStepsGo((prev) => [...prev, newGoStep.trim()]);
-                  setNewGoStep("");
-                }}
-                className="inline-flex items-center gap-1 rounded bg-rose-600 px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-rose-500"
-              >
-                <Plus className="h-3.5 w-3.5" />
-                Ajouter
-              </button>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      {!loading && (
-        <div className="grid gap-6 lg:grid-cols-2">
-          <WeeklyDigestPreview
-            weekStart={weekStart}
-            weekEnd={weekEnd}
-            tasks={tasks}
-          />
-          <VisualPicker
-            visuals={visuals}
-            selectedIds={selectedVisualIds}
-            onToggle={toggleVisual}
-          />
+      {apiWarnings.length > 0 && (
+        <div
+          role="alert"
+          className="rounded-2xl border border-indigo-200 bg-indigo-50/70 p-3.5 text-xs text-indigo-900 dark:border-indigo-500/30 dark:bg-indigo-500/15 dark:text-indigo-200"
+        >
+          <p className="font-semibold">Points à vérifier avant envoi client :</p>
+          <ul className="mt-1 list-disc space-y-0.5 pl-4">
+            {apiWarnings.map((w, i) => (
+              <li key={i}>{w}</li>
+            ))}
+          </ul>
         </div>
       )}
 
-      {/* Weekly History */}
-      <section className="rounded-xl border border-[#232b3d] bg-[#11151f] p-5">
-        <div className="flex items-center justify-between border-b border-[#232b3d] pb-3">
-          <div className="flex items-center gap-2">
-            <Presentation className="h-4 w-4 text-emerald-400" />
-            <h2 className="text-base font-bold text-white">
-              Historique Weeklys Clients (003.2)
-            </h2>
-          </div>
-          <span className="font-mono text-[11px] text-slate-400">
-            {weeklys.length} deck(s)
-          </span>
-        </div>
+      {/* 2-Column Executive Composer */}
+      <div className="grid gap-6 lg:grid-cols-12">
+        {/* LEFT (7 cols): Period + Next Steps + Visuals */}
+        <div className="space-y-6 lg:col-span-7">
+          <section className="overflow-hidden rounded-2xl border border-slate-200/80 bg-white shadow-[0_1px_2px_rgba(15,23,42,0.04)] dark:border-slate-800 dark:bg-[#111827]">
+            {/* Compact Period Strip with Quick Week Presets */}
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 bg-slate-50/50 px-5 py-3.5 dark:border-slate-800/80 dark:bg-slate-800/30">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-xs font-semibold text-slate-800 dark:text-slate-100">
+                  Période
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const now = new Date();
+                    const day = (now.getDay() + 6) % 7;
+                    const mon = new Date(now.getTime() - day * 86_400_000);
+                    const fri = new Date(mon.getTime() + 4 * 86_400_000);
+                    setWeekStart(mon.toISOString().slice(0, 10));
+                    setWeekEnd(fri.toISOString().slice(0, 10));
+                  }}
+                  className="rounded-lg border border-slate-200 bg-white px-2 py-0.5 text-[11px] font-medium text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:bg-[#111827] dark:text-slate-300"
+                >
+                  Cette semaine
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const now = new Date();
+                    const day = (now.getDay() + 6) % 7;
+                    const mon = new Date(
+                      now.getTime() - (day + 7) * 86_400_000
+                    );
+                    const fri = new Date(mon.getTime() + 4 * 86_400_000);
+                    setWeekStart(mon.toISOString().slice(0, 10));
+                    setWeekEnd(fri.toISOString().slice(0, 10));
+                  }}
+                  className="rounded-lg border border-slate-200 bg-white px-2 py-0.5 text-[11px] font-medium text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:bg-[#111827] dark:text-slate-300"
+                >
+                  Semaine dernière
+                </button>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <label className="flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400">
+                  Du
+                  <input
+                    type="date"
+                    value={weekStart}
+                    onChange={(e) => setWeekStart(e.target.value)}
+                    className="rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs font-medium text-slate-900 focus:border-indigo-400 focus:outline-none dark:border-slate-700 dark:bg-[#111827] dark:text-white"
+                  />
+                </label>
+                <label className="flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400">
+                  au
+                  <input
+                    type="date"
+                    value={weekEnd}
+                    onChange={(e) => setWeekEnd(e.target.value)}
+                    className="rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs font-medium text-slate-900 focus:border-indigo-400 focus:outline-none dark:border-slate-700 dark:bg-[#111827] dark:text-white"
+                  />
+                </label>
+              </div>
+            </div>
 
-        {weeklys.length === 0 ? (
-          <p className="mt-4 text-xs text-slate-400">
-            Aucun Weekly généré pour ce projet.
-          </p>
-        ) : (
-          <div className="mt-4 space-y-2.5">
-            {weeklys.map((w) => (
-              <div
-                key={w.id}
-                data-testid={`weekly-report-${w.id}`}
-                className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-[#232b3d] bg-[#171d2b] px-4 py-3 text-xs"
-              >
+            {/* Next Steps (2 Hairline-Divided Columns) */}
+            <div className="p-5">
+              <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
                 <div>
-                  <p className="font-semibold text-white">{w.title}</p>
-                  <p className="mt-0.5 font-mono text-[11px] text-slate-400">
-                    Fenêtre : {w.weekStart.slice(0, 10)} → {w.weekEnd.slice(0, 10)}
+                  <h2 className="text-sm font-semibold text-slate-900 dark:text-white">
+                    Prochaines étapes
+                  </h2>
+                  <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
+                    Affichées directement sur la slide « Prochaines étapes » du
+                    client.
                   </p>
                 </div>
+                {tasks.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const clientFromTasks = tasks
+                        .filter((t) => t.status === "EN_ATTENTE_CLIENT")
+                        .slice(0, 4)
+                        .map((t) => t.tache);
+                      const goFromTasks = tasks
+                        .filter((t) => t.status === "EN_COURS")
+                        .slice(0, 4)
+                        .map((t) => t.tache);
+                      if (clientFromTasks.length > 0) {
+                        setNextStepsClient(clientFromTasks);
+                      }
+                      if (goFromTasks.length > 0) {
+                        setNextStepsGo(goFromTasks);
+                      }
+                      showToast(
+                        clientFromTasks.length + goFromTasks.length > 0
+                          ? "Prochaines étapes suggérées depuis votre planning !"
+                          : "Aucune tâche En cours ou Attente client sur la période."
+                      );
+                    }}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-indigo-200 bg-indigo-50/70 px-2.5 py-1 text-[11px] font-semibold text-indigo-700 hover:bg-indigo-100/70 dark:border-indigo-500/30 dark:bg-indigo-500/15 dark:text-indigo-300"
+                  >
+                    <Sparkles className="h-3 w-3" />
+                    Suggérer depuis le planning
+                  </button>
+                )}
+              </div>
 
-                <div className="flex flex-wrap items-center gap-2">
-                  {w.slidesFileId && (
-                    <a
-                      href={`https://docs.google.com/presentation/d/${w.slidesFileId}/edit`}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="inline-flex items-center gap-1 rounded border border-cyan-500/40 bg-cyan-500/10 px-2.5 py-1 font-mono text-[11px] text-cyan-200 hover:bg-cyan-500/20"
+              <div className="grid gap-5 md:grid-cols-2 md:divide-x md:divide-slate-100 dark:md:divide-slate-800/80">
+                {/* Côté Client */}
+                <div className="flex flex-col justify-between gap-2.5">
+                  <div className="space-y-2.5">
+                    <h3 className="text-[11px] font-bold tracking-wider text-indigo-700 uppercase dark:text-indigo-300">
+                      Côté Client
+                    </h3>
+                    <ul className="space-y-1.5">
+                      {nextStepsClient.map((step, idx) => (
+                        <li
+                          key={`${step}-${idx}`}
+                          className="flex items-center justify-between gap-2 rounded-xl border border-slate-200/70 bg-slate-50/50 px-3 py-2 text-xs text-slate-800 dark:border-slate-800 dark:bg-slate-800/40 dark:text-slate-100"
+                        >
+                          <span className="leading-snug">{step}</span>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setNextStepsClient((prev) =>
+                                prev.filter((_, i) => i !== idx)
+                              )
+                            }
+                            className="shrink-0 text-slate-400 hover:text-rose-600"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                  <div className="flex gap-1.5 pt-1">
+                    <input
+                      type="text"
+                      value={newClientStep}
+                      onChange={(e) => setNewClientStep(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" && newClientStep.trim()) {
+                          e.preventDefault();
+                          setNextStepsClient((prev) => [
+                            ...prev,
+                            newClientStep.trim(),
+                          ]);
+                          setNewClientStep("");
+                        }
+                      }}
+                      placeholder="Ajouter une action client..."
+                      className="min-w-0 flex-1 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-900 focus:border-indigo-400 focus:outline-none dark:border-slate-700 dark:bg-[#111827] dark:text-white"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (!newClientStep.trim()) return;
+                        setNextStepsClient((prev) => [
+                          ...prev,
+                          newClientStep.trim(),
+                        ]);
+                        setNewClientStep("");
+                      }}
+                      className="inline-flex shrink-0 items-center justify-center rounded-xl bg-slate-900 px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-slate-800 dark:bg-indigo-600 dark:hover:bg-indigo-500"
+                      title="Ajouter"
                     >
-                      <FileText className="h-3 w-3" />
-                      Slides 003.2
-                    </a>
-                  )}
-                  {w.gmailDraftId && (
-                    <span className="inline-flex items-center gap-1 rounded border border-emerald-500/40 bg-emerald-500/10 px-2.5 py-1 font-mono text-[11px] text-emerald-200">
-                      <Mail className="h-3 w-3" />
-                      Brouillon Gmail ({w.gmailDraftId})
-                    </span>
-                  )}
+                      <Plus className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                </div>
+
+                {/* Côté GO */}
+                <div className="flex flex-col justify-between gap-2.5 md:pl-5">
+                  <div className="space-y-2.5">
+                    <h3 className="text-[11px] font-bold tracking-wider text-rose-700 uppercase dark:text-rose-300">
+                      Côté GamersOrigin
+                    </h3>
+                    <ul className="space-y-1.5">
+                      {nextStepsGo.map((step, idx) => (
+                        <li
+                          key={`${step}-${idx}`}
+                          className="flex items-center justify-between gap-2 rounded-xl border border-slate-200/70 bg-slate-50/50 px-3 py-2 text-xs text-slate-800 dark:border-slate-800 dark:bg-slate-800/40 dark:text-slate-100"
+                        >
+                          <span className="leading-snug">{step}</span>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setNextStepsGo((prev) =>
+                                prev.filter((_, i) => i !== idx)
+                              )
+                            }
+                            className="shrink-0 text-slate-400 hover:text-rose-600"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                  <div className="flex gap-1.5 pt-1">
+                    <input
+                      type="text"
+                      value={newGoStep}
+                      onChange={(e) => setNewGoStep(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" && newGoStep.trim()) {
+                          e.preventDefault();
+                          setNextStepsGo((prev) => [...prev, newGoStep.trim()]);
+                          setNewGoStep("");
+                        }
+                      }}
+                      placeholder="Ajouter une action équipe..."
+                      className="min-w-0 flex-1 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-900 focus:border-indigo-400 focus:outline-none dark:border-slate-700 dark:bg-[#111827] dark:text-white"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (!newGoStep.trim()) return;
+                        setNextStepsGo((prev) => [...prev, newGoStep.trim()]);
+                        setNewGoStep("");
+                      }}
+                      className="inline-flex shrink-0 items-center justify-center rounded-xl bg-slate-900 px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-slate-800 dark:bg-indigo-600 dark:hover:bg-indigo-500"
+                      title="Ajouter"
+                    >
+                      <Plus className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
                 </div>
               </div>
-            ))}
+            </div>
+          </section>
+
+          {!loading && (
+            <VisualPicker
+              visuals={visuals}
+              selectedIds={selectedVisualIds}
+              onToggle={toggleVisual}
+            />
+          )}
+        </div>
+
+        {/* RIGHT (5 cols, sticky): Live Preview + Primary Generate CTA + Compact History */}
+        <aside className="space-y-5 self-start lg:sticky lg:top-16 lg:col-span-5">
+          {/* Action Card */}
+          <div className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-[0_1px_2px_rgba(15,23,42,0.04)] dark:border-slate-800 dark:bg-[#111827]">
+            <div className="flex items-center justify-between gap-2">
+              <h2 className="text-sm font-semibold text-slate-900 dark:text-white">
+                Prêt à générer
+              </h2>
+              <span className="text-[11px] text-slate-500 dark:text-slate-400">
+                {selectedVisualIds.length} visuel(s) ·{" "}
+                {nextStepsClient.length + nextStepsGo.length} étape(s)
+              </span>
+            </div>
+            <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+              Crée la présentation Google Slides dans le dossier client et
+              prépare le brouillon Gmail prêt à relire.
+            </p>
+            <button
+              type="button"
+              disabled={!projectId || generating}
+              onClick={() => void handleGenerateWeekly()}
+              className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl bg-rose-600 px-4 py-2.5 text-xs font-semibold text-white shadow-xs transition-colors hover:bg-rose-700 disabled:opacity-50"
+            >
+              <Sparkles className="h-4 w-4" />
+              {generating ? "Création en cours..." : "Générer le Weekly"}
+            </button>
           </div>
-        )}
-      </section>
+
+          {!loading && (
+            <WeeklyDigestPreview
+              weekStart={weekStart}
+              weekEnd={weekEnd}
+              tasks={tasks}
+            />
+          )}
+
+          {/* Compact History */}
+          <section className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-[0_1px_2px_rgba(15,23,42,0.04)] dark:border-slate-800 dark:bg-[#111827]">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3 dark:border-slate-800/80">
+              <div className="flex items-center gap-2">
+                <Presentation className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
+                <h2 className="text-sm font-semibold text-slate-900 dark:text-white">
+                  Weeklys déjà créés
+                </h2>
+              </div>
+              <span className="text-xs text-slate-400">{weeklys.length}</span>
+            </div>
+
+            {weeklys.length === 0 ? (
+              <p className="py-5 text-center text-xs text-slate-500 dark:text-slate-400">
+                Aucun Weekly généré pour ce projet.
+              </p>
+            ) : (
+              <div className="mt-2 divide-y divide-slate-100 dark:divide-slate-800/70">
+                {weeklys.map((w) => (
+                  <div
+                    key={w.id}
+                    data-testid={`weekly-report-${w.id}`}
+                    className="py-2.5 text-xs"
+                  >
+                    <p className="font-semibold text-slate-900 dark:text-white">
+                      {w.title}
+                    </p>
+                    <p className="mt-0.5 text-[11px] text-slate-500 dark:text-slate-400">
+                      Du {w.weekStart.slice(0, 10)} au {w.weekEnd.slice(0, 10)}
+                    </p>
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                      {w.slidesFileId && (
+                        <a
+                          href={`https://docs.google.com/presentation/d/${w.slidesFileId}/edit`}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-[#111827] dark:text-slate-200 dark:hover:bg-slate-800/70"
+                        >
+                          <FileText className="h-3 w-3 text-indigo-600 dark:text-indigo-400" />
+                          Slides
+                        </a>
+                      )}
+                      {w.gmailDraftId && (
+                        <a
+                          href="https://mail.google.com/mail/u/0/#drafts"
+                          target="_blank"
+                          rel="noreferrer"
+                          className="inline-flex items-center gap-1 rounded-lg bg-emerald-50 px-2.5 py-1 text-[11px] font-medium text-emerald-700 hover:bg-emerald-100 dark:bg-emerald-500/15 dark:text-emerald-300"
+                        >
+                          <Mail className="h-3 w-3" />
+                          Ouvrir brouillon Gmail
+                        </a>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+        </aside>
+      </div>
     </div>
   );
 }

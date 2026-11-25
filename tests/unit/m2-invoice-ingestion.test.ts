@@ -48,7 +48,7 @@ describe("M2 Invoice PDF Extraction, CP Conflict Guard & Gmail Scan", () => {
   beforeAll(() => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "go-m2-ingest-"));
     const dbPath = path.join(tempDir, "test.db");
-    const baseDb = path.join(process.cwd(), "prisma", "dev.db");
+    const baseDb = path.join(process.cwd(), "prisma", "test.db");
     if (fs.existsSync(baseDb)) {
       fs.copyFileSync(baseDb, dbPath);
     } else {
@@ -86,6 +86,85 @@ describe("M2 Invoice PDF Extraction, CP Conflict Guard & Gmail Scan", () => {
     const flatePdf = makeMinimalPdf("Projet code_projet: 326018 Montant 900 EUR", true);
     validatePdfBuffer(flatePdf, "application/pdf", "scan_recu_02.pdf");
     expect(extractTextFromPdfBuffer(flatePdf)).toContain("326018");
+  });
+
+  it("extracts CP 326018 from /FlateDecode streams preceded by Bitstream/Livestream metadata or >512B dictionaries and blocks with 409", async () => {
+    const streamBody = "BT /F1 12 Tf 72 720 Td (Facture cachee CP 326018) Tj ET";
+    const compressed = zlib.deflateSync(Buffer.from(streamBody, "latin1"));
+
+    const buildPdfWithPrefix = (prefixObj: string, dictPadding = "") =>
+      Buffer.concat([
+        Buffer.from(
+          `%PDF-1.4\n${prefixObj}\n2 0 obj\n<< /Filter /FlateDecode ${dictPadding}/Length ${compressed.length} >>\nstream\n`,
+          "latin1"
+        ),
+        compressed,
+        Buffer.from("\nendstream\nendobj\n%%EOF\n", "latin1"),
+      ]);
+
+    const bitstreamPdf = buildPdfWithPrefix(
+      "1 0 obj\n<< /Producer (Bitstream PDF Producer) >>\nendobj"
+    );
+    const livestreamPdf = buildPdfWithPrefix(
+      "1 0 obj\n<< /Title (Livestream Event) >>\nendobj"
+    );
+    const bigDictPdf = buildPdfWithPrefix(
+      "1 0 obj\n<< /Producer (Clean) >>\nendobj",
+      `/CustomMeta (${" ".repeat(700)}) `
+    );
+
+    expect(extractTextFromPdfBuffer(bitstreamPdf)).toContain("CP 326018");
+    expect(extractTextFromPdfBuffer(livestreamPdf)).toContain("CP 326018");
+    expect(extractTextFromPdfBuffer(bigDictPdf)).toContain("CP 326018");
+
+    const project = await prisma.project.create({
+      data: {
+        codeProjet: "326027",
+        client: "Caisse d'Épargne",
+        nomJeu: "Fortnite",
+        isSandbox: true,
+      },
+    });
+    const gemini = createInMemoryGeminiDouble();
+    gemini.extractInvoiceFromPdf = async () => ({
+      prestataire: "Fournisseur Stream",
+      numeroFacture: "FAC-STREAM-01",
+      dateFacture: "2026-11-24",
+      montantHT: 900,
+      tvaRate: 20,
+      montantTTC: 1080,
+      typeFacture: "UNIQUE",
+      codeProjetDetecte: "326027", // Gemini misled; deterministic PDF extraction catches 326018
+      prestationSummary: "Event",
+      suggestedBudgetLineId: null,
+      suggestedBudgetLineLabel: null,
+      confidence: 0.9,
+      rawWarnings: [],
+      extractedRawTextSnippet: "CP 326027",
+    });
+
+    for (const [label, pdfBuf] of [
+      ["bitstream.pdf", bitstreamPdf],
+      ["livestream.pdf", livestreamPdf],
+      ["bigdict.pdf", bigDictPdf],
+    ] as const) {
+      await expect(
+        processInvoicePdfIngestion({
+          prisma,
+          getGeminiClient: async () => gemini,
+          project,
+          pdfBuffer: pdfBuf,
+          filename: label,
+          mimeType: "application/pdf",
+        })
+      ).rejects.toThrow(InvoiceCpConflictError);
+    }
+
+    const blocked = await prisma.invoice.findMany({
+      where: { projectId: project.id, status: "CONFLICT_BLOCKED" },
+    });
+    expect(blocked).toHaveLength(3);
+    expect(blocked.every((b) => b.detectedCodeProjet === "326018")).toBe(true);
   });
 
   it("enforces 412 GEMINI_KEY_MISSING, quarantines CP-conflict PDFs as CONFLICT_BLOCKED (409), flags duplicates, and suggests BudgetLine", async () => {

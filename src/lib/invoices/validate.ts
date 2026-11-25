@@ -75,18 +75,26 @@ export function normalizeCcList(rawCc: string): string[] {
     .map((t) => t.trim())
     .filter(Boolean);
 
+  const stripDiacritics = (s: string) =>
+    s.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+
   return tokens.map((token) => {
     if (token.includes("@")) {
+      const angleIdx = token.indexOf("<");
+      if (angleIdx > 0) {
+        const display = stripDiacritics(token.slice(0, angleIdx)).trim();
+        const addrPart = token.slice(angleIdx);
+        return display ? `${display} ${addrPart}` : addrPart;
+      }
       return token;
     }
+    const asciiDisplay = stripDiacritics(token).trim();
     const localSlug =
-      token
-        .normalize("NFD")
-        .replace(/[\u0300-\u036f]/g, "")
+      asciiDisplay
         .toLowerCase()
         .replace(/[^a-z0-9]+/g, ".")
         .replace(/^\.+|\.+$/g, "") || "team";
-    return `${token} <${localSlug}@gamersorigin.com>`;
+    return `${asciiDisplay || token} <${localSlug}@gamersorigin.com>`;
   });
 }
 
@@ -167,74 +175,66 @@ async function resolveSheetPostOpTarget(params: {
   let sheetTitle = "Postes de dépenses";
   let sheetId = 0;
 
-  try {
-    const meta = (await gateway.sheets.getSpreadsheet({
-      spreadsheetId,
-      fields: "sheets(properties(sheetId,title))",
-    })) as SpreadsheetMeta;
+  const meta = (await gateway.sheets.getSpreadsheet({
+    spreadsheetId,
+    fields: "sheets(properties(sheetId,title))",
+  })) as SpreadsheetMeta;
 
-    const sheetsList = meta?.sheets ?? [];
-    if (sheetsList.length > 0) {
-      const strip = (s: string) =>
-        s
-          .normalize("NFD")
-          .replace(/[\u0300-\u036f]/g, "")
-          .toLowerCase();
-      const found =
-        sheetsList.find((s) =>
-          strip(s.properties?.title ?? "").includes("postes")
-        ) ?? sheetsList[0];
-      if (found?.properties?.title) {
-        sheetTitle = found.properties.title;
-      }
-      if (typeof found?.properties?.sheetId === "number") {
-        sheetId = found.properties.sheetId;
-      }
+  const sheetsList = meta?.sheets ?? [];
+  if (sheetsList.length > 0) {
+    const strip = (s: string) =>
+      s
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .toLowerCase();
+    const found =
+      sheetsList.find((s) =>
+        strip(s.properties?.title ?? "").includes("postes")
+      ) ?? sheetsList[0];
+    if (found?.properties?.title) {
+      sheetTitle = found.properties.title;
     }
-  } catch {
-    // Fallback to defaults
+    if (typeof found?.properties?.sheetId === "number") {
+      sheetId = found.properties.sheetId;
+    }
   }
 
   let startCol = 15; // P (0-based)
   let totalCol = 18; // S (0-based)
   let row = storedRowIndex && storedRowIndex > 0 ? storedRowIndex : 0;
 
-  try {
-    const matrix = await gateway.sheets.getValues({
-      spreadsheetId,
-      range: `'${sheetTitle.replace(/'/g, "''")}'!A1:T250`,
-      valueRenderOption: "UNFORMATTED_VALUE",
-    });
+  const matrix = await gateway.sheets.getValues({
+    spreadsheetId,
+    range: `'${sheetTitle.replace(/'/g, "''")}'!A1:T250`,
+    valueRenderOption: "UNFORMATTED_VALUE",
+  });
 
-    if (matrix.length > 0) {
-      const layout = resolvePostOpLayoutFromMatrix(matrix, sheetTitle, sheetId);
-      if (layout) {
-        startCol =
-          layout.postOpQtyCol ?? Math.max(0, layout.postOpTotalCol - 3);
-        totalCol = layout.postOpTotalCol;
+  if (Array.isArray(matrix) && matrix.length > 0) {
+    const layout = resolvePostOpLayoutFromMatrix(matrix, sheetTitle, sheetId);
+    if (layout) {
+      startCol =
+        layout.postOpQtyCol ?? Math.max(0, layout.postOpTotalCol - 3);
+      totalCol = layout.postOpTotalCol;
 
-        if (row <= 0) {
-          const targetNorm = lineObjet
+      if (row <= 0) {
+        const targetNorm = lineObjet
+          .normalize("NFD")
+          .replace(/[\u0300-\u036f]/g, "")
+          .toLowerCase()
+          .trim();
+        for (let r = layout.headerRowIndex + 1; r < matrix.length; r++) {
+          const cellStr = String(matrix[r]?.[layout.objetCol] ?? "")
             .normalize("NFD")
             .replace(/[\u0300-\u036f]/g, "")
             .toLowerCase()
             .trim();
-          for (let r = layout.headerRowIndex + 1; r < matrix.length; r++) {
-            const cellStr = String(matrix[r]?.[layout.objetCol] ?? "")
-              .normalize("NFD")
-              .replace(/[\u0300-\u036f]/g, "")
-              .toLowerCase()
-              .trim();
-            if (cellStr && cellStr === targetNorm) {
-              row = r + 1;
-              break;
-            }
+          if (cellStr && cellStr === targetNorm) {
+            row = r + 1;
+            break;
           }
         }
       }
     }
-  } catch {
-    // Use stored/default coordinates
   }
 
   if (row <= 0) {
@@ -303,13 +303,32 @@ export async function validateInvoicePipeline(params: {
     existingInvoice.invoiceDate ??
     new Date().toISOString().slice(0, 10);
   const amountHt = round2(input.amountHt ?? existingInvoice.amountHt);
-  const tvaAmount = round2(input.tvaAmount ?? existingInvoice.tvaAmount);
-  const amountTtc = round2(
-    input.amountTtc ??
-      (existingInvoice.amountTtc > 0
+  let tvaAmount = round2(input.tvaAmount ?? existingInvoice.tvaAmount);
+  let amountTtc: number;
+  if (input.amountTtc !== undefined) {
+    amountTtc = round2(input.amountTtc);
+  } else if (input.amountHt !== undefined) {
+    if (
+      input.tvaAmount === undefined &&
+      existingInvoice.amountHt > 0 &&
+      existingInvoice.amountTtc > 0
+    ) {
+      amountTtc = round2(
+        amountHt * (existingInvoice.amountTtc / existingInvoice.amountHt)
+      );
+      if (amountTtc >= amountHt) {
+        tvaAmount = round2(amountTtc - amountHt);
+      }
+    } else {
+      amountTtc = round2(amountHt + tvaAmount);
+    }
+  } else {
+    amountTtc = round2(
+      existingInvoice.amountTtc > 0
         ? existingInvoice.amountTtc
-        : amountHt + tvaAmount)
-  );
+        : amountHt + tvaAmount
+    );
+  }
   const invoiceType = input.invoiceType ?? existingInvoice.invoiceType;
   const prestationLabel =
     input.prestationLabel ??
@@ -320,21 +339,26 @@ export async function validateInvoicePipeline(params: {
     input.budgetLineId ?? existingInvoice.budgetLineId ?? null;
 
   // 3. CP Conflict Guardrail
+  const cpResult = checkCodeProjetConflict(
+    project.codeProjet,
+    existingInvoice.detectedCodeProjet,
+    [
+      existingInvoice.originalFilename,
+      vendorName,
+      invoiceNumber,
+      prestationLabel,
+    ].join(" ")
+  );
+  const hasCpConflict =
+    existingInvoice.cpConflict ||
+    existingInvoice.status === "CONFLICT_BLOCKED" ||
+    cpResult.hasConflict;
+
   if (
     (existingInvoice.cpConflict ||
       existingInvoice.status === "CONFLICT_BLOCKED") &&
     !input.overrideCpConflict
   ) {
-    const cpResult = checkCodeProjetConflict(
-      project.codeProjet,
-      existingInvoice.detectedCodeProjet,
-      [
-        existingInvoice.originalFilename,
-        vendorName,
-        invoiceNumber,
-        prestationLabel,
-      ].join(" ")
-    );
     throw new CpConflictError(
       cpResult.hasConflict
         ? cpResult
@@ -465,6 +489,23 @@ export async function validateInvoicePipeline(params: {
       renamedFilename,
     },
   });
+
+  if (input.overrideCpConflict === true && hasCpConflict) {
+    await prisma.auditLog.create({
+      data: {
+        projectId,
+        actor: "user",
+        action: "CP_CONFLICT_OVERRIDDEN",
+        targetType: "INVOICE",
+        targetId: invoice.id,
+        detailsJson: JSON.stringify({
+          detectedCodeProjet: existingInvoice.detectedCodeProjet,
+          activeCodeProjet: project.codeProjet,
+          conflictingCps: cpResult.conflictingCps,
+        }),
+      },
+    });
+  }
 
   // STEP 1: Upload renamed PDF to 001.3 Factures
   if (!invoice.stepDriveDone || !invoice.driveFileId) {

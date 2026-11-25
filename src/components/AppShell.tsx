@@ -6,20 +6,30 @@ import {
   AlertTriangle,
   BarChart3,
   Calendar,
+  ChevronDown,
   FileSpreadsheet,
   FolderGit2,
-  FolderKanban,
   GanttChartSquare,
-  LayoutDashboard,
+  Home,
+  LayoutGrid,
   Menu,
+  Mic,
+  Moon,
+  PanelLeftClose,
+  PanelLeftOpen,
+  Plus,
   Presentation,
+  Search,
   Settings,
-  ShieldAlert,
   ShieldCheck,
-  Sparkles,
+  Sun,
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
+import { CommandPalette } from "@/components/CommandPalette";
+import { NotificationBell } from "@/components/NotificationBell";
+import { ToastContainer } from "@/components/ToastContainer";
+import { showToast } from "@/lib/toast";
 
 interface ShellProject {
   id: string;
@@ -39,26 +49,100 @@ interface ShellStatus {
   sandboxMode: boolean;
   cpConflictCount: number;
   extDriftCount: number;
+  pendingInvoicesCount?: number;
+  lateTasksCount?: number;
 }
 
-const NAV_ITEMS = [
-  { href: "/", label: "Centre de Commande", icon: LayoutDashboard, badge: null },
-  { href: "/projects", label: "Projets & Pilote", icon: FolderKanban, badge: null },
-  { href: "/drive", label: "Drive 001→006 & [EXT]", icon: FolderGit2, badge: null },
-  { href: "/budget", label: "Budget & Factures", icon: FileSpreadsheet, badge: "Jalon 1 · M2" },
-  { href: "/retroplanning", label: "Rétroplanning Gantt", icon: GanttChartSquare, badge: "Jalon 2 · M3" },
-  { href: "/calendar", label: "Agenda & Cascades", icon: Calendar, badge: "Jalon 2 · M3" },
-  { href: "/weeklys", label: "Weeklys Clients", icon: Presentation, badge: "Jalon 2 · M3" },
-  { href: "/reporting", label: "Reporting Fin de Jeu", icon: BarChart3, badge: "Jalon 3 · M4" },
-  { href: "/settings", label: "Paramètres & OAuth2", icon: Settings, badge: null },
+const NAV_PRIMARY = [
+  { href: "/", label: "Cockpit Projet", icon: Home },
+  { href: "/retroplanning", label: "Tâches & Planning", icon: GanttChartSquare },
+  { href: "/budget", label: "Budget & Factures", icon: FileSpreadsheet },
+  { href: "/drive", label: "Fichiers Drive", icon: FolderGit2 },
+  { href: "/meetings", label: "Comptes rendus", icon: Mic },
+  { href: "/calendar", label: "Agenda", icon: Calendar },
 ] as const;
+
+const NAV_CLIENT = [
+  { href: "/weeklys", label: "Weeklys Clients", icon: Presentation },
+  { href: "/reporting", label: "Reporting Bilan", icon: BarChart3 },
+] as const;
+
+const PAGE_TITLES: Record<string, string> = {
+  "/": "Cockpit Projet",
+  "/projects": "Vue d'ensemble (Tous les projets)",
+  "/retroplanning": "Tâches & Planning",
+  "/budget": "Budget & Factures",
+  "/drive": "Fichiers Drive",
+  "/meetings": "Comptes rendus Krisp",
+  "/calendar": "Agenda & Rappels",
+  "/weeklys": "Weeklys Clients",
+  "/reporting": "Reporting Bilan",
+  "/settings": "Paramètres",
+};
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [status, setStatus] = useState<ShellStatus | null>(null);
   const [switching, setSwitching] = useState(false);
+  const [theme, setTheme] = useState<"light" | "dark">("light");
+  const [paletteOpen, setPaletteOpen] = useState(false);
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setPaletteOpen((v) => !v);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    const syncPrefs = async () => {
+      await Promise.resolve();
+      if (!active) return;
+      const isDark = document.documentElement.classList.contains("dark");
+      setTheme(isDark ? "dark" : "light");
+      try {
+        if (localStorage.getItem("go-sidebar-collapsed") === "1") {
+          setSidebarCollapsed(true);
+        }
+      } catch {
+        // ignore storage errors
+      }
+    };
+    void syncPrefs();
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  function toggleSidebarCollapsed() {
+    setSidebarCollapsed((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem("go-sidebar-collapsed", next ? "1" : "0");
+      } catch {
+        // ignore storage errors
+      }
+      return next;
+    });
+  }
+
+  function toggleTheme(next: "light" | "dark") {
+    setTheme(next);
+    document.documentElement.classList.toggle("dark", next === "dark");
+    try {
+      localStorage.setItem("go-theme", next);
+    } catch {
+      // ignore storage errors
+    }
+  }
 
   const loadStatus = useCallback(async () => {
     try {
@@ -68,7 +152,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         setStatus(data);
       }
     } catch {
-      // ignore transient poll errors
+      // ignore transient errors
     }
   }, []);
 
@@ -82,7 +166,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           setStatus(data);
         }
       } catch {
-        // ignore transient poll errors
+        // ignore transient errors
       }
     };
     void run();
@@ -106,6 +190,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         body: JSON.stringify({ projectId }),
       });
       if (res.ok) {
+        const picked = status?.projects.find((p) => p.id === projectId);
+        if (picked) {
+          showToast(`Projet actif : ${picked.client} — ${picked.nomJeu}`);
+        }
         await loadStatus();
         router.refresh();
         window.dispatchEvent(new CustomEvent("go:shell-refresh"));
@@ -116,216 +204,492 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   }
 
   const activeProject = status?.activeProject ?? null;
+  const settingsActive = pathname === "/settings";
+  const projectsActive = pathname === "/projects";
+  const allConnected = Boolean(
+    status?.googleConnected && status?.geminiConfigured
+  );
+  const currentPageTitle = PAGE_TITLES[pathname] ?? "Espace Projet";
 
   return (
-    <div className="flex min-h-screen bg-[#090b10] text-slate-100">
+    <div className="flex min-h-screen bg-[#f8fafc] text-slate-900 dark:bg-[#0b0f17] dark:text-slate-100">
       {/* Mobile Sidebar Backdrop */}
       {mobileOpen && (
         <div
-          className="fixed inset-0 z-40 bg-black/70 lg:hidden"
+          className="fixed inset-0 z-40 bg-slate-900/40 backdrop-blur-xs lg:hidden"
           onClick={() => setMobileOpen(false)}
         />
       )}
 
-      {/* Left Sidebar */}
+      {/* Anchored Workspace Sidebar (Sticky full-height on desktop, collapsible rail) */}
       <aside
-        className={`fixed inset-y-0 left-0 z-50 flex w-64 flex-col border-r border-[#232b3d] bg-[#11151f] transition-transform duration-200 lg:static lg:translate-x-0 ${
-          mobileOpen ? "translate-x-0" : "-translate-x-full"
-        }`}
+        data-testid="anchored-sidebar"
+        className={`fixed inset-y-0 left-0 z-50 flex flex-col border-r border-slate-200/80 bg-white transition-all duration-200 dark:border-slate-800/90 dark:bg-[#111827] lg:sticky lg:top-0 lg:h-screen lg:shrink-0 lg:translate-x-0 ${
+          sidebarCollapsed ? "w-64 lg:w-[68px]" : "w-64"
+        } ${mobileOpen ? "translate-x-0" : "-translate-x-full"}`}
       >
-        <div className="relative flex items-center justify-between border-b border-[#232b3d] px-5 py-4">
-          <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-[#e11d48] via-[#ff2e58] to-cyan-500" />
-          <div>
-            <div className="flex items-center gap-2">
-              <span className="inline-flex h-7 w-7 items-center justify-center rounded-md bg-[#e11d48] font-mono text-xs font-bold text-white shadow-sm shadow-rose-600/40">
-                GO
-              </span>
-              <span className="text-sm font-bold tracking-wide text-white">
-                GO PROJECT HUB
-              </span>
+        {/* Brand + Collapse/Close */}
+        <div
+          className={`flex items-center px-3.5 pt-4 pb-3 ${
+            sidebarCollapsed ? "justify-between lg:justify-center" : "justify-between"
+          }`}
+        >
+          <Link
+            href="/"
+            onClick={() => setMobileOpen(false)}
+            title="GO Project Hub"
+            className="flex items-center gap-2.5"
+          >
+            <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-rose-600 text-[11px] font-extrabold text-white shadow-2xs">
+              GO
             </div>
-            <p className="mt-1 text-[11px] font-medium tracking-wider text-slate-400 uppercase">
-              GamersOrigin Agency OS
-            </p>
-          </div>
+            <span
+              className={`text-sm font-bold tracking-tight text-slate-900 dark:text-white ${
+                sidebarCollapsed ? "lg:hidden" : ""
+              }`}
+            >
+              Project Hub
+            </span>
+          </Link>
+
+          <button
+            type="button"
+            onClick={toggleSidebarCollapsed}
+            title={
+              sidebarCollapsed
+                ? "Déplier le menu gauche"
+                : "Réduire le menu gauche"
+            }
+            aria-label={
+              sidebarCollapsed
+                ? "Déplier le menu gauche"
+                : "Réduire le menu gauche"
+            }
+            className={`hidden rounded-lg p-1 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-slate-800 dark:hover:text-slate-200 lg:inline-flex ${
+              sidebarCollapsed ? "lg:hidden" : ""
+            }`}
+          >
+            <PanelLeftClose className="h-4 w-4" />
+          </button>
+
           <button
             type="button"
             onClick={() => setMobileOpen(false)}
-            className="rounded p-1 text-slate-400 hover:bg-[#171d2b] hover:text-white lg:hidden"
+            className="rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-slate-800 lg:hidden"
             aria-label="Fermer le menu"
           >
-            <X className="h-5 w-5" />
+            <X className="h-4 w-4" />
           </button>
         </div>
 
-        <nav className="flex-1 space-y-1 overflow-y-auto px-3 py-4">
-          {NAV_ITEMS.map((item) => {
-            const Icon = item.icon;
-            const active =
-              item.href === "/"
-                ? pathname === "/"
-                : pathname === item.href || pathname.startsWith(`${item.href}/`);
-            return (
-              <Link
-                key={item.href}
-                href={item.href}
-                onClick={() => setMobileOpen(false)}
-                className={`flex items-center justify-between rounded-lg px-3 py-2.5 text-sm font-medium transition-colors ${
-                  active
-                    ? "bg-[#e11d48]/15 text-rose-300 ring-1 ring-[#e11d48]/40"
-                    : "text-slate-300 hover:bg-[#171d2b] hover:text-white"
+        {/* Expand button when collapsed on desktop */}
+        {sidebarCollapsed && (
+          <div className="hidden justify-center px-2 pb-2 lg:flex">
+            <button
+              type="button"
+              onClick={toggleSidebarCollapsed}
+              title="Déplier le menu gauche"
+              aria-label="Déplier le menu gauche"
+              className="rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-slate-800 dark:hover:text-slate-200"
+            >
+              <PanelLeftOpen className="h-4 w-4" />
+            </button>
+          </div>
+        )}
+
+        {/* Global Level: All Projects Overview (ABOVE Project Switcher) */}
+        <div className="px-2.5 pb-2">
+          <Link
+            href="/projects"
+            onClick={() => setMobileOpen(false)}
+            title="Vue d'ensemble (tous les projets)"
+            data-testid="nav-portfolio-overview"
+            className={`flex items-center rounded-xl px-2.5 py-2 text-[13px] transition-colors ${
+              sidebarCollapsed ? "justify-between lg:justify-center lg:px-0" : "justify-between"
+            } ${
+              projectsActive
+                ? "bg-rose-50 font-semibold text-rose-700 dark:bg-rose-500/15 dark:text-rose-300"
+                : "font-medium text-slate-700 hover:bg-slate-100/80 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800/70 dark:hover:text-white"
+            }`}
+          >
+            <span className="flex items-center gap-2.5">
+              <LayoutGrid
+                className={`h-4 w-4 shrink-0 ${
+                  projectsActive
+                    ? "text-rose-600 dark:text-rose-400"
+                    : "text-slate-400"
                 }`}
+              />
+              <span className={sidebarCollapsed ? "lg:hidden" : ""}>
+                Vue d&apos;ensemble
+              </span>
+            </span>
+            <span
+              className={`rounded-full bg-slate-100 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-slate-500 dark:bg-slate-800 dark:text-slate-400 ${
+                sidebarCollapsed ? "lg:hidden" : ""
+              }`}
+            >
+              {status?.projects.length ?? 0}
+            </span>
+          </Link>
+        </div>
+
+        {/* Workspace Project Switcher (separates Global vs Active Project!) */}
+        <div className={`px-3 pb-3 ${sidebarCollapsed ? "lg:hidden" : ""}`}>
+          <div className="rounded-xl border border-slate-200/80 bg-slate-50/70 p-2 dark:border-slate-800 dark:bg-slate-800/50">
+            <div className="mb-1 flex items-center justify-between px-1">
+              <span className="text-[10px] font-semibold tracking-wider text-slate-400 uppercase">
+                Projet actif
+              </span>
+              <Link
+                href="/projects"
+                title="Créer ou gérer les projets"
+                onClick={() => setMobileOpen(false)}
+                className="inline-flex items-center gap-0.5 text-[10px] font-semibold text-indigo-600 hover:text-indigo-700 dark:text-indigo-400"
               >
-                <span className="flex items-center gap-2.5">
-                  <Icon
-                    className={`h-4 w-4 ${active ? "text-[#ff2e58]" : "text-slate-400"}`}
-                  />
-                  <span>{item.label}</span>
-                </span>
-                {item.badge && (
-                  <span className="rounded bg-[#171d2b] px-1.5 py-0.5 font-mono text-[10px] text-slate-400 ring-1 ring-[#232b3d]">
-                    {item.badge}
-                  </span>
-                )}
+                <Plus className="h-3 w-3" />
+                Gérer
               </Link>
-            );
-          })}
+            </div>
+            <div className="relative">
+              <select
+                id="active-project-select"
+                aria-label="Projet actif"
+                data-testid="active-project-switcher"
+                title={
+                  activeProject
+                    ? `${activeProject.client} — ${activeProject.nomJeu} (Code projet ${activeProject.codeProjet})`
+                    : "Sélectionner un projet"
+                }
+                value={status?.activeProjectId ?? ""}
+                disabled={switching || !status?.projects.length}
+                onChange={(e) => void handleProjectChange(e.target.value)}
+                className="w-full appearance-none truncate rounded-lg bg-white py-1.5 pr-7 pl-2.5 text-xs font-semibold text-slate-900 shadow-2xs ring-1 ring-slate-200/80 transition-colors focus:ring-indigo-500 focus:outline-none disabled:opacity-60 dark:bg-slate-900 dark:text-white dark:ring-slate-700"
+              >
+                {!status?.projects.length ? (
+                  <option value="">Aucun projet</option>
+                ) : (
+                  status.projects.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.client} — {p.nomJeu} ({p.codeProjet})
+                    </option>
+                  ))
+                )}
+              </select>
+              <ChevronDown className="pointer-events-none absolute top-1/2 right-2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
+            </div>
+          </div>
+        </div>
+
+        {/* Clean 2-Group Navigation */}
+        <nav className="flex-1 space-y-5 overflow-y-auto px-2.5 py-1">
+          <div className="space-y-0.5">
+            {NAV_PRIMARY.map((item) => {
+              const Icon = item.icon;
+              const active =
+                item.href === "/"
+                  ? pathname === "/"
+                  : pathname === item.href ||
+                    pathname.startsWith(`${item.href}/`);
+              const showDriftDot =
+                item.href === "/drive" && (status?.extDriftCount ?? 0) > 0;
+              const showInvoiceBadge =
+                item.href === "/budget" &&
+                (status?.pendingInvoicesCount ?? 0) > 0;
+              const showLateBadge =
+                item.href === "/retroplanning" &&
+                (status?.lateTasksCount ?? 0) > 0;
+
+              return (
+                <Link
+                  key={item.href}
+                  href={item.href}
+                  title={item.label}
+                  onClick={() => setMobileOpen(false)}
+                  className={`group relative flex items-center rounded-xl px-2.5 py-2 text-[13px] transition-colors ${
+                    sidebarCollapsed ? "justify-between lg:justify-center lg:px-0" : "justify-between"
+                  } ${
+                    active
+                      ? "bg-rose-50 font-semibold text-rose-700 dark:bg-rose-500/15 dark:text-rose-300"
+                      : "font-medium text-slate-600 hover:bg-slate-100/80 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800/70 dark:hover:text-slate-100"
+                  }`}
+                >
+                  <span className="flex items-center gap-2.5">
+                    <Icon
+                      className={`h-4 w-4 shrink-0 ${
+                        active
+                          ? "text-rose-600 dark:text-rose-400"
+                          : "text-slate-400 group-hover:text-slate-600 dark:text-slate-500 dark:group-hover:text-slate-300"
+                      }`}
+                    />
+                    <span className={sidebarCollapsed ? "lg:hidden" : ""}>
+                      {item.label}
+                    </span>
+                  </span>
+                  {showDriftDot && (
+                    <span
+                      title={`${status?.extDriftCount} dossier(s) modifié(s) à republier dans l'espace client`}
+                      className={`rounded-full bg-emerald-50 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-300 ${
+                        sidebarCollapsed ? "lg:hidden" : ""
+                      }`}
+                    >
+                      {status?.extDriftCount}
+                    </span>
+                  )}
+                  {showInvoiceBadge && (
+                    <span
+                      title={`${status?.pendingInvoicesCount} facture(s) en attente de validation`}
+                      className={`rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800 dark:bg-amber-500/20 dark:text-amber-300 ${
+                        sidebarCollapsed ? "lg:hidden" : ""
+                      }`}
+                    >
+                      {status?.pendingInvoicesCount}
+                    </span>
+                  )}
+                  {showLateBadge && (
+                    <span
+                      title={`${status?.lateTasksCount} tâche(s) en retard`}
+                      className={`rounded-full bg-rose-50 px-1.5 py-0.5 text-[10px] font-semibold text-rose-700 dark:bg-rose-500/20 dark:text-rose-300 ${
+                        sidebarCollapsed ? "lg:hidden" : ""
+                      }`}
+                    >
+                      {status?.lateTasksCount}
+                    </span>
+                  )}
+                  {sidebarCollapsed &&
+                    (showDriftDot || showInvoiceBadge || showLateBadge) && (
+                      <span
+                        className={`hidden h-1.5 w-1.5 rounded-full lg:absolute lg:top-1.5 lg:right-2 lg:block ${
+                          showLateBadge
+                            ? "bg-rose-500"
+                            : showInvoiceBadge
+                              ? "bg-amber-500"
+                              : "bg-emerald-500"
+                        }`}
+                      />
+                    )}
+                </Link>
+              );
+            })}
+          </div>
+
+          <div>
+            <p
+              className={`mb-1 px-2.5 text-[10px] font-bold tracking-wider text-slate-400 uppercase dark:text-slate-500 ${
+                sidebarCollapsed ? "lg:hidden" : ""
+              }`}
+            >
+              Livrables Client
+            </p>
+            <div className="space-y-0.5">
+              {NAV_CLIENT.map((item) => {
+                const Icon = item.icon;
+                const active =
+                  pathname === item.href ||
+                  pathname.startsWith(`${item.href}/`);
+                return (
+                  <Link
+                    key={item.href}
+                    href={item.href}
+                    title={item.label}
+                    onClick={() => setMobileOpen(false)}
+                    className={`group flex items-center gap-2.5 rounded-xl px-2.5 py-2 text-[13px] transition-colors ${
+                      sidebarCollapsed ? "lg:justify-center lg:px-0" : ""
+                    } ${
+                      active
+                        ? "bg-rose-50 font-semibold text-rose-700 dark:bg-rose-500/15 dark:text-rose-300"
+                        : "font-medium text-slate-600 hover:bg-slate-100/80 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800/70 dark:hover:text-slate-100"
+                    }`}
+                  >
+                    <Icon
+                      className={`h-4 w-4 shrink-0 ${
+                        active
+                          ? "text-rose-600 dark:text-rose-400"
+                          : "text-slate-400 group-hover:text-slate-600 dark:text-slate-500 dark:group-hover:text-slate-300"
+                      }`}
+                    />
+                    <span className={sidebarCollapsed ? "lg:hidden" : ""}>
+                      {item.label}
+                    </span>
+                  </Link>
+                );
+              })}
+            </div>
+          </div>
         </nav>
 
-        <div className="border-t border-[#232b3d] p-4 text-xs text-slate-400">
-          <div className="flex items-center gap-2 text-amber-300">
-            <ShieldCheck className="h-4 w-4 shrink-0" />
-            <span className="font-semibold">Verrou PROD Actif</span>
+        {/* Quiet Footer */}
+        <div className="space-y-1 border-t border-slate-100 p-2.5 dark:border-slate-800">
+          <Link
+            href="/settings"
+            title="Paramètres"
+            onClick={() => setMobileOpen(false)}
+            className={`relative flex items-center rounded-xl px-2.5 py-2 text-[13px] transition-colors ${
+              sidebarCollapsed ? "justify-between lg:justify-center lg:px-0" : "justify-between"
+            } ${
+              settingsActive
+                ? "bg-slate-100 font-semibold text-slate-900 dark:bg-slate-800 dark:text-white"
+                : "font-medium text-slate-600 hover:bg-slate-100/80 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800/70"
+            }`}
+          >
+            <span className="flex items-center gap-2.5">
+              <Settings className="h-4 w-4 shrink-0 text-slate-400" />
+              <span className={sidebarCollapsed ? "lg:hidden" : ""}>
+                Paramètres
+              </span>
+            </span>
+            <span
+              data-testid="google-status-pill"
+              title={
+                allConnected
+                  ? `Connecté (${status?.googleEmail ?? "Google + IA"})`
+                  : "Configuration à terminer"
+              }
+              className={`h-2 w-2 rounded-full ${
+                allConnected ? "bg-emerald-500" : "bg-rose-500"
+              } ${sidebarCollapsed ? "lg:absolute lg:top-1.5 lg:right-2" : ""}`}
+            />
+          </Link>
+
+          <div
+            data-testid="sandbox-mode-badge"
+            title="Vos dossiers de production existants sont strictement protégés."
+            className={`mt-1 flex items-center gap-2 px-2.5 pt-1 text-[11px] text-slate-400 dark:text-slate-500 ${
+              sidebarCollapsed ? "lg:justify-center lg:px-0" : ""
+            }`}
+          >
+            <ShieldCheck className="h-3.5 w-3.5 shrink-0 text-emerald-600 dark:text-emerald-500" />
+            <span className={`truncate ${sidebarCollapsed ? "lg:hidden" : ""}`}>
+              {activeProject?.isSandbox ? "Mode pilote · PROD protégé" : "PROD protégé"}
+            </span>
           </div>
-          <p className="mt-1 font-mono text-[10px] text-slate-500">
-            16Vi3KE-5GzGTGsBtgSBnfhHu2cm20nxD (Lecture/Copie seule)
-          </p>
         </div>
       </aside>
 
-      {/* Main Content Column */}
+      {/* Main Content Area */}
       <div className="flex min-w-0 flex-1 flex-col">
-        {/* Sticky Top Bar */}
-        <header className="sticky top-0 z-30 border-b border-[#232b3d] bg-[#11151f]/95 px-4 py-3 backdrop-blur sm:px-6">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="flex items-center gap-3">
+        {/* Whisper-Quiet Slim Topbar (Linear style) */}
+        <header className="sticky top-0 z-30 border-b border-slate-200/70 bg-white/85 px-4 py-2.5 backdrop-blur-md dark:border-slate-800/80 dark:bg-[#0b0f17]/85 sm:px-6 lg:px-8">
+          <div className="mx-auto flex max-w-6xl items-center justify-between gap-3">
+            {/* Left: Mobile button + Quiet Breadcrumb */}
+            <div className="flex min-w-0 items-center gap-2 text-xs">
               <button
                 type="button"
                 onClick={() => setMobileOpen(true)}
-                className="rounded-md border border-[#232b3d] bg-[#171d2b] p-2 text-slate-300 hover:text-white lg:hidden"
+                className="rounded-lg border border-slate-200 bg-white p-1.5 text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 lg:hidden"
                 aria-label="Ouvrir le menu"
               >
                 <Menu className="h-4 w-4" />
               </button>
 
-              {/* Active Project Switcher */}
-              <div className="flex items-center gap-2">
-                <label
-                  htmlFor="active-project-select"
-                  className="hidden text-xs font-semibold tracking-wider text-slate-400 uppercase sm:inline"
-                >
-                  Projet Actif
-                </label>
-                <select
-                  id="active-project-select"
-                  data-testid="active-project-switcher"
-                  value={status?.activeProjectId ?? ""}
-                  disabled={switching || !status?.projects.length}
-                  onChange={(e) => void handleProjectChange(e.target.value)}
-                  className="rounded-lg border border-[#232b3d] bg-[#171d2b] px-3 py-1.5 font-mono text-xs text-slate-100 focus:border-cyan-500 focus:outline-none"
-                >
-                  {!status?.projects.length ? (
-                    <option value="">Aucun projet (Bootstrap requis)</option>
-                  ) : (
-                    status.projects.map((p) => (
-                      <option key={p.id} value={p.id}>
-                        {p.codeProjet} | {p.client} | {p.nomJeu}
-                      </option>
-                    ))
-                  )}
-                </select>
-              </div>
-
-              {/* Persistent Sandbox Badge */}
-              <span
-                title="PROD 16Vi3KE-5GzGTGsBtgSBnfhHu2cm20nxD verrouillé en lecture/copie seule"
-                data-testid="sandbox-mode-badge"
-                className="inline-flex items-center gap-1.5 rounded-full border border-amber-500/40 bg-amber-500/10 px-2.5 py-1 font-mono text-[11px] font-semibold text-amber-300"
-              >
-                <ShieldAlert className="h-3.5 w-3.5" />
-                {activeProject?.isSandbox
-                  ? `[PILOTE - ${activeProject.codeProjet}] BAC À SABLE`
-                  : "SANDBOX ACTIF"}
+              {activeProject && pathname !== "/projects" && pathname !== "/settings" && (
+                <>
+                  <span className="hidden max-w-[260px] truncate font-medium text-slate-400 sm:inline">
+                    {activeProject.client} · {activeProject.nomJeu}
+                  </span>
+                  <span className="hidden text-slate-300 dark:text-slate-700 sm:inline">
+                    /
+                  </span>
+                </>
+              )}
+              <span className="truncate font-semibold text-slate-800 dark:text-slate-100">
+                {currentPageTitle}
               </span>
             </div>
 
-            {/* Google & Gemini Status Pills */}
+            {/* Right: Minimal Search + Single Theme Toggle + Quiet Account Indicator */}
             <div className="flex items-center gap-2">
-              <Link
-                href="/settings"
-                data-testid="google-status-pill"
-                className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium transition-colors ${
-                  status?.googleConnected
-                    ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20"
-                    : "border-amber-500/40 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20"
-                }`}
+              <button
+                type="button"
+                onClick={() => setPaletteOpen(true)}
+                data-testid="quick-search-btn"
+                title="Recherche rapide (Ctrl+K)"
+                className="inline-flex items-center gap-2 rounded-lg border border-slate-200/80 bg-slate-50/70 px-2.5 py-1 text-xs text-slate-500 transition-colors hover:border-slate-300 hover:bg-white hover:text-slate-800 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-400 dark:hover:text-white"
               >
-                <span
-                  className={`h-2 w-2 rounded-full ${
-                    status?.googleConnected ? "bg-emerald-400" : "bg-amber-400"
-                  }`}
-                />
-                {status?.googleConnected
-                  ? `Google : ${status.googleEmail ?? "Connecté"}`
-                  : "Google : Non connecté"}
-              </Link>
+                <Search className="h-3.5 w-3.5" />
+                <span className="hidden sm:inline">Rechercher…</span>
+                <kbd className="hidden rounded bg-white px-1 py-0.5 font-mono text-[10px] text-slate-400 ring-1 ring-slate-200 dark:bg-slate-800 dark:ring-slate-700 md:inline">
+                  Ctrl K
+                </kbd>
+              </button>
 
-              <Link
-                href="/settings"
-                data-testid="gemini-status-pill"
-                className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium transition-colors ${
-                  status?.geminiConfigured
-                    ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20"
-                    : "border-amber-500/40 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20"
-                }`}
+              <NotificationBell />
+
+              <button
+                type="button"
+                data-testid="theme-switcher"
+                onClick={() => toggleTheme(theme === "dark" ? "light" : "dark")}
+                aria-label={
+                  theme === "dark"
+                    ? "Passer en mode clair"
+                    : "Passer en mode sombre"
+                }
+                title={
+                  theme === "dark"
+                    ? "Passer en mode clair"
+                    : "Passer en mode sombre"
+                }
+                className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-slate-200/80 bg-white text-slate-500 transition-colors hover:bg-slate-50 hover:text-slate-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white dark:focus:bg-slate-800"
               >
-                <Sparkles className="h-3.5 w-3.5" />
-                {status?.geminiConfigured
-                  ? "Gemini : Prêt"
-                  : "Gemini : Clé manquante"}
-              </Link>
+                {theme === "dark" ? (
+                  <Sun className="h-3.5 w-3.5" />
+                ) : (
+                  <Moon className="h-3.5 w-3.5" />
+                )}
+              </button>
+
+              {!allConnected && (
+                <Link
+                  href="/settings"
+                  data-testid="gemini-status-pill"
+                  className="rounded-lg bg-rose-50 px-2.5 py-1 text-[11px] font-semibold text-rose-700 hover:bg-rose-100 dark:bg-rose-500/15 dark:text-rose-300"
+                >
+                  Configurer
+                </Link>
+              )}
             </div>
           </div>
         </header>
 
-        {/* Global CP-Conflict Red Alert Banner */}
+        {/* Global CP Conflict Alert (only if real conflict) */}
         {status && status.cpConflictCount > 0 && activeProject && (
           <div
             role="alert"
             data-testid="global-cp-conflict-banner"
-            className="flex flex-wrap items-center justify-between gap-3 border-b border-red-500/60 bg-red-950/85 px-6 py-3 text-sm text-red-100"
+            className="border-b border-rose-200 bg-rose-50 px-6 py-2 text-xs text-rose-800 dark:border-rose-500/30 dark:bg-rose-950/60 dark:text-rose-200"
           >
-            <div className="flex items-center gap-2.5">
-              <AlertTriangle className="h-5 w-5 shrink-0 text-red-400" />
-              <span className="font-semibold">
-                ALERTE ZÉRO MÉLANGE — {status.cpConflictCount} conflit(s) de
-                Code Projet détecté(s) sur{" "}
-                <span className="font-mono">CP {activeProject.codeProjet}</span>.
-                Toute injection automatique est bloquée.
-              </span>
+            <div className="mx-auto flex max-w-6xl items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-rose-600 dark:text-rose-400" />
+                <span>
+                  <strong>{status.cpConflictCount} facture(s) bloquée(s)</strong>{" "}
+                  (autre numéro de projet que CP {activeProject.codeProjet}).
+                </span>
+              </div>
+              <Link
+                href="/budget?tab=invoices"
+                className="font-semibold text-rose-700 underline underline-offset-2 hover:text-rose-900 dark:text-rose-300"
+              >
+                Vérifier
+              </Link>
             </div>
-            <Link
-              href="/projects"
-              className="rounded-md border border-red-400/50 bg-red-900/60 px-3 py-1 text-xs font-semibold text-white hover:bg-red-800"
-            >
-              Inspecter l&apos;isolation
-            </Link>
           </div>
         )}
 
-        {/* Main Page Content */}
-        <main className="flex-1 p-4 sm:p-6 lg:p-8">{children}</main>
+        {/* Generous, Breathing Page Container */}
+        <main className="flex-1 px-4 py-7 sm:px-6 lg:px-10">{children}</main>
       </div>
+
+      <CommandPalette
+        open={paletteOpen}
+        onClose={() => setPaletteOpen(false)}
+        projects={status?.projects ?? []}
+        activeProjectId={status?.activeProjectId ?? null}
+        onSelectProject={handleProjectChange}
+        theme={theme}
+        onToggleTheme={toggleTheme}
+      />
+      <ToastContainer />
     </div>
   );
 }

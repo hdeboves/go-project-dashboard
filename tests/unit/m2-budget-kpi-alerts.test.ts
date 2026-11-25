@@ -102,19 +102,19 @@ describe("M2 Budget KPIs, Integer-Cent Math, Categories & 85%/100% Alerts", () =
     expect(fromCents(sumCatPostCents)).toBe(res.summary.postOpTotalHt);
   });
 
-  it("evaluates 85% and 100% alerts BEFORE display rounding (84.99% none, 85.00% WARNING, 99.999% WARNING, 100.00% CRITICAL)", () => {
+  it("evaluates 90% warning and strict >100% overrun alerts (89.99% none, 90.00% WARNING, 99.99% WARNING, 100.00% exact = NO alert, >100% CRITICAL)", () => {
     const lines: BudgetLineLike[] = [
       makeLine({
-        id: "bva_8499",
-        objet: "Ligne 84.99%",
+        id: "bva_8999",
+        objet: "Ligne 89.99%",
         preOpTotalHt: 10000,
-        postOpTotalHt: 8499,
+        postOpTotalHt: 8999,
       }),
       makeLine({
-        id: "bva_8500",
-        objet: "Ligne 85.00%",
+        id: "bva_9000",
+        objet: "Ligne 90.00%",
         preOpTotalHt: 10000,
-        postOpTotalHt: 8500,
+        postOpTotalHt: 9000,
       }),
       makeLine({
         id: "bva_99999",
@@ -124,7 +124,7 @@ describe("M2 Budget KPIs, Integer-Cent Math, Categories & 85%/100% Alerts", () =
       }),
       makeLine({
         id: "bva_10000",
-        objet: "Ligne 100.00%",
+        objet: "Ligne 100.00% exact",
         preOpTotalHt: 1000,
         postOpTotalHt: 1000,
       }),
@@ -138,27 +138,23 @@ describe("M2 Budget KPIs, Integer-Cent Math, Categories & 85%/100% Alerts", () =
 
     const res = computeBudgetMetrics(lines);
 
-    expect(res.alerts.find((a) => a.budgetLineId === "bva_8499")).toBeUndefined();
+    expect(res.alerts.find((a) => a.budgetLineId === "bva_8999")).toBeUndefined();
 
-    const warn85 = res.alerts.find((a) => a.budgetLineId === "bva_8500");
-    expect(warn85).toMatchObject({
+    const warn90 = res.alerts.find((a) => a.budgetLineId === "bva_9000");
+    expect(warn90).toMatchObject({
       level: "WARNING",
-      thresholdPct: 85,
-      ratioPct: 85,
+      thresholdPct: 90,
+      ratioPct: 90,
     });
 
     const warn99 = res.alerts.find((a) => a.budgetLineId === "bva_99999");
     expect(warn99).toMatchObject({
       level: "WARNING",
-      thresholdPct: 85,
+      thresholdPct: 90,
     });
 
-    const crit100 = res.alerts.find((a) => a.budgetLineId === "bva_10000");
-    expect(crit100).toMatchObject({
-      level: "CRITICAL",
-      thresholdPct: 100,
-      ratioPct: 100,
-    });
+    // Exact match (postOp === preOp) is NOT an overrun and NOT an alert
+    expect(res.alerts.find((a) => a.budgetLineId === "bva_10000")).toBeUndefined();
 
     const critOver = res.alerts.find((a) => a.budgetLineId === "bva_overrun");
     expect(critOver).toMatchObject({
@@ -167,8 +163,8 @@ describe("M2 Budget KPIs, Integer-Cent Math, Categories & 85%/100% Alerts", () =
       ratioPct: 120,
     });
 
-    // Remaining to commit clamps overrun to 0 per line: 1501 + 1500 + 0.01 + 0 + 0 = 3001.01
-    expect(res.summary.remainingToCommitHt).toBe(3001.01);
+    // Remaining to commit clamps overrun to 0 per line: 1001 + 1000 + 0.01 + 0 + 0 = 2001.01
+    expect(res.summary.remainingToCommitHt).toBe(2001.01);
   });
 
   it("handles preOpTotalHt === 0 && postOpTotalHt > 0 (Visuels Print) and soldTotalHt === 0 without NaN or Infinity", () => {

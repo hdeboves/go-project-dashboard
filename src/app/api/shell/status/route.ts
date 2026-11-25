@@ -70,31 +70,44 @@ export async function GET() {
 
     let cpConflictCount = 0;
     let extDriftCount = 0;
+    let pendingInvoicesCount = 0;
+    let lateTasksCount = 0;
 
     if (activeProject) {
-      const [invoiceConflicts, auditConflicts, drifts] = await Promise.all([
-        prisma.invoice.count({
-          where: {
-            projectId: activeProject.id,
-            cpConflict: true,
-            status: "CONFLICT_BLOCKED",
-          },
-        }),
-        prisma.auditLog.count({
-          where: {
-            projectId: activeProject.id,
-            action: "CP_CONFLICT_BLOCKED",
-          },
-        }),
-        prisma.syncStatus.count({
-          where: {
-            projectId: activeProject.id,
-            driftDetected: true,
-          },
-        }),
-      ]);
-      cpConflictCount = invoiceConflicts > 0 ? invoiceConflicts : auditConflicts;
+      const [invoiceConflicts, drifts, pendingInvs, lateTasks] =
+        await Promise.all([
+          prisma.invoice.count({
+            where: {
+              projectId: activeProject.id,
+              cpConflict: true,
+              status: "CONFLICT_BLOCKED",
+            },
+          }),
+          prisma.syncStatus.count({
+            where: {
+              projectId: activeProject.id,
+              driftDetected: true,
+            },
+          }),
+          prisma.invoice.count({
+            where: {
+              projectId: activeProject.id,
+              status: "PENDING_VALIDATION",
+            },
+          }),
+          prisma.retroTask.count({
+            where: {
+              projectId: activeProject.id,
+              status: { not: "TERMINE" },
+              endDate: { lt: new Date() },
+            },
+          }),
+        ]);
+      // Count ONLY active currently-blocked invoices (never stale historical AuditLog entries)
+      cpConflictCount = invoiceConflicts;
       extDriftCount = drifts;
+      pendingInvoicesCount = pendingInvs;
+      lateTasksCount = lateTasks;
     }
 
     return NextResponse.json({
@@ -107,6 +120,8 @@ export async function GET() {
       sandboxMode: isSandboxModeEnabled(),
       cpConflictCount,
       extDriftCount,
+      pendingInvoicesCount,
+      lateTasksCount,
     });
   } catch (err) {
     return toErrorResponse(err);

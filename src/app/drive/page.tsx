@@ -3,15 +3,16 @@
 import {
   AlertTriangle,
   CheckCircle2,
+  ExternalLink,
   FileDown,
   Folder,
-  FolderGit2,
   Lock,
   RefreshCw,
-  ShieldAlert,
+  Search,
   UploadCloud,
 } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { showToast } from "@/lib/toast";
 
 interface DriveNodeRow {
   id: string;
@@ -46,6 +47,16 @@ interface ShellInfo {
   } | null;
 }
 
+const CATEGORY_FILTERS = [
+  { prefix: "ALL", label: "Tous" },
+  { prefix: "001", label: "Budget" },
+  { prefix: "002", label: "Pilotage" },
+  { prefix: "003", label: "Présentations" },
+  { prefix: "004", label: "Production" },
+  { prefix: "005", label: "Admin" },
+  { prefix: "006", label: "Reporting" },
+];
+
 export default function DrivePage() {
   const [projectId, setProjectId] = useState<string | null>(null);
   const [projectLabel, setProjectLabel] = useState<string>("");
@@ -53,6 +64,11 @@ export default function DrivePage() {
   const [driftCount, setDriftCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
+  const [activeCategory, setActiveCategory] = useState("ALL");
+  const [statusFilter, setStatusFilter] = useState<
+    "ALL" | "VALIDE_CLIENT" | "DRIFT" | "SHARED"
+  >("ALL");
+  const [searchQuery, setSearchQuery] = useState("");
   const [exportModalOpen, setExportModalOpen] = useState(false);
   const [exportConfirmChecked, setExportConfirmChecked] = useState(false);
   const [exportingOnce, setExportingOnce] = useState(false);
@@ -74,7 +90,7 @@ export default function DrivePage() {
       }
       setProjectId(shell.activeProjectId);
       setProjectLabel(
-        `CP ${shell.activeProject.codeProjet} | ${shell.activeProject.client} — ${shell.activeProject.nomJeu}`
+        `${shell.activeProject.client} — ${shell.activeProject.nomJeu} (CP ${shell.activeProject.codeProjet})`
       );
 
       const res = await fetch(
@@ -92,7 +108,7 @@ export default function DrivePage() {
         const err = (await res.json()) as { error?: string };
         setFeedback({
           type: "error",
-          text: err.error ?? "Impossible de charger l'arborescence Drive.",
+          text: err.error ?? "Impossible de charger les dossiers Drive.",
         });
       }
     } finally {
@@ -117,7 +133,7 @@ export default function DrivePage() {
         if (active) {
           setProjectId(shell.activeProjectId);
           setProjectLabel(
-            `CP ${shell.activeProject.codeProjet} | ${shell.activeProject.client} — ${shell.activeProject.nomJeu}`
+            `${shell.activeProject.client} — ${shell.activeProject.nomJeu} (CP ${shell.activeProject.codeProjet})`
           );
         }
 
@@ -137,7 +153,7 @@ export default function DrivePage() {
           const err = (await res.json()) as { error?: string };
           setFeedback({
             type: "error",
-            text: err.error ?? "Impossible de charger l'arborescence Drive.",
+            text: err.error ?? "Impossible de charger les dossiers Drive.",
           });
         }
       } finally {
@@ -170,9 +186,10 @@ export default function DrivePage() {
     if (!res.ok) {
       setFeedback({
         type: "error",
-        text: json.error ?? "Erreur de mise à jour du statut.",
+        text: json.error ?? "Impossible de modifier ce statut.",
       });
     } else {
+      showToast("Statut du dossier mis à jour.");
       await loadDriveTree(false);
       window.dispatchEvent(new CustomEvent("go:shell-refresh"));
     }
@@ -190,20 +207,17 @@ export default function DrivePage() {
       });
       const json = (await res.json()) as {
         error?: string;
-        code?: string;
         syncedCount?: number;
-        skippedCount?: number;
       };
       if (!res.ok) {
         setFeedback({
           type: "error",
-          text: `[HTTP ${res.status} · ${json.code ?? "ERREUR"}] ${json.error ?? "Échec de la synchronisation [EXT]."}`,
+          text: json.error ?? "Échec de la publication vers l'espace client.",
         });
       } else {
-        setFeedback({
-          type: "success",
-          text: `Synchronisation [EXT] terminée : ${json.syncedCount ?? 0} fichier(s) synchronisé(s) (via files.update en place / export propre). 002.1 Rétroplanning Actif ignoré.`,
-        });
+        const msg = `Espace client mis à jour (${json.syncedCount ?? 0} élément(s) validé(s)). Le planning actif reste privé.`;
+        setFeedback({ type: "success", text: msg });
+        showToast(msg);
         await loadDriveTree(false);
         window.dispatchEvent(new CustomEvent("go:shell-refresh"));
       }
@@ -234,13 +248,12 @@ export default function DrivePage() {
       if (!res.ok) {
         setFeedback({
           type: "error",
-          text: json.error ?? "Échec de l'export ponctuel.",
+          text: json.error ?? "Impossible d'exporter le PDF.",
         });
       } else {
-        setFeedback({
-          type: "success",
-          text: `Export ponctuel figé créé dans [EXT]/01. Rétroplanning & CR : ${json.exportedFileName}. Aucune synchronisation permanente activée.`,
-        });
+        const msg = `PDF déposé dans l'espace client : ${json.exportedFileName}.`;
+        setFeedback({ type: "success", text: msg });
+        showToast(msg);
         setExportModalOpen(false);
         setExportConfirmChecked(false);
       }
@@ -249,30 +262,99 @@ export default function DrivePage() {
     }
   }
 
-  const internalNodes = nodes.filter((n) => !n.code.startsWith("EXT."));
-  const extNodes = nodes.filter((n) => n.code.startsWith("EXT."));
+  const internalNodes = useMemo(
+    () => nodes.filter((n) => !n.code.startsWith("EXT.")),
+    [nodes]
+  );
+  const extNodes = useMemo(
+    () => nodes.filter((n) => n.code.startsWith("EXT.")),
+    [nodes]
+  );
+
+  const publishableCount = useMemo(
+    () =>
+      internalNodes.filter(
+        (n) =>
+          n.policy.syncMode === "SYNCABLE_ON_VALIDATION" &&
+          (n.syncStatus?.validationStatus === "VALIDE_CLIENT" ||
+            n.syncStatus?.driftDetected)
+      ).length,
+    [internalNodes]
+  );
+
+  const filteredInternalNodes = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    return internalNodes.filter((n) => {
+      if (activeCategory !== "ALL" && !n.code.startsWith(activeCategory)) {
+        return false;
+      }
+      if (
+        statusFilter === "VALIDE_CLIENT" &&
+        n.syncStatus?.validationStatus !== "VALIDE_CLIENT"
+      ) {
+        return false;
+      }
+      if (statusFilter === "DRIFT" && !n.syncStatus?.driftDetected) {
+        return false;
+      }
+      if (statusFilter === "SHARED" && !n.extMirrorFileId) {
+        return false;
+      }
+      if (
+        q &&
+        !n.name.toLowerCase().includes(q) &&
+        !n.code.toLowerCase().includes(q)
+      ) {
+        return false;
+      }
+      return true;
+    });
+  }, [internalNodes, activeCategory, statusFilter, searchQuery]);
 
   return (
-    <div className="mx-auto max-w-7xl space-y-6">
+    <div className="mx-auto max-w-6xl space-y-6">
+      {/* Calm Header with inline 002.1 Lock Pill */}
       <div className="flex flex-wrap items-center justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold text-white">
-            Drive 001→006 & Miroir Client [EXT]
-          </h1>
-          <p className="mt-1 text-sm text-slate-400">
-            {projectLabel || "Sélectionnez ou initialisez un projet."}
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2.5">
+            <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-white">
+              Fichiers Drive
+            </h1>
+            <span
+              data-testid="retroplanning-lock-banner"
+              title="Votre rétroplanning de travail (002.1) reste toujours privé côté agence. Utilisez « Export PDF planning » pour partager une version figée au client."
+              className="inline-flex items-center gap-1.5 rounded-full border border-indigo-200/80 bg-indigo-50/70 px-2.5 py-0.5 text-[11px] font-medium text-indigo-700 dark:border-indigo-500/30 dark:bg-indigo-500/15 dark:text-indigo-300"
+            >
+              <Lock className="h-3 w-3" />
+              Planning interne (002.1) · PDF manuel
+            </span>
+            {driftCount > 0 && (
+              <button
+                type="button"
+                onClick={() =>
+                  setStatusFilter((prev) => (prev === "DRIFT" ? "ALL" : "DRIFT"))
+                }
+                className="inline-flex items-center gap-1 rounded-full bg-rose-50 px-2.5 py-0.5 text-[11px] font-semibold text-rose-700 hover:bg-rose-100 dark:bg-rose-500/15 dark:text-rose-300"
+              >
+                <AlertTriangle className="h-3 w-3" />
+                {driftCount} à republier
+              </button>
+            )}
+          </div>
+          <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+            {projectLabel || "Sélectionnez un projet dans la barre latérale."}
           </p>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2.5">
+        <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
             disabled={!projectId || loading}
             onClick={() => void loadDriveTree(true)}
-            className="inline-flex items-center gap-2 rounded-lg border border-[#232b3d] bg-[#171d2b] px-3.5 py-2 text-xs font-semibold text-slate-200 hover:bg-[#232b3d] disabled:opacity-50"
+            className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 dark:border-slate-800 dark:bg-[#111827] dark:text-slate-200 dark:hover:bg-slate-800/70"
           >
-            <RefreshCw className="h-3.5 w-3.5" />
-            Contrôler les décalages Drive
+            <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
+            Actualiser
           </button>
 
           <button
@@ -280,10 +362,10 @@ export default function DrivePage() {
             disabled={!projectId}
             onClick={() => setExportModalOpen(true)}
             data-testid="open-export-once-modal-btn"
-            className="inline-flex items-center gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3.5 py-2 text-xs font-semibold text-amber-200 hover:bg-amber-500/20 disabled:opacity-50"
+            className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 dark:border-slate-800 dark:bg-[#111827] dark:text-slate-200 dark:hover:bg-slate-800/70"
           >
-            <FileDown className="h-3.5 w-3.5" />
-            Export ponctuel manuel 002.1
+            <FileDown className="h-3.5 w-3.5 text-indigo-600 dark:text-indigo-400" />
+            Export PDF planning
           </button>
 
           <button
@@ -291,128 +373,215 @@ export default function DrivePage() {
             disabled={!projectId || syncing}
             onClick={() => void handleSyncExt()}
             data-testid="sync-ext-btn"
-            className="inline-flex items-center gap-2 rounded-lg bg-[#e11d48] px-4 py-2 text-xs font-semibold text-white hover:bg-[#ff2e58] disabled:opacity-50"
+            title="Copie uniquement les dossiers marqués « Validé client » vers le Drive client (aucun e-mail envoyé, budget et planning toujours privés)."
+            className="inline-flex items-center gap-1.5 rounded-xl bg-rose-600 px-4 py-2 text-xs font-semibold text-white shadow-xs hover:bg-rose-700 disabled:opacity-50"
           >
             <UploadCloud className="h-4 w-4" />
-            {syncing ? "Synchronisation..." : "Synchroniser vers [EXT]"}
+            {syncing
+              ? "Publication..."
+              : publishableCount > 0
+                ? `Publier vers le client (${publishableCount})`
+                : "Publier vers le client"}
           </button>
         </div>
-      </div>
-
-      {/* Mandatory 002.1 Lock Banner */}
-      <div
-        data-testid="retroplanning-lock-banner"
-        className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-500/40 bg-amber-950/25 px-5 py-3.5 text-xs text-amber-100"
-      >
-        <div className="flex items-center gap-2.5">
-          <ShieldAlert className="h-5 w-5 shrink-0 text-amber-400" />
-          <span>
-            <strong>Verrou impératif 002.1 Rétroplanning Actif :</strong>{" "}
-            Strictement interne par défaut (<code className="font-mono">NO_PERMANENT_EXT_SYNC</code>).
-            Même si son statut est &quot;Validé Client&quot;, aucune
-            synchronisation permanente vers <code className="font-mono">[EXT]</code>{" "}
-            n&apos;est possible.
-          </span>
-        </div>
-        {driftCount > 0 && (
-          <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-500/20 px-2.5 py-1 font-mono font-semibold text-amber-200">
-            <AlertTriangle className="h-3.5 w-3.5" />
-            {driftCount} Décalage(s) Interne/Client détecté(s)
-          </span>
-        )}
       </div>
 
       {feedback && (
         <div
           role="status"
           data-testid="drive-feedback"
-          className={`rounded-xl border p-4 text-sm ${
+          className={`rounded-2xl border px-4 py-3 text-xs ${
             feedback.type === "success"
-              ? "border-emerald-500/40 bg-emerald-950/30 text-emerald-200"
-              : "border-red-500/40 bg-red-950/40 text-red-200"
+              ? "border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-500/30 dark:bg-emerald-500/15 dark:text-emerald-300"
+              : "border-rose-200 bg-rose-50 text-rose-800 dark:border-rose-500/30 dark:bg-rose-500/15 dark:text-rose-200"
           }`}
         >
           {feedback.text}
         </div>
       )}
 
-      {/* 2-Column Tree View: Internal vs [EXT] */}
-      <div className="grid gap-6 lg:grid-cols-3">
-        {/* Internal Tree (2 cols) */}
-        <div className="rounded-xl border border-[#232b3d] bg-[#11151f] p-5 lg:col-span-2">
-          <div className="flex items-center justify-between border-b border-[#232b3d] pb-3">
-            <div className="flex items-center gap-2">
-              <FolderGit2 className="h-5 w-5 text-cyan-400" />
-              <h2 className="text-sm font-bold text-white">
-                Arborescence Interne 001. → 006. ({internalNodes.length} nœuds)
+      {/* 2-Column Finder-Style Explorer */}
+      <div className="grid gap-6 lg:grid-cols-12">
+        <section className="overflow-hidden rounded-2xl border border-slate-200/80 bg-white shadow-[0_1px_2px_rgba(15,23,42,0.04)] lg:col-span-8 dark:border-slate-800 dark:bg-[#111827]">
+          <div className="flex flex-wrap items-center justify-between gap-3 px-5 pt-4 pb-3">
+            <div>
+              <h2 className="text-sm font-semibold text-slate-900 dark:text-white">
+                Arborescence interne{" "}
+                <span className="font-normal text-slate-400">
+                  ({filteredInternalNodes.length})
+                </span>
               </h2>
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                Passez un livrable en « Validé client » puis cliquez sur Publier.
+              </p>
             </div>
-            <span className="font-mono text-[11px] text-slate-400">
-              files.update en place (liens clients préservés)
-            </span>
+
+            <div className="relative w-full sm:w-52">
+              <Search className="pointer-events-none absolute top-1/2 left-3 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Filtrer un dossier..."
+                className="w-full rounded-xl border border-slate-200 bg-slate-50/70 py-1.5 pr-3 pl-8 text-xs text-slate-900 placeholder:text-slate-400 focus:border-indigo-400 focus:bg-white focus:outline-none dark:border-slate-800 dark:bg-slate-800/60 dark:text-white dark:focus:bg-slate-900"
+              />
+            </div>
+          </div>
+
+          {/* Sleek Underline Category Tabs + Actionable Status Filter */}
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 px-5 dark:border-slate-800/80">
+            <div className="flex items-center gap-1 overflow-x-auto">
+              {CATEGORY_FILTERS.map((cat) => {
+                const active = activeCategory === cat.prefix;
+                return (
+                  <button
+                    key={cat.prefix}
+                    type="button"
+                    onClick={() => setActiveCategory(cat.prefix)}
+                    className={`relative shrink-0 px-3 py-2 text-xs font-medium transition-colors ${
+                      active
+                        ? "text-indigo-700 dark:text-indigo-300"
+                        : "text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200"
+                    }`}
+                  >
+                    {cat.label}
+                    {active && (
+                      <span className="absolute right-1.5 bottom-0 left-1.5 h-0.5 rounded-full bg-indigo-600 dark:bg-indigo-400" />
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+
+            <div className="flex items-center gap-1 py-1.5">
+              {(
+                [
+                  { id: "ALL", label: "Tous statuts" },
+                  { id: "VALIDE_CLIENT", label: "Validés" },
+                  { id: "DRIFT", label: "À republier" },
+                  { id: "SHARED", label: "Partagés" },
+                ] as const
+              ).map((st) => (
+                <button
+                  key={st.id}
+                  type="button"
+                  onClick={() => setStatusFilter(st.id)}
+                  className={`rounded-lg px-2 py-0.5 text-[11px] font-medium transition-colors ${
+                    statusFilter === st.id
+                      ? "bg-indigo-50 text-indigo-700 dark:bg-indigo-500/20 dark:text-indigo-300"
+                      : "text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800"
+                  }`}
+                >
+                  {st.label}
+                </button>
+              ))}
+            </div>
           </div>
 
           {loading ? (
-            <p className="mt-4 text-sm text-slate-400">Chargement...</p>
-          ) : internalNodes.length === 0 ? (
-            <p className="mt-4 text-sm text-slate-400">
-              Aucun nœud Drive provisionné. Rendez-vous sur{" "}
-              <code className="font-mono">/projects</code> pour initialiser
-              l&apos;arborescence.
+            <p className="py-12 text-center text-sm text-slate-500 dark:text-slate-400">
+              Chargement des dossiers...
+            </p>
+          ) : filteredInternalNodes.length === 0 ? (
+            <p className="py-12 text-center text-sm text-slate-500 dark:text-slate-400">
+              Aucun dossier trouvé.
             </p>
           ) : (
-            <div className="mt-3 max-h-[600px] divide-y divide-[#232b3d]/60 overflow-y-auto pr-1">
-              {internalNodes.map((node) => {
+            <div className="max-h-[540px] divide-y divide-slate-100/80 overflow-y-auto dark:divide-slate-800/60">
+              {filteredInternalNodes.map((node) => {
                 const isInternalOnly =
                   node.policy.syncMode === "INTERNAL_ONLY";
                 const isRetroLocked = node.isRetroplanningLocked;
+                const depth = Math.max(0, node.code.split(".").length - 1);
+                const isRoot = depth === 0;
 
                 return (
                   <div
                     key={node.id}
                     data-testid={`drive-node-${node.code}`}
-                    className="flex flex-wrap items-center justify-between gap-2 py-2.5 text-xs"
+                    className={`flex flex-wrap items-center justify-between gap-2 px-4 py-2.5 text-xs transition-colors sm:flex-nowrap sm:px-5 ${
+                      isRoot
+                        ? "bg-slate-100/70 dark:bg-slate-800/90"
+                        : "hover:bg-slate-50/70 dark:hover:bg-slate-800/50"
+                    }`}
                   >
-                    <div className="flex min-w-0 items-center gap-2.5">
+                    <div
+                      className={`flex min-w-0 flex-1 items-center gap-2.5 ${
+                        depth === 1
+                          ? "border-l-2 border-slate-200/80 pl-5 dark:border-slate-700/80"
+                          : depth >= 2
+                            ? "border-l-2 border-slate-200/60 pl-10 dark:border-slate-800"
+                            : ""
+                      }`}
+                    >
                       <Folder
                         className={`h-4 w-4 shrink-0 ${
                           isRetroLocked
-                            ? "text-amber-400"
-                            : isInternalOnly
-                              ? "text-slate-500"
-                              : "text-cyan-400"
+                            ? "text-indigo-500"
+                            : node.extMirrorFileId
+                              ? "text-emerald-500"
+                              : isInternalOnly
+                                ? "text-slate-400"
+                                : "text-indigo-400"
                         }`}
                       />
-                      <span className="font-mono text-[11px] text-slate-400">
+                      <span className="shrink-0 font-mono text-[11px] text-slate-500 dark:text-slate-400">
                         {node.code}
                       </span>
-                      <span className="truncate font-medium text-slate-100">
+                      <span
+                        title={node.name}
+                        className={`truncate ${
+                          isRoot
+                            ? "font-semibold text-slate-900 dark:text-white"
+                            : "font-medium text-slate-700 dark:text-slate-200"
+                        }`}
+                      >
                         {node.name}
                       </span>
+                      {node.policy.extMirrorCode && (
+                        <span className="hidden shrink-0 rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[10px] text-slate-500 sm:inline dark:bg-slate-800 dark:text-slate-400">
+                          → {node.policy.extMirrorCode}
+                        </span>
+                      )}
+                      {node.driveFileId && (
+                        <a
+                          href={
+                            node.isFolder
+                              ? `https://drive.google.com/drive/folders/${node.driveFileId}`
+                              : `https://drive.google.com/file/d/${node.driveFileId}/view`
+                          }
+                          target="_blank"
+                          rel="noreferrer"
+                          title="Ouvrir dans Google Drive"
+                          className="shrink-0 rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-indigo-600 dark:hover:bg-slate-800 dark:hover:text-indigo-400"
+                        >
+                          <ExternalLink className="h-3 w-3" />
+                        </a>
+                      )}
                     </div>
 
-                    <div className="flex flex-wrap items-center gap-2">
+                    <div className="flex shrink-0 items-center gap-2">
                       {isRetroLocked ? (
-                        <span className="inline-flex items-center gap-1 rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 font-mono text-[10px] font-semibold text-amber-300">
-                          <ShieldAlert className="h-3 w-3" />
-                          Verrou Interne Permanent
+                        <span className="inline-flex items-center gap-1 rounded-full bg-indigo-50 px-2.5 py-0.5 text-[10px] font-semibold text-indigo-700 dark:bg-indigo-500/15 dark:text-indigo-300">
+                          <Lock className="h-3 w-3" />
+                          Interne (PDF manuel)
                         </span>
                       ) : isInternalOnly ? (
-                        <span className="inline-flex items-center gap-1 rounded-full border border-slate-600 bg-slate-800/70 px-2 py-0.5 font-mono text-[10px] text-slate-300">
+                        <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2.5 py-0.5 text-[10px] font-medium text-slate-500 dark:bg-slate-800 dark:text-slate-400">
                           <Lock className="h-3 w-3" />
-                          Strictement Interne
+                          Privé agence
                         </span>
                       ) : (
                         <>
                           {node.syncStatus?.driftDetected && (
-                            <span className="rounded-full border border-amber-500/50 bg-amber-500/15 px-2 py-0.5 text-[10px] font-semibold text-amber-200">
-                              Décalage Interne/Client détecté
+                            <span className="rounded-full bg-rose-50 px-2 py-0.5 text-[10px] font-semibold text-rose-700 dark:bg-rose-500/15 dark:text-rose-300">
+                              À republier
                             </span>
                           )}
                           {node.extMirrorFileId && (
-                            <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.5 font-mono text-[10px] text-emerald-300">
+                            <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300">
                               <CheckCircle2 className="h-3 w-3" />
-                              Miroir [EXT] lié
+                              Partagé
                             </span>
                           )}
                           <select
@@ -430,13 +599,13 @@ export default function DrivePage() {
                                   | "VALIDE_CLIENT"
                               )
                             }
-                            className="rounded border border-[#232b3d] bg-[#171d2b] px-2 py-1 font-mono text-[11px] text-slate-200 focus:border-cyan-500 focus:outline-none"
+                            className="rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-medium text-slate-700 focus:border-indigo-400 focus:outline-none dark:border-slate-700 dark:bg-[#111827] dark:text-slate-200"
                           >
                             <option value="BROUILLON_INTERNE">
-                              Brouillon Interne
+                              Brouillon interne
                             </option>
-                            <option value="EN_REVUE">En Revue</option>
-                            <option value="VALIDE_CLIENT">Validé Client</option>
+                            <option value="EN_REVUE">En relecture</option>
+                            <option value="VALIDE_CLIENT">Validé client</option>
                           </select>
                         </>
                       )}
@@ -446,81 +615,109 @@ export default function DrivePage() {
               })}
             </div>
           )}
-        </div>
+        </section>
 
-        {/* [EXT] Mirror Column */}
-        <div className="rounded-xl border border-[#232b3d] bg-[#11151f] p-5">
-          <div className="border-b border-[#232b3d] pb-3">
-            <h2 className="text-sm font-bold text-white">
-              Miroir Client [EXT] ({extNodes.length} dossiers)
+        <aside className="self-start rounded-2xl border border-slate-200/80 bg-white p-5 shadow-[0_1px_2px_rgba(15,23,42,0.04)] lg:sticky lg:top-16 lg:col-span-4 dark:border-slate-800 dark:bg-[#111827]">
+          <div className="border-b border-slate-100 pb-3.5 dark:border-slate-800/80">
+            <h2 className="text-sm font-semibold text-slate-900 dark:text-white">
+              Espace client{" "}
+              <span className="font-normal text-slate-400">
+                ({extNodes.length})
+              </span>
             </h2>
-            <p className="mt-0.5 text-[11px] text-slate-400">
-              Exclut automatiquement 001. Budget, 005. Administratif & 002.1
-              Rétroplanning.
+            <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+              Dossiers visibles par le client. Budget, contrats et planning
+              actif sont automatiquement masqués.
             </p>
           </div>
 
-          <div className="mt-3 space-y-2">
-            {extNodes.map((ext) => (
-              <div
-                key={ext.id}
-                className="flex items-center justify-between rounded-lg border border-[#232b3d] bg-[#171d2b]/60 px-3 py-2 text-xs"
-              >
-                <div className="flex items-center gap-2">
-                  <Folder className="h-4 w-4 text-emerald-400" />
-                  <span className="font-medium text-slate-200">{ext.name}</span>
+          <div className="mt-3.5 divide-y divide-slate-100 dark:divide-slate-800/70">
+            {extNodes.map((ext) => {
+              const extDepth = Math.max(0, ext.code.split(".").length - 2);
+              return (
+                <div
+                  key={ext.id}
+                  className="flex items-center justify-between gap-2 py-2.5 text-xs"
+                >
+                  <div
+                    className={`flex min-w-0 items-center gap-2 ${
+                      extDepth > 0
+                        ? "border-l-2 border-emerald-200/80 pl-4 dark:border-emerald-500/30"
+                        : ""
+                    }`}
+                  >
+                    <Folder className="h-4 w-4 shrink-0 text-emerald-500" />
+                    <span className="shrink-0 font-mono text-[10px] text-slate-400">
+                      {ext.code}
+                    </span>
+                    <span
+                      title={ext.name}
+                      className={`truncate ${
+                        extDepth === 0
+                          ? "font-semibold text-slate-900 dark:text-white"
+                          : "font-medium text-slate-700 dark:text-slate-200"
+                      }`}
+                    >
+                      {ext.name}
+                    </span>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-1.5">
+                    {ext.driveFileId && (
+                      <a
+                        href={`https://drive.google.com/drive/folders/${ext.driveFileId}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        title="Ouvrir dans Google Drive"
+                        className="rounded p-1 text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400"
+                      >
+                        <ExternalLink className="h-3 w-3" />
+                      </a>
+                    )}
+                  </div>
                 </div>
-                <span className="font-mono text-[10px] text-slate-400">
-                  {ext.code}
-                </span>
-              </div>
-            ))}
+              );
+            })}
           </div>
-        </div>
+        </aside>
       </div>
 
-      {/* Explicit Manual One-Off Export Modal for 002.1 */}
+      {/* Light PDF Export Modal */}
       {exportModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4">
-          <div className="w-full max-w-md rounded-xl border border-amber-500/50 bg-[#11151f] p-6 shadow-2xl">
-            <div className="flex items-center gap-2.5 text-amber-300">
-              <ShieldAlert className="h-5 w-5" />
-              <h3 className="text-base font-bold text-white">
-                Export ponctuel manuel du Rétroplanning (002.1)
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4 backdrop-blur-xs">
+          <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl dark:border-slate-800 dark:bg-[#111827]">
+            <div className="flex items-center gap-2 text-indigo-600 dark:text-indigo-400">
+              <FileDown className="h-5 w-5" />
+              <h3 className="text-base font-bold text-slate-900 dark:text-white">
+                Exporter un PDF du rétroplanning
               </h3>
             </div>
-            <p className="mt-3 text-xs leading-relaxed text-slate-300">
-              Cette action génère uniquement un PDF figé daté dans{" "}
-              <code className="font-mono text-cyan-300">
-                [EXT]/01. Rétroplanning & CR
-              </code>
-              . La synchronisation permanente de{" "}
-              <code className="font-mono">002.1</code> reste strictement
-              désactivée.
+            <p className="mt-2.5 text-xs leading-relaxed text-slate-600 dark:text-slate-300">
+              Un PDF figé daté sera déposé dans le dossier client{" "}
+              <strong>Rétroplanning & CR</strong>. Le planning actif ne sera pas
+              synchronisé automatiquement par la suite.
             </p>
 
-            <label className="mt-4 flex items-start gap-2.5 rounded-lg border border-[#232b3d] bg-[#171d2b] p-3 text-xs text-slate-200">
+            <label className="mt-4 flex cursor-pointer items-start gap-2.5 rounded-xl border border-slate-200 bg-slate-50 p-3.5 text-xs text-slate-700 dark:border-slate-800 dark:bg-slate-800/60 dark:text-slate-200">
               <input
                 type="checkbox"
                 checked={exportConfirmChecked}
                 onChange={(e) => setExportConfirmChecked(e.target.checked)}
                 data-testid="confirm-manual-export-checkbox"
-                className="mt-0.5"
+                className="mt-0.5 h-4 w-4 accent-rose-600"
               />
               <span>
-                Je confirme vouloir exporter manuellement un instantané PDF
-                ponctuel du rétroplanning vers le dossier client [EXT].
+                Je confirme vouloir partager cet instantané PDF au client.
               </span>
             </label>
 
-            <div className="mt-5 flex justify-end gap-2.5">
+            <div className="mt-5 flex justify-end gap-2">
               <button
                 type="button"
                 onClick={() => {
                   setExportModalOpen(false);
                   setExportConfirmChecked(false);
                 }}
-                className="rounded-lg border border-[#232b3d] bg-[#171d2b] px-4 py-2 text-xs font-semibold text-slate-300 hover:bg-[#232b3d]"
+                className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-xs font-medium text-slate-600 hover:bg-slate-50 dark:border-slate-800 dark:bg-[#111827] dark:text-slate-300 dark:hover:bg-slate-800/70"
               >
                 Annuler
               </button>
@@ -529,9 +726,9 @@ export default function DrivePage() {
                 disabled={!exportConfirmChecked || exportingOnce}
                 onClick={() => void handleExportOnce()}
                 data-testid="confirm-export-once-btn"
-                className="rounded-lg bg-amber-500 px-4 py-2 text-xs font-bold text-slate-950 hover:bg-amber-400 disabled:opacity-50"
+                className="rounded-xl bg-rose-600 px-4 py-2 text-xs font-semibold text-white hover:bg-rose-700 disabled:opacity-50"
               >
-                {exportingOnce ? "Export en cours..." : "Exporter le PDF figé"}
+                {exportingOnce ? "Export..." : "Exporter le PDF"}
               </button>
             </div>
           </div>

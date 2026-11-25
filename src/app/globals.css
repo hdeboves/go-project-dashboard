@@ -1,20 +1,67 @@
 @import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
 
-@theme {
-  --color-go-bg: #090b10;
-  --color-go-surface: #11151f;
-  --color-go-elevated: #171d2b;
-  --color-go-border: #232b3d;
-  --color-go-red: #e11d48;
-  --color-go-red-glow: #ff2e58;
-  --color-go-cyan: #06b6d4;
-  --color-go-amber: #f59e0b;
-  --color-go-emerald: #10b981;
-  --font-sans: var(--font-plus-jakarta), ui-sans-serif, system-ui, sans-serif;
-  --font-mono: var(--font-jetbrains-mono), ui-monospace, SFMono-Regular, monospace;
+:root {
+  --go-bg: #f8fafc;
+  --go-surface: #ffffff;
+  --go-surface-subtle: #f1f5f9;
+  --go-border: #e2e8f0;
+  --go-text: #0f172a;
+  --go-muted: #64748b;
+  --go-brand: #e11d48;
+  --go-indigo: #4f46e5;
+  --go-emerald: #059669;
+}
+
+.dark {
+  --go-bg: #0b0f17;
+  --go-surface: #111827;
+  --go-surface-subtle: #1e293b;
+  --go-border: #1f2937;
+  --go-text: #f8fafc;
+  --go-muted: #94a3b8;
+  --go-brand: #f43f5e;
+  --go-indigo: #818cf8;
+  --go-emerald: #34d399;
+}
+
+@theme inline {
+  --color-background: var(--go-bg);
+  --color-foreground: var(--go-text);
+  --font-sans: var(--font-plus-jakarta), system-ui, -apple-system, sans-serif;
+  --font-mono: var(--font-jetbrains-mono), ui-monospace, monospace;
+}
+
+html {
+  scroll-behavior: smooth;
 }
 
 body {
-  background-color: #090b10;
-  color: #f1f5f9;
+  background-color: var(--go-bg);
+  color: var(--go-text);
+  font-family: var(--font-plus-jakarta), system-ui, -apple-system, sans-serif;
+  min-height: 100vh;
+  transition: background-color 150ms ease, color 150ms ease;
+}
+
+/* Subtle adaptive scrollbar */
+*::-webkit-scrollbar {
+  width: 7px;
+  height: 7px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.35);
+  border-radius: 9999px;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: rgba(100, 116, 139, 0.55);
+}
+.dark *::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.2);
+}
+.dark *::-webkit-scrollbar-thumb:hover {
+  background: rgba(148, 163, 184, 0.38);
 }

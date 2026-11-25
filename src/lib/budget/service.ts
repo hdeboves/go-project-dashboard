@@ -264,26 +264,6 @@ export async function upsertManualBudgetLine(
   const project = await requireProject(prisma, projectId);
   const input = UpsertBudgetLineSchema.parse(rawInput);
 
-  const expenseType = normalizeExpenseType(input.expenseType);
-  const saleQty = round2(input.saleQty ?? 1);
-  const saleDays = round2(input.saleDays ?? 1);
-  const saleUnitPrice = round2(input.saleUnitPrice ?? 0);
-  const saleTotalHt = round2(
-    input.saleTotalHt ?? saleQty * saleDays * saleUnitPrice
-  );
-
-  const preOpUnitCost = round2(input.preOpUnitCost ?? 0);
-  const preOpTotalHt = round2(
-    input.preOpTotalHt ?? preOpUnitCost * saleQty * saleDays
-  );
-
-  const postOpQty = round2(input.postOpQty ?? 0);
-  const postOpDays = round2(input.postOpDays ?? 0);
-  const postOpUnitCost = round2(input.postOpUnitCost ?? 0);
-  const postOpTotalHt = round2(
-    input.postOpTotalHt ?? postOpQty * postOpDays * postOpUnitCost
-  );
-
   let line: BudgetLine;
   if (input.id) {
     const existing = await prisma.budgetLine.findUnique({
@@ -296,6 +276,54 @@ export async function upsertManualBudgetLine(
         "Ligne budgétaire introuvable pour ce projet."
       );
     }
+
+    const expenseType =
+      input.expenseType !== undefined
+        ? normalizeExpenseType(input.expenseType)
+        : existing.expenseType;
+
+    const saleQty = round2(input.saleQty ?? existing.saleQty);
+    const saleDays = round2(input.saleDays ?? existing.saleDays);
+    const saleUnitPrice = round2(input.saleUnitPrice ?? existing.saleUnitPrice);
+    const hasSaleFactors =
+      input.saleQty !== undefined ||
+      input.saleDays !== undefined ||
+      input.saleUnitPrice !== undefined;
+    const saleTotalHt =
+      input.saleTotalHt !== undefined
+        ? round2(input.saleTotalHt)
+        : hasSaleFactors
+          ? round2(saleQty * saleDays * saleUnitPrice)
+          : existing.saleTotalHt;
+
+    const preOpUnitCost = round2(input.preOpUnitCost ?? existing.preOpUnitCost);
+    const hasPreOpFactors =
+      input.preOpUnitCost !== undefined ||
+      input.saleQty !== undefined ||
+      input.saleDays !== undefined;
+    const preOpTotalHt =
+      input.preOpTotalHt !== undefined
+        ? round2(input.preOpTotalHt)
+        : hasPreOpFactors
+          ? round2(preOpUnitCost * saleQty * saleDays)
+          : existing.preOpTotalHt;
+
+    const postOpQty = round2(input.postOpQty ?? existing.postOpQty);
+    const postOpDays = round2(input.postOpDays ?? existing.postOpDays);
+    const postOpUnitCost = round2(
+      input.postOpUnitCost ?? existing.postOpUnitCost
+    );
+    const hasPostOpFactors =
+      input.postOpQty !== undefined ||
+      input.postOpDays !== undefined ||
+      input.postOpUnitCost !== undefined;
+    const postOpTotalHt =
+      input.postOpTotalHt !== undefined
+        ? round2(input.postOpTotalHt)
+        : hasPostOpFactors
+          ? round2(postOpQty * postOpDays * postOpUnitCost)
+          : existing.postOpTotalHt;
+
     line = await prisma.budgetLine.update({
       where: { id: existing.id },
       data: {
@@ -327,6 +355,26 @@ export async function upsertManualBudgetLine(
       },
     });
   } else {
+    const expenseType = normalizeExpenseType(input.expenseType);
+    const saleQty = round2(input.saleQty ?? 1);
+    const saleDays = round2(input.saleDays ?? 1);
+    const saleUnitPrice = round2(input.saleUnitPrice ?? 0);
+    const saleTotalHt = round2(
+      input.saleTotalHt ?? saleQty * saleDays * saleUnitPrice
+    );
+
+    const preOpUnitCost = round2(input.preOpUnitCost ?? 0);
+    const preOpTotalHt = round2(
+      input.preOpTotalHt ?? preOpUnitCost * saleQty * saleDays
+    );
+
+    const postOpQty = round2(input.postOpQty ?? 0);
+    const postOpDays = round2(input.postOpDays ?? 0);
+    const postOpUnitCost = round2(input.postOpUnitCost ?? 0);
+    const postOpTotalHt = round2(
+      input.postOpTotalHt ?? postOpQty * postOpDays * postOpUnitCost
+    );
+
     line = await prisma.budgetLine.create({
       data: {
         projectId,
@@ -421,16 +469,18 @@ export async function importBudgetFromXlsx(params: {
 
   // If the underlying Sheets port returns empty values (e.g. test double), populate canonical matrix
   let existingValues: unknown[][] = [];
+  const escapedPostesTitle = parsed.layout.postesSheetTitle.replace(/'/g, "''");
   try {
     existingValues = await gateway.sheets.getValues({
       spreadsheetId: created.id,
-      range: `'${parsed.layout.postesSheetTitle}'!A1:S5`,
+      range: `'${escapedPostesTitle}'!A1:S5`,
       valueRenderOption: "UNFORMATTED_VALUE",
     });
   } catch {
     existingValues = [];
   }
 
+  let linesToReconcile = parsed.lines;
   if (!existingValues || existingValues.length === 0) {
     const canonical = buildCanonicalPostesMatrix(
       parsed.lines,
@@ -439,16 +489,20 @@ export async function importBudgetFromXlsx(params: {
     try {
       await gateway.sheets.updateValues({
         spreadsheetId: created.id,
-        range: `'Postes de dépenses'!A1:S${canonical.matrix.length}`,
+        range: `'${escapedPostesTitle}'!A1:S${canonical.matrix.length}`,
         values: canonical.matrix,
         valueInputOption: "USER_ENTERED",
       });
+      linesToReconcile = parsed.lines.map((line, idx) => ({
+        ...line,
+        sheetRowIndex: canonical.rowIndices[idx] ?? line.sheetRowIndex,
+      }));
     } catch {
       // Non-fatal if tab name differs in target sheet
     }
   }
 
-  const lines = await reconcileBudgetLines(prisma, projectId, parsed.lines);
+  const lines = await reconcileBudgetLines(prisma, projectId, linesToReconcile);
   await upsertBudgetDriveNode(prisma, {
     projectId,
     name: sheetName,

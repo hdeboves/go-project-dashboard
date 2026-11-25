@@ -12,6 +12,13 @@ export interface WeeklyDigestTaskView {
   endDate: string | null;
 }
 
+const STATUS_TEXT: Record<string, string> = {
+  A_FAIRE: "À faire",
+  EN_COURS: "En cours",
+  EN_ATTENTE_CLIENT: "Attente client",
+  TERMINE: "Terminé",
+};
+
 export function WeeklyDigestPreview({
   weekStart,
   weekEnd,
@@ -22,44 +29,57 @@ export function WeeklyDigestPreview({
   tasks: WeeklyDigestTaskView[];
 }) {
   return (
-    <section className="rounded-xl border border-[#232b3d] bg-[#11151f] p-5">
-      <div className="flex items-center justify-between border-b border-[#232b3d] pb-3">
+    <section className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-[0_1px_2px_rgba(15,23,42,0.04)] dark:border-slate-800 dark:bg-[#111827]">
+      <div className="flex items-center justify-between border-b border-slate-100 pb-3.5 dark:border-slate-800/80">
         <div className="flex items-center gap-2">
-          <ListChecks className="h-4 w-4 text-cyan-400" />
-          <h2 className="text-base font-bold text-white">
-            Synthèse J-7 → J ({weekStart} → {weekEnd})
+          <ListChecks className="h-4 w-4 text-indigo-600 dark:text-indigo-400" />
+          <h2 className="text-sm font-semibold text-slate-900 dark:text-white">
+            Avancement de la semaine
           </h2>
         </div>
-        <span className="font-mono text-[11px] text-slate-400">
-          {tasks.length} tâche(s) collectée(s)
+        <span className="text-xs text-slate-400">
+          {tasks.length} tâche(s)
         </span>
       </div>
 
       {tasks.length === 0 ? (
-        <p className="mt-4 text-xs text-slate-400">
-          Aucune tâche du rétroplanning ne chevauche la période {weekStart} → {weekEnd}.
+        <p className="py-6 text-center text-xs text-slate-500 dark:text-slate-400">
+          Aucune tâche sur la période {weekStart} → {weekEnd}.
         </p>
       ) : (
         <div className="mt-3 space-y-2">
           {tasks.map((t) => (
             <div
               key={t.id}
-              className="flex items-center justify-between gap-2 rounded-lg border border-[#232b3d] bg-[#171d2b] px-3 py-2 text-xs"
+              className="flex items-center justify-between gap-2 rounded-xl border border-slate-100 bg-slate-50/60 px-3.5 py-2.5 text-xs dark:border-slate-800/80 dark:bg-slate-800/60"
             >
-              <div className="min-w-0">
-                <p className="truncate font-semibold text-white">{t.tache}</p>
-                <p className="text-[11px] text-slate-400">
-                  {t.phase} · {t.startDate?.slice(0, 10) ?? "?"} →{" "}
-                  {t.endDate?.slice(0, 10) ?? "?"}
+              <div className="min-w-0 flex-1">
+                <p className="truncate font-semibold text-slate-800 dark:text-slate-100">
+                  {t.tache}
+                </p>
+                <p className="mt-0.5 flex flex-wrap items-center gap-x-1.5 text-[11px] text-slate-500 dark:text-slate-400">
+                  <span className="truncate">{t.phase}</span>
+                  <span className="whitespace-nowrap font-mono text-[10px]">
+                    {t.startDate?.slice(0, 10) ?? "?"} →{" "}
+                    {t.endDate?.slice(0, 10) ?? "?"}
+                  </span>
                 </p>
               </div>
-              <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-cyan-500/30 bg-cyan-500/10 px-2 py-0.5 font-mono text-[10px] text-cyan-300">
+              <span
+                className={`inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full px-2.5 py-0.5 text-[10px] font-semibold ${
+                  t.status === "TERMINE"
+                    ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300"
+                    : t.status === "EN_ATTENTE_CLIENT"
+                      ? "bg-amber-50 text-amber-800 dark:bg-amber-500/15 dark:text-amber-300"
+                      : "bg-sky-50 text-sky-700 dark:bg-sky-500/15 dark:text-sky-300"
+                }`}
+              >
                 {t.status === "TERMINE" ? (
-                  <CheckCircle2 className="h-3 w-3 text-emerald-400" />
+                  <CheckCircle2 className="h-3 w-3" />
                 ) : (
                   <Clock className="h-3 w-3" />
                 )}
-                {t.status}
+                {STATUS_TEXT[t.status] ?? t.status}
               </span>
             </div>
           ))}

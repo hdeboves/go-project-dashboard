@@ -1,6 +1,12 @@
 "use client";
 
-import { CalendarPlus, RefreshCw, Settings, ShieldCheck, Users } from "lucide-react";
+import {
+  CalendarPlus,
+  RefreshCw,
+  Settings,
+  ShieldCheck,
+  Users,
+} from "lucide-react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
@@ -65,13 +71,13 @@ export function CalendarWorkspace() {
       const proj = shell?.projects.find((p) => p.id === targetId);
       setProjectLabel(
         proj
-          ? `CP ${proj.codeProjet} | ${proj.client} — ${proj.nomJeu}`
-          : `Projet ${targetId}`
+          ? `${proj.client} — ${proj.nomJeu} (CP ${proj.codeProjet})`
+          : `Projet actif`
       );
 
       if (shell && !shell.googleConnected) {
         setSetupRequiredMsg(
-          "Connecteur Google Calendar non configuré. Connectez votre compte dans Paramètres."
+          "Connectez Google Workspace dans Paramètres pour activer l'agenda projet."
         );
       } else {
         setSetupRequiredMsg(null);
@@ -96,7 +102,7 @@ export function CalendarWorkspace() {
       } else {
         setFeedback({
           type: "error",
-          text: json.error ?? "Impossible de charger le module Agenda.",
+          text: json.error ?? "Impossible de charger l'agenda.",
         });
       }
     } finally {
@@ -135,7 +141,9 @@ export function CalendarWorkspace() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          ...(shareWithEmails.length > 0 ? { shareWithEmails, role: "writer" } : {}),
+          ...(shareWithEmails.length > 0
+            ? { shareWithEmails, role: "writer" }
+            : {}),
         }),
       });
       const json = (await res.json()) as {
@@ -145,22 +153,20 @@ export function CalendarWorkspace() {
       };
 
       if (res.status === 412) {
-        setSetupRequiredMsg(
-          json.error ?? "Google Calendar OAuth2 non connecté."
-        );
+        setSetupRequiredMsg(json.error ?? "Google Agenda non connecté.");
         return;
       }
       if (!res.ok) {
         setFeedback({
           type: "error",
-          text: json.error ?? "Échec de la création du calendrier.",
+          text: json.error ?? "Impossible de créer l'agenda.",
         });
         return;
       }
 
       setFeedback({
         type: "success",
-        text: `Calendrier secondaire dédié créé : ${json.summary ?? json.calendarId}`,
+        text: `Agenda projet prêt : ${json.summary ?? "OK"}`,
       });
       await loadCalendar();
     } finally {
@@ -188,22 +194,20 @@ export function CalendarWorkspace() {
       };
 
       if (res.status === 412) {
-        setSetupRequiredMsg(
-          json.error ?? "Google Calendar OAuth2 non connecté."
-        );
+        setSetupRequiredMsg(json.error ?? "Google Agenda non connecté.");
         return;
       }
       if (!res.ok) {
         setFeedback({
           type: "error",
-          text: json.error ?? "Échec de la synchronisation des cascades.",
+          text: json.error ?? "Impossible de mettre à jour les rappels.",
         });
         return;
       }
 
       setFeedback({
         type: "success",
-        text: `Cascades synchronisées en place : ${json.syncedCount ?? 0} événement(s) actif(s), ${json.cancelledCount ?? 0} annulé(s).`,
+        text: `Rappels mis à jour : ${json.syncedCount ?? 0} événement(s) actif(s).`,
       });
       await loadCalendar();
     } finally {
@@ -228,20 +232,14 @@ export function CalendarWorkspace() {
       if (!res.ok) {
         setFeedback({
           type: "error",
-          text: json.error ?? "Échec de l'enregistrement de la règle Agenda.",
+          text: json.error ?? "Impossible d'ajouter la règle.",
         });
         return;
       }
-      setFeedback({
-        type: "success",
-        text: "Règle Agenda enregistrée.",
-      });
+      setFeedback({ type: "success", text: "Rappel automatique ajouté." });
       await loadCalendar();
     } catch {
-      setFeedback({
-        type: "error",
-        text: "Erreur réseau lors de l'enregistrement de la règle Agenda.",
-      });
+      setFeedback({ type: "error", text: "Erreur réseau." });
     }
   }
 
@@ -253,80 +251,70 @@ export function CalendarWorkspace() {
         `/api/projects/${projectId}/calendar?ruleId=${encodeURIComponent(ruleId)}`,
         { method: "DELETE" }
       );
-      const json = (await res.json().catch(() => ({}))) as { error?: string };
       if (!res.ok) {
+        const json = (await res.json().catch(() => ({}))) as { error?: string };
         setFeedback({
           type: "error",
-          text: json.error ?? "Échec de la suppression de la règle Agenda.",
+          text: json.error ?? "Impossible de supprimer la règle.",
         });
         return;
       }
-      setFeedback({
-        type: "success",
-        text: "Règle Agenda supprimée.",
-      });
       await loadCalendar();
     } catch {
-      setFeedback({
-        type: "error",
-        text: "Erreur réseau lors de la suppression de la règle Agenda.",
-      });
+      setFeedback({ type: "error", text: "Erreur réseau." });
     }
   }
 
   return (
-    <div className="mx-auto max-w-7xl space-y-6">
-      <div className="flex flex-wrap items-center justify-between gap-4">
+    <div className="mx-auto max-w-6xl space-y-6">
+      <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-white">
-            Google Agenda Dédié & Cascades Automatiques
+          <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-white">
+            Agenda & Rappels
           </h1>
-          <p className="mt-1 text-sm text-slate-400">
-            {projectLabel || "Sélectionnez ou initialisez un projet."}
+          <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+            {projectLabel || "Sélectionnez un projet dans la barre du haut."}
           </p>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2.5">
+        <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
             disabled={!projectId || creatingCal}
             onClick={() => void handleCreateCalendar()}
-            className="inline-flex items-center gap-2 rounded-lg border border-cyan-500/40 bg-cyan-500/15 px-3.5 py-2 text-xs font-semibold text-cyan-200 hover:bg-cyan-500/25 disabled:opacity-50"
+            className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs font-semibold text-slate-700 shadow-2xs hover:bg-slate-50 disabled:opacity-50 dark:border-slate-800 dark:bg-[#111827] dark:text-slate-200 dark:hover:bg-slate-800/70"
           >
-            <CalendarPlus className="h-3.5 w-3.5" />
+            <CalendarPlus className="h-3.5 w-3.5 text-slate-500 dark:text-slate-400" />
             {creatingCal
-              ? "Initialisation..."
+              ? "Création..."
               : calendarId
-                ? "Mettre à jour / Partager le calendrier"
-                : "Créer le calendrier dédié"}
+                ? "Partager à l'équipe"
+                : "Créer l'agenda projet"}
           </button>
 
           <button
             type="button"
             disabled={!projectId || syncingCascades}
             onClick={() => void handleSyncCascades()}
-            className="inline-flex items-center gap-2 rounded-lg bg-[#e11d48] px-4 py-2 text-xs font-semibold text-white hover:bg-[#ff2e58] disabled:opacity-50"
+            className="inline-flex items-center gap-1.5 rounded-xl bg-rose-600 px-4 py-2 text-xs font-semibold text-white shadow-xs hover:bg-rose-700 disabled:opacity-50"
           >
-            <RefreshCw className={`h-3.5 w-3.5 ${syncingCascades ? "animate-spin" : ""}`} />
-            {syncingCascades ? "Synchronisation..." : "Synchroniser les cascades"}
+            <RefreshCw
+              className={`h-3.5 w-3.5 ${syncingCascades ? "animate-spin" : ""}`}
+            />
+            {syncingCascades ? "Synchronisation..." : "Mettre à jour les rappels"}
           </button>
         </div>
       </div>
 
-      {/* Secondary Calendar Sandbox Guard Card */}
-      <div className="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-[#232b3d] bg-[#11151f] p-5 text-xs">
+      {/* Dedicated Calendar Info Card */}
+      <div className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-slate-200/80 bg-white p-5 shadow-[0_1px_2px_rgba(15,23,42,0.04)] dark:border-slate-800 dark:bg-[#111827]">
         <div className="space-y-1">
-          <div className="flex items-center gap-2 text-emerald-300">
-            <ShieldCheck className="h-4 w-4" />
-            <span className="font-semibold">
-              Agenda secondaire isolé (<code className="font-mono">&apos;primary&apos;</code> strictement bloqué)
-            </span>
+          <div className="flex items-center gap-1.5 text-xs font-medium text-emerald-700 dark:text-emerald-300">
+            <ShieldCheck className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
+            Agenda dédié — votre agenda personnel n&apos;est jamais touché
           </div>
-          <p className="font-mono text-sm font-bold text-white">
-            {calendarSummary || "Calendrier secondaire à initialiser"}
-          </p>
-          <p className="font-mono text-[11px] text-slate-400">
-            calendarId : {calendarId ?? "Non créé"}
+          <p className="text-base font-bold text-slate-900 dark:text-white">
+            {calendarSummary || "Agenda projet à créer"}
           </p>
         </div>
 
@@ -336,8 +324,8 @@ export function CalendarWorkspace() {
             type="text"
             value={shareEmailsInput}
             onChange={(e) => setShareEmailsInput(e.target.value)}
-            placeholder="Partager équipe (ex: paul@gamersorigin.com, souleimane@...)"
-            className="w-full rounded-lg border border-[#232b3d] bg-[#171d2b] px-3 py-1.5 text-xs text-white"
+            placeholder="Partager avec des collègues (emails séparés par virgule)"
+            className="w-full rounded-xl border border-slate-200 bg-slate-50/70 px-3 py-2 text-xs text-slate-900 placeholder:text-slate-400 focus:border-rose-400 focus:bg-white focus:outline-none dark:border-slate-800 dark:bg-slate-800/60 dark:text-white dark:focus:bg-slate-900"
           />
         </div>
       </div>
@@ -346,17 +334,17 @@ export function CalendarWorkspace() {
         <div
           role="alert"
           data-testid="setup-required-banner"
-          className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-500/50 bg-amber-950/40 p-4 text-xs text-amber-100"
+          className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-indigo-200 bg-indigo-50 p-4 text-xs text-indigo-900 dark:border-indigo-500/30 dark:bg-indigo-500/15 dark:text-indigo-200"
         >
-          <div className="flex items-center gap-2.5">
-            <Settings className="h-4 w-4 text-amber-300" />
+          <div className="flex items-center gap-2">
+            <Settings className="h-4 w-4 text-indigo-600 dark:text-indigo-400" />
             <span>{setupRequiredMsg}</span>
           </div>
           <Link
             href="/settings"
-            className="rounded-lg bg-amber-500 px-3 py-1.5 font-semibold text-slate-950 hover:bg-amber-400"
+            className="rounded-xl bg-indigo-600 px-3.5 py-1.5 font-semibold text-white hover:bg-indigo-700"
           >
-            Configurer dans Paramètres
+            Paramètres
           </Link>
         </div>
       )}
@@ -364,10 +352,10 @@ export function CalendarWorkspace() {
       {feedback && (
         <div
           role="status"
-          className={`rounded-xl border p-3.5 text-xs ${
+          className={`rounded-2xl border p-3.5 text-xs ${
             feedback.type === "success"
-              ? "border-emerald-500/40 bg-emerald-950/30 text-emerald-200"
-              : "border-red-500/40 bg-red-950/40 text-red-200"
+              ? "border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-500/30 dark:bg-emerald-500/15 dark:text-emerald-300"
+              : "border-rose-200 bg-rose-50 text-rose-800 dark:border-rose-500/30 dark:bg-rose-500/15 dark:text-rose-200"
           }`}
         >
           {feedback.text}
@@ -375,17 +363,17 @@ export function CalendarWorkspace() {
       )}
 
       {loading ? (
-        <div className="rounded-xl border border-[#232b3d] bg-[#11151f] p-8 text-center text-sm text-slate-400">
-          Chargement de l&apos;agenda projet...
+        <div className="rounded-2xl border border-slate-200/80 bg-white p-12 text-center text-sm text-slate-500 dark:border-slate-800 dark:bg-[#111827] dark:text-slate-400">
+          Chargement de l&apos;agenda...
         </div>
       ) : (
-        <div className="grid gap-6 lg:grid-cols-2">
+        <div className="grid gap-5 lg:grid-cols-2">
+          <CascadeTimeline events={events} />
           <CascadeRulesPanel
             rules={rules}
             onAddRule={handleAddRule}
             onDeleteRule={handleDeleteRule}
           />
-          <CascadeTimeline events={events} />
         </div>
       )}
     </div>

@@ -24,7 +24,7 @@ describe("Container 412 preconditions, OAuth scopes, Gmail Draft-First & Talent 
   beforeAll(() => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "go-container-test-"));
     const dbPath = path.join(tempDir, "test.db");
-    const baseDb = path.join(process.cwd(), "prisma", "dev.db");
+    const baseDb = path.join(process.cwd(), "prisma", "test.db");
     if (fs.existsSync(baseDb)) {
       fs.copyFileSync(baseDb, dbPath);
     } else {

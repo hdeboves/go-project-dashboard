@@ -62,6 +62,8 @@ model Project {
   fortniteMetrics   FortniteMetric[]
   influenceMetrics  InfluenceMetric[]
   verbatims         Verbatim[]
+  meetingNotes      MeetingNote[]
+  notifications     Notification[]
   auditLogs         AuditLog[]
 
   @@unique([codeProjet, client, nomJeu])
@@ -379,4 +381,48 @@ model AuditLog {
 
   @@index([projectId, createdAt])
   @@index([action])
+}
+
+model MeetingNote {
+  id               String   @id @default(cuid())
+  projectId        String
+  source           String   @default("KRISP_WEBHOOK")
+  externalId       String?
+  title            String
+  meetingDate      DateTime
+  durationMinutes  Int?
+  participantsJson String   @default("[]")
+  summary          String
+  keyDecisionsJson String   @default("[]")
+  actionItemsJson  String   @default("[]")
+  rawTranscript    String?
+  driveFileId      String?
+  driveFileName    String?
+  driveWebViewLink String?
+  driveFolderCode  String   @default("002.3")
+  status           String   @default("SAVED_TO_DRIVE")
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId, meetingDate])
+  @@index([externalId])
+}
+
+model Notification {
+  id        String   @id @default(cuid())
+  projectId String?
+  type      String   @default("KRISP_CR")
+  title     String
+  message   String
+  actionUrl String?
+  driveUrl  String?
+  read      Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  project Project? @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([read, createdAt])
+  @@index([projectId, createdAt])
 }

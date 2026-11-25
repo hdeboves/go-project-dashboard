@@ -1,17 +1,31 @@
 "use client";
 
-import { Plus, Save, Table2 } from "lucide-react";
-import { useState } from "react";
+import {
+  AlertCircle,
+  ChevronDown,
+  ChevronRight,
+  Download,
+  Plus,
+  Save,
+  Search,
+  X,
+} from "lucide-react";
+import { useMemo, useState } from "react";
 import {
   type BudgetAlertDto,
   type BudgetLineDto,
   formatEur,
 } from "@/components/budget/types";
+import { showToast } from "@/lib/toast";
 
 interface BudgetTableProps {
   projectId: string;
   lines: BudgetLineDto[];
   alerts: BudgetAlertDto[];
+  selectedCategory?: string | null;
+  onSelectCategory?: (category: string | null) => void;
+  overrunsOnly?: boolean;
+  onToggleOverrunsOnly?: (next: boolean) => void;
   onLineSaved: () => Promise<void>;
   onError: (status: number, payload: { error?: string; code?: string }) => void;
 }
@@ -19,14 +33,83 @@ interface BudgetTableProps {
 export function BudgetTable({
   projectId,
   lines,
-  alerts,
+  selectedCategory = null,
+  onSelectCategory,
+  overrunsOnly = false,
+  onToggleOverrunsOnly,
   onLineSaved,
   onError,
 }: BudgetTableProps) {
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [editingLine, setEditingLine] = useState<BudgetLineDto | null>(null);
   const [saving, setSaving] = useState(false);
 
+  const [search, setSearch] = useState("");
+  const [detailedView, setDetailedView] = useState(false);
+  const [collapsedCategories, setCollapsedCategories] = useState<Set<string>>(
+    () => new Set()
+  );
+  const [inlineEdit, setInlineEdit] = useState<{
+    lineId: string;
+    field: "saleTotalHt" | "preOpTotalHt";
+    value: string;
+  } | null>(null);
+  const [savingInline, setSavingInline] = useState(false);
+
+  async function saveInlineCell(
+    line: BudgetLineDto,
+    field: "saleTotalHt" | "preOpTotalHt",
+    rawValue: string
+  ) {
+    const parsed = Math.round((Number(rawValue) || 0) * 100) / 100;
+    if (parsed === line[field]) {
+      setInlineEdit(null);
+      return;
+    }
+    const denom = Math.max(0.01, (line.saleQty || 1) * (line.saleDays || 1));
+    const nextSaleUnitPrice =
+      field === "saleTotalHt"
+        ? Math.round((parsed / denom) * 100) / 100
+        : line.saleUnitPrice;
+    const nextPreOpUnitCost =
+      field === "preOpTotalHt"
+        ? Math.round((parsed / denom) * 100) / 100
+        : line.preOpUnitCost;
+
+    setSavingInline(true);
+    try {
+      const res = await fetch(`/api/projects/${projectId}/budget`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: line.id,
+          category: line.category,
+          objet: line.objet,
+          realisePar: line.realisePar,
+          expenseType: line.expenseType,
+          saleQty: line.saleQty,
+          saleDays: line.saleDays,
+          saleUnitPrice: nextSaleUnitPrice,
+          saleTotalHt: field === "saleTotalHt" ? parsed : line.saleTotalHt,
+          preOpUnitCost: nextPreOpUnitCost,
+          preOpTotalHt: field === "preOpTotalHt" ? parsed : line.preOpTotalHt,
+        }),
+      });
+      if (!res.ok) {
+        const err = (await res.json()) as { error?: string; code?: string };
+        onError(res.status, err);
+        return;
+      }
+      setInlineEdit(null);
+      showToast(`Montant mis à jour pour « ${line.objet} ».`);
+      await onLineSaved();
+    } finally {
+      setSavingInline(false);
+    }
+  }
+
+  // Form fields
   const [category, setCategory] = useState("PRODUCTION");
   const [objet, setObjet] = useState("");
   const [realisePar, setRealisePar] = useState("");
@@ -34,27 +117,107 @@ export function BudgetTable({
   const [saleQty, setSaleQty] = useState("1");
   const [saleDays, setSaleDays] = useState("1");
   const [saleUnitPrice, setSaleUnitPrice] = useState("0");
+  const [saleTotalHt, setSaleTotalHt] = useState("0");
   const [preOpUnitCost, setPreOpUnitCost] = useState("0");
 
-  const alertByLineId = new Map<string, BudgetAlertDto>(
-    alerts.map((a) => [a.budgetLineId, a])
+  const overrunCount = useMemo(
+    () => lines.filter((l) => l.postOpTotalHt > l.preOpTotalHt).length,
+    [lines]
   );
+
+  const allCategories = useMemo(() => {
+    const set = new Set<string>();
+    for (const l of lines) set.add(l.category.trim() || "AUTRES");
+    return Array.from(set);
+  }, [lines]);
+
+  const filteredLines = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return lines.filter((line) => {
+      const cat = line.category.trim() || "AUTRES";
+      if (selectedCategory && cat !== selectedCategory) return false;
+      if (overrunsOnly && !(line.postOpTotalHt > line.preOpTotalHt)) {
+        return false;
+      }
+      if (q) {
+        const hay = `${cat} ${line.objet} ${line.realisePar ?? ""} ${line.expenseType} ${line.invoiceNumbersNote ?? ""}`.toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
+      return true;
+    });
+  }, [lines, selectedCategory, overrunsOnly, search]);
+
+  const grouped = useMemo(() => {
+    const groups: Array<{
+      category: string;
+      rows: BudgetLineDto[];
+      soldTotal: number;
+      preOpTotal: number;
+      postOpTotal: number;
+    }> = [];
+    const idxMap = new Map<string, number>();
+
+    for (const line of filteredLines) {
+      const cat = line.category.trim() || "AUTRES";
+      let idx = idxMap.get(cat);
+      if (idx === undefined) {
+        idx = groups.length;
+        idxMap.set(cat, idx);
+        groups.push({
+          category: cat,
+          rows: [],
+          soldTotal: 0,
+          preOpTotal: 0,
+          postOpTotal: 0,
+        });
+      }
+      groups[idx].rows.push(line);
+      groups[idx].soldTotal += line.saleTotalHt;
+      groups[idx].preOpTotal += line.preOpTotalHt;
+      groups[idx].postOpTotal += line.postOpTotalHt;
+    }
+    return groups;
+  }, [filteredLines]);
+
+  const grandTotals = useMemo(() => {
+    return filteredLines.reduce(
+      (acc, l) => {
+        acc.sold += l.saleTotalHt;
+        acc.preOp += l.preOpTotalHt;
+        acc.postOp += l.postOpTotalHt;
+        return acc;
+      },
+      { sold: 0, preOp: 0, postOp: 0 }
+    );
+  }, [filteredLines]);
+
+  function toggleCategory(cat: string) {
+    setCollapsedCategories((prev) => {
+      const next = new Set(prev);
+      if (next.has(cat)) next.delete(cat);
+      else next.add(cat);
+      return next;
+    });
+  }
 
   function openNewForm() {
     setEditingId(null);
-    setCategory("PRODUCTION");
+    setEditingLine(null);
+    setCategory(selectedCategory ?? "PRODUCTION");
     setObjet("");
     setRealisePar("");
     setExpenseType("Externe");
     setSaleQty("1");
     setSaleDays("1");
     setSaleUnitPrice("0");
+    setSaleTotalHt("0");
     setPreOpUnitCost("0");
     setShowForm(true);
   }
 
   function openEditForm(line: BudgetLineDto) {
     setEditingId(line.id);
+    setEditingLine(line);
     setCategory(line.category);
     setObjet(line.objet);
     setRealisePar(line.realisePar ?? "");
@@ -62,8 +225,28 @@ export function BudgetTable({
     setSaleQty(String(line.saleQty));
     setSaleDays(String(line.saleDays));
     setSaleUnitPrice(String(line.saleUnitPrice));
+    setSaleTotalHt(String(line.saleTotalHt));
     setPreOpUnitCost(String(line.preOpUnitCost));
     setShowForm(true);
+  }
+
+  function maybeSyncSaleTotal(
+    nextQty: string,
+    nextDays: string,
+    nextUnit: string
+  ) {
+    const sq = Number(nextQty) || 0;
+    const sd = Number(nextDays) || 0;
+    const su = Number(nextUnit) || 0;
+    if (
+      editingLine &&
+      editingLine.saleUnitPrice === 0 &&
+      editingLine.saleTotalHt > 0 &&
+      su === 0
+    ) {
+      return;
+    }
+    setSaleTotalHt(String(Math.round(sq * sd * su * 100) / 100));
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -73,7 +256,17 @@ export function BudgetTable({
       const sq = Number(saleQty) || 0;
       const sd = Number(saleDays) || 0;
       const su = Number(saleUnitPrice) || 0;
+      const st = Math.round((Number(saleTotalHt) || 0) * 100) / 100;
       const pu = Number(preOpUnitCost) || 0;
+      const computedPreOpTotal =
+        editingLine &&
+        editingLine.preOpUnitCost === 0 &&
+        editingLine.preOpTotalHt > 0 &&
+        pu === 0 &&
+        sq === editingLine.saleQty &&
+        sd === editingLine.saleDays
+          ? editingLine.preOpTotalHt
+          : Math.round(pu * sq * sd * 100) / 100;
 
       const res = await fetch(`/api/projects/${projectId}/budget`, {
         method: "POST",
@@ -87,9 +280,9 @@ export function BudgetTable({
           saleQty: sq,
           saleDays: sd,
           saleUnitPrice: su,
-          saleTotalHt: Math.round(sq * sd * su * 100) / 100,
+          saleTotalHt: st,
           preOpUnitCost: pu,
-          preOpTotalHt: Math.round(pu * sq * sd * 100) / 100,
+          preOpTotalHt: computedPreOpTotal,
         }),
       });
 
@@ -100,61 +293,167 @@ export function BudgetTable({
       }
 
       setShowForm(false);
+      showToast(editingId ? "Poste budgétaire mis à jour." : "Nouveau poste ajouté.");
       await onLineSaved();
     } finally {
       setSaving(false);
     }
   }
 
-  // Group lines by category preserving appearance order
-  const grouped: Array<{ category: string; rows: BudgetLineDto[] }> = [];
-  const catIndex = new Map<string, number>();
-  for (const line of lines) {
-    const cat = line.category.trim() || "AUTRES";
-    const idx = catIndex.get(cat);
-    if (idx === undefined) {
-      catIndex.set(cat, grouped.length);
-      grouped.push({ category: cat, rows: [line] });
-    } else {
-      grouped[idx].rows.push(line);
-    }
-  }
+  const colCount = detailedView ? 12 : 7;
 
   return (
-    <section className="rounded-xl border border-[#232b3d] bg-[#11151f] p-5">
+    <section
+      id="budget-spreadsheet"
+      className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-[0_1px_2px_rgba(15,23,42,0.04)] dark:border-slate-800 dark:bg-[#111827]"
+    >
+      {/* Clean Toolbar */}
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-2">
-          <Table2 className="h-5 w-5 text-cyan-400" />
-          <h2 className="text-base font-semibold text-white">
-            Postes de dépenses — Vue 3 Blocs
-          </h2>
-          <span className="rounded-full border border-[#232b3d] bg-[#171d2b] px-2.5 py-0.5 font-mono text-xs text-slate-300">
-            {lines.length} ligne(s)
-          </span>
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="relative">
+            <Search className="pointer-events-none absolute top-1/2 left-3 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Rechercher un poste..."
+              className="w-52 rounded-xl border border-slate-200 bg-slate-50/70 py-1.5 pr-7 pl-8 text-xs text-slate-900 placeholder:text-slate-400 focus:border-indigo-500 focus:bg-white focus:outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 dark:focus:bg-slate-900"
+            />
+            {search && (
+              <button
+                type="button"
+                onClick={() => setSearch("")}
+                className="absolute top-1/2 right-2.5 -translate-y-1/2 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </div>
+
+          <select
+            aria-label="Filtrer par catégorie"
+            value={selectedCategory ?? ""}
+            onChange={(e) => onSelectCategory?.(e.target.value || null)}
+            className="max-w-48 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-700 focus:border-indigo-500 focus:outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+          >
+            <option value="">Toutes les catégories</option>
+            {allCategories.map((cat) => (
+              <option key={cat} value={cat}>
+                {cat}
+              </option>
+            ))}
+          </select>
+
+          <button
+            type="button"
+            onClick={() => onToggleOverrunsOnly?.(!overrunsOnly)}
+            className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-xs font-medium transition-colors ${
+              overrunsOnly
+                ? "border-rose-300 bg-rose-50 text-rose-700 dark:border-rose-500/40 dark:bg-rose-500/15 dark:text-rose-300"
+                : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-800/70"
+            }`}
+          >
+            <AlertCircle className="h-3.5 w-3.5 text-rose-500" />
+            Dépassements ({overrunCount})
+          </button>
         </div>
-        <button
-          type="button"
-          onClick={openNewForm}
-          className="inline-flex items-center gap-1.5 rounded-lg border border-cyan-500/40 bg-cyan-500/10 px-3 py-1.5 text-xs font-semibold text-cyan-300 transition-colors hover:bg-cyan-500/20"
-        >
-          <Plus className="h-4 w-4" />
-          Ajouter une ligne
-        </button>
+
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            disabled={filteredLines.length === 0}
+            onClick={() => {
+              const headers = [
+                "Catégorie",
+                "Poste",
+                "Type",
+                "Vendu HT (€)",
+                "Prévu HT (€)",
+                "Facturé HT (€)",
+                "Écart HT (€)",
+                "Marge Atterrissage (%)",
+              ];
+              const rows = filteredLines.map((l) => {
+                const fc = Math.max(l.preOpTotalHt, l.postOpTotalHt);
+                const mPct =
+                  l.saleTotalHt > 0
+                    ? Math.round(((l.saleTotalHt - fc) / l.saleTotalHt) * 100)
+                    : 0;
+                return [
+                  l.category,
+                  l.objet,
+                  l.expenseType,
+                  l.saleTotalHt.toFixed(2),
+                  l.preOpTotalHt.toFixed(2),
+                  l.postOpTotalHt.toFixed(2),
+                  (l.postOpTotalHt - l.preOpTotalHt).toFixed(2),
+                  mPct,
+                ];
+              });
+              const csv =
+                "\uFEFF" +
+                [headers, ...rows]
+                  .map((r) =>
+                    r.map((c) => `"${String(c).replaceAll('"', '""')}"`).join(";")
+                  )
+                  .join("\n");
+              const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+              const url = URL.createObjectURL(blob);
+              const a = document.createElement("a");
+              a.href = url;
+              a.download = `budget_projet_${new Date().toISOString().slice(0, 10)}.csv`;
+              a.click();
+              URL.revokeObjectURL(url);
+              showToast("Budget exporté en CSV.");
+            }}
+            className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50 hover:text-slate-900 disabled:opacity-40 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:text-white"
+          >
+            <Download className="h-3.5 w-3.5 text-indigo-600 dark:text-indigo-400" />
+            CSV
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setDetailedView((v) => !v)}
+            className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50 hover:text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:text-white dark:hover:bg-slate-800/70"
+          >
+            {detailedView ? "Vue simplifiée" : "Plus de colonnes"}
+          </button>
+
+          <button
+            type="button"
+            onClick={openNewForm}
+            className="inline-flex items-center gap-1.5 rounded-xl bg-rose-600 px-3.5 py-1.5 text-xs font-semibold text-white hover:bg-rose-700"
+          >
+            <Plus className="h-3.5 w-3.5" />
+            Ajouter un poste
+          </button>
+        </div>
       </div>
 
+      {/* Add / Edit Form */}
       {showForm && (
         <form
           onSubmit={(e) => void handleSubmit(e)}
-          className="mb-5 rounded-lg border border-[#232b3d] bg-[#171d2b] p-4"
+          className="mb-5 rounded-xl border border-slate-200 bg-slate-50/80 p-4 dark:border-slate-800 dark:bg-slate-800/60"
         >
-          <h3 className="mb-3 text-sm font-semibold text-white">
-            {editingId ? "Modifier la ligne budgétaire" : "Nouvelle ligne budgétaire"}
-          </h3>
+          <div className="mb-3 flex items-center justify-between">
+            <h3 className="text-sm font-semibold text-slate-900 dark:text-white">
+              {editingId ? "Modifier le poste" : "Nouveau poste budgétaire"}
+            </h3>
+            <button
+              type="button"
+              onClick={() => setShowForm(false)}
+              className="rounded-lg p-1 text-slate-400 hover:bg-slate-200/70 hover:text-slate-700"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <div>
               <label
                 htmlFor="budget-line-category"
-                className="mb-1 block text-xs text-slate-300"
+                className="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-300"
               >
                 Catégorie
               </label>
@@ -164,15 +463,15 @@ export function BudgetTable({
                 required
                 value={category}
                 onChange={(e) => setCategory(e.target.value)}
-                className="w-full rounded-md border border-[#232b3d] bg-[#090b10] px-3 py-1.5 text-sm text-white focus:border-cyan-500 focus:outline-none"
+                className="w-full rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-900 focus:border-rose-400 focus:outline-none dark:border-slate-800 dark:bg-[#111827] dark:text-white"
               />
             </div>
             <div>
               <label
                 htmlFor="budget-line-objet"
-                className="mb-1 block text-xs text-slate-300"
+                className="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-300"
               >
-                Objet
+                Nom du poste
               </label>
               <input
                 id="budget-line-objet"
@@ -180,13 +479,13 @@ export function BudgetTable({
                 required
                 value={objet}
                 onChange={(e) => setObjet(e.target.value)}
-                className="w-full rounded-md border border-[#232b3d] bg-[#090b10] px-3 py-1.5 text-sm text-white focus:border-cyan-500 focus:outline-none"
+                className="w-full rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-900 focus:border-rose-400 focus:outline-none dark:border-slate-800 dark:bg-[#111827] dark:text-white"
               />
             </div>
             <div>
               <label
                 htmlFor="budget-line-realise-par"
-                className="mb-1 block text-xs text-slate-300"
+                className="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-300"
               >
                 Réalisé par
               </label>
@@ -195,21 +494,21 @@ export function BudgetTable({
                 type="text"
                 value={realisePar}
                 onChange={(e) => setRealisePar(e.target.value)}
-                className="w-full rounded-md border border-[#232b3d] bg-[#090b10] px-3 py-1.5 text-sm text-white focus:border-cyan-500 focus:outline-none"
+                className="w-full rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-900 focus:border-rose-400 focus:outline-none dark:border-slate-800 dark:bg-[#111827] dark:text-white"
               />
             </div>
             <div>
               <label
                 htmlFor="budget-line-type"
-                className="mb-1 block text-xs text-slate-300"
+                className="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-300"
               >
-                Type de dépenses
+                Type
               </label>
               <select
                 id="budget-line-type"
                 value={expenseType}
                 onChange={(e) => setExpenseType(e.target.value)}
-                className="w-full rounded-md border border-[#232b3d] bg-[#090b10] px-3 py-1.5 text-sm text-white focus:border-cyan-500 focus:outline-none"
+                className="w-full rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-900 focus:border-rose-400 focus:outline-none dark:border-slate-800 dark:bg-[#111827] dark:text-white"
               >
                 <option value="Externe">Externe</option>
                 <option value="RH Internes">RH Internes</option>
@@ -219,7 +518,7 @@ export function BudgetTable({
             <div>
               <label
                 htmlFor="budget-line-qty"
-                className="mb-1 block text-xs text-slate-300"
+                className="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-300"
               >
                 Quantité
               </label>
@@ -229,14 +528,18 @@ export function BudgetTable({
                 min="0"
                 step="0.01"
                 value={saleQty}
-                onChange={(e) => setSaleQty(e.target.value)}
-                className="w-full rounded-md border border-[#232b3d] bg-[#090b10] px-3 py-1.5 font-mono text-sm text-white focus:border-cyan-500 focus:outline-none"
+                onChange={(e) => {
+                  const val = e.target.value;
+                  setSaleQty(val);
+                  maybeSyncSaleTotal(val, saleDays, saleUnitPrice);
+                }}
+                className="w-full rounded-xl border border-slate-200 bg-white px-3 py-1.5 font-mono text-xs text-slate-900 focus:border-rose-400 focus:outline-none dark:border-slate-800 dark:bg-[#111827] dark:text-white"
               />
             </div>
             <div>
               <label
                 htmlFor="budget-line-days"
-                className="mb-1 block text-xs text-slate-300"
+                className="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-300"
               >
                 Jours
               </label>
@@ -246,14 +549,18 @@ export function BudgetTable({
                 min="0"
                 step="0.01"
                 value={saleDays}
-                onChange={(e) => setSaleDays(e.target.value)}
-                className="w-full rounded-md border border-[#232b3d] bg-[#090b10] px-3 py-1.5 font-mono text-sm text-white focus:border-cyan-500 focus:outline-none"
+                onChange={(e) => {
+                  const val = e.target.value;
+                  setSaleDays(val);
+                  maybeSyncSaleTotal(saleQty, val, saleUnitPrice);
+                }}
+                className="w-full rounded-xl border border-slate-200 bg-white px-3 py-1.5 font-mono text-xs text-slate-900 focus:border-rose-400 focus:outline-none dark:border-slate-800 dark:bg-[#111827] dark:text-white"
               />
             </div>
             <div>
               <label
                 htmlFor="budget-line-sale-unit"
-                className="mb-1 block text-xs text-slate-300"
+                className="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-300"
               >
                 Prix vente unitaire (€)
               </label>
@@ -263,16 +570,37 @@ export function BudgetTable({
                 min="0"
                 step="0.01"
                 value={saleUnitPrice}
-                onChange={(e) => setSaleUnitPrice(e.target.value)}
-                className="w-full rounded-md border border-[#232b3d] bg-[#090b10] px-3 py-1.5 font-mono text-sm text-white focus:border-cyan-500 focus:outline-none"
+                onChange={(e) => {
+                  const val = e.target.value;
+                  setSaleUnitPrice(val);
+                  maybeSyncSaleTotal(saleQty, saleDays, val);
+                }}
+                className="w-full rounded-xl border border-slate-200 bg-white px-3 py-1.5 font-mono text-xs text-slate-900 focus:border-rose-400 focus:outline-none dark:border-slate-800 dark:bg-[#111827] dark:text-white"
+              />
+            </div>
+            <div>
+              <label
+                htmlFor="budget-line-sale-total"
+                className="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-300"
+              >
+                Vendu total HT (€)
+              </label>
+              <input
+                id="budget-line-sale-total"
+                type="number"
+                min="0"
+                step="0.01"
+                value={saleTotalHt}
+                onChange={(e) => setSaleTotalHt(e.target.value)}
+                className="w-full rounded-xl border border-slate-200 bg-white px-3 py-1.5 font-mono text-xs text-slate-900 focus:border-rose-400 focus:outline-none dark:border-slate-800 dark:bg-[#111827] dark:text-white"
               />
             </div>
             <div>
               <label
                 htmlFor="budget-line-preop-unit"
-                className="mb-1 block text-xs text-slate-300"
+                className="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-300"
               >
-                Coût réel pré-op/u (€)
+                Coût prévu / unité (€)
               </label>
               <input
                 id="budget-line-preop-unit"
@@ -281,7 +609,7 @@ export function BudgetTable({
                 step="0.01"
                 value={preOpUnitCost}
                 onChange={(e) => setPreOpUnitCost(e.target.value)}
-                className="w-full rounded-md border border-[#232b3d] bg-[#090b10] px-3 py-1.5 font-mono text-sm text-white focus:border-cyan-500 focus:outline-none"
+                className="w-full rounded-xl border border-slate-200 bg-white px-3 py-1.5 font-mono text-xs text-slate-900 focus:border-rose-400 focus:outline-none dark:border-slate-800 dark:bg-[#111827] dark:text-white"
               />
             </div>
           </div>
@@ -289,14 +617,14 @@ export function BudgetTable({
             <button
               type="button"
               onClick={() => setShowForm(false)}
-              className="rounded-md border border-[#232b3d] px-3 py-1.5 text-xs font-medium text-slate-300 hover:bg-[#090b10]"
+              className="rounded-xl border border-slate-200 bg-white px-3.5 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50 dark:border-slate-800 dark:bg-[#111827] dark:text-slate-300 dark:hover:bg-slate-800/70"
             >
               Annuler
             </button>
             <button
               type="submit"
               disabled={saving}
-              className="inline-flex items-center gap-1.5 rounded-md bg-[#e11d48] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#ff2e58] disabled:opacity-50"
+              className="inline-flex items-center gap-1.5 rounded-xl bg-rose-600 px-4 py-1.5 text-xs font-semibold text-white hover:bg-rose-700 disabled:opacity-50"
             >
               <Save className="h-3.5 w-3.5" />
               {saving ? "Enregistrement..." : "Enregistrer"}
@@ -305,174 +633,440 @@ export function BudgetTable({
         </form>
       )}
 
-      <div className="overflow-x-auto">
+      {/* Crisp Adaptive Table */}
+      <div className="max-h-[560px] overflow-auto rounded-xl border border-slate-200 dark:border-slate-800">
         <table className="w-full border-collapse text-left text-xs">
-          <thead>
-            <tr className="border-b border-[#232b3d] bg-[#090b10]">
-              <th
-                colSpan={5}
-                className="border-r border-[#232b3d] px-3 py-2 text-center text-xs font-bold tracking-wider text-cyan-300 uppercase"
-              >
-                Prix de vente
-              </th>
-              <th
-                colSpan={3}
-                className="border-r border-[#232b3d] px-3 py-2 text-center text-xs font-bold tracking-wider text-amber-300 uppercase"
-              >
-                Coûts réels pré-opération
-              </th>
-              <th
-                colSpan={4}
-                className="px-3 py-2 text-center text-xs font-bold tracking-wider text-rose-300 uppercase"
-              >
-                Coûts réels post-opération
-              </th>
-            </tr>
-            <tr className="border-b border-[#232b3d] bg-[#171d2b] text-[11px] font-semibold text-slate-300">
-              <th className="px-3 py-2">Objet</th>
-              <th className="px-2 py-2">Réalisé par</th>
-              <th className="px-2 py-2 text-right">Qté</th>
-              <th className="px-2 py-2 text-right">Jours</th>
-              <th className="border-r border-[#232b3d] px-3 py-2 text-right">
-                Prix (€)
-              </th>
-              <th className="px-2 py-2">Type</th>
-              <th className="px-2 py-2 text-right">Coût/u (€)</th>
-              <th className="border-r border-[#232b3d] px-3 py-2 text-right">
-                Pré-op (€)
-              </th>
-              <th className="px-2 py-2 text-right">Qté</th>
-              <th className="px-2 py-2 text-right">Coût/u (€)</th>
-              <th className="px-3 py-2 text-right">Post-op (€)</th>
-              <th className="px-2 py-2 text-center">Seuil / Actions</th>
+          <thead className="sticky top-0 z-10 bg-slate-50 text-[11px] font-semibold text-slate-500 shadow-[0_1px_0_#e2e8f0] dark:bg-slate-900 dark:text-slate-400 dark:shadow-[0_1px_0_#1e293b]">
+            <tr>
+              <th className="px-3.5 py-2.5">Poste</th>
+              {detailedView && <th className="px-2 py-2.5">Réalisé par</th>}
+              {detailedView && <th className="px-2 py-2.5 text-right">Qté</th>}
+              {detailedView && <th className="px-2 py-2.5 text-right">Jours</th>}
+              {!detailedView && <th className="px-2 py-2.5">Type</th>}
+              <th className="px-3 py-2.5 text-right">Vendu HT</th>
+              {detailedView && <th className="px-2 py-2.5">Type</th>}
+              {detailedView && <th className="px-2 py-2.5 text-right">Coût/u</th>}
+              <th className="px-3 py-2.5 text-right">Prévu</th>
+              {detailedView && <th className="px-2 py-2.5 text-right">Qté</th>}
+              {detailedView && <th className="px-2 py-2.5 text-right">Coût/u</th>}
+              <th className="px-3 py-2.5 text-right">Facturé</th>
+              {!detailedView && <th className="px-3 py-2.5 text-right">Écart</th>}
+              <th className="px-2.5 py-2.5 text-center" />
             </tr>
           </thead>
+
           <tbody>
             {grouped.length === 0 ? (
               <tr>
                 <td
-                  colSpan={12}
-                  className="px-4 py-8 text-center text-sm text-slate-400"
+                  colSpan={colCount}
+                  className="px-4 py-10 text-center text-sm text-slate-500 dark:text-slate-400"
                 >
-                  Aucune ligne budgétaire. Importez un fichier{" "}
-                  <span className="font-mono">.xlsx</span>, copiez le Budget
-                  PROD dans <span className="font-mono">001.1</span> ou ajoutez
-                  une ligne manuellement.
+                  {lines.length === 0
+                    ? "Aucun poste budgétaire pour le moment."
+                    : "Aucun poste ne correspond à votre recherche."}
                 </td>
               </tr>
             ) : (
-              grouped.map((group) => (
-                <FragmentGroup
-                  key={group.category}
-                  category={group.category}
-                  rows={group.rows}
-                  alertByLineId={alertByLineId}
-                  onEdit={openEditForm}
-                />
-              ))
+              grouped.map((group) => {
+                const isCollapsed = collapsedCategories.has(group.category);
+                const catDiff =
+                  Math.round((group.postOpTotal - group.preOpTotal) * 100) /
+                  100;
+                const catOverrun = catDiff > 0;
+
+                return (
+                  <CategoryRows
+                    key={group.category}
+                    category={group.category}
+                    rows={group.rows}
+                    soldTotal={group.soldTotal}
+                    preOpTotal={group.preOpTotal}
+                    postOpTotal={group.postOpTotal}
+                    catDiff={catDiff}
+                    catOverrun={catOverrun}
+                    collapsed={isCollapsed}
+                    detailedView={detailedView}
+                    inlineEdit={inlineEdit}
+                    savingInline={savingInline}
+                    onStartInline={(lineId, field, value) =>
+                      setInlineEdit({ lineId, field, value })
+                    }
+                    onChangeInline={(value) =>
+                      setInlineEdit((prev) => (prev ? { ...prev, value } : null))
+                    }
+                    onCommitInline={saveInlineCell}
+                    onCancelInline={() => setInlineEdit(null)}
+                    onToggle={() => toggleCategory(group.category)}
+                    onEdit={openEditForm}
+                  />
+                );
+              })
             )}
           </tbody>
+
+          {filteredLines.length > 0 && (
+            <tfoot className="sticky bottom-0 z-10 border-t-2 border-slate-200 bg-slate-50 font-mono text-xs font-bold text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white">
+              <tr>
+                <td
+                  colSpan={detailedView ? 4 : 2}
+                  className="px-3.5 py-3 font-sans text-xs font-bold text-slate-800 dark:text-white"
+                >
+                  Total ({filteredLines.length} postes)
+                </td>
+                <td className="px-3 py-3 text-right text-slate-800 dark:text-slate-200">
+                  {formatEur(grandTotals.sold)}
+                </td>
+                {detailedView && <td colSpan={2} />}
+                <td className="px-3 py-3 text-right text-slate-800 dark:text-slate-200">
+                  {formatEur(grandTotals.preOp)}
+                </td>
+                {detailedView && <td colSpan={2} />}
+                <td className="px-3 py-3 text-right text-slate-900 dark:text-white">
+                  {formatEur(grandTotals.postOp)}
+                </td>
+                {!detailedView && (
+                  <td
+                    className={`px-3 py-3 text-right ${
+                      grandTotals.postOp > grandTotals.preOp
+                        ? "text-rose-600 dark:text-rose-400"
+                        : "text-emerald-700 dark:text-emerald-400"
+                    }`}
+                  >
+                    {grandTotals.postOp > grandTotals.preOp ? "+" : ""}
+                    {formatEur(grandTotals.postOp - grandTotals.preOp)}
+                  </td>
+                )}
+                <td />
+              </tr>
+            </tfoot>
+          )}
         </table>
       </div>
     </section>
   );
 }
 
-function FragmentGroup({
+function CategoryRows({
   category,
   rows,
-  alertByLineId,
+  soldTotal,
+  preOpTotal,
+  postOpTotal,
+  catDiff,
+  catOverrun,
+  collapsed,
+  detailedView,
+  inlineEdit,
+  savingInline,
+  onStartInline,
+  onChangeInline,
+  onCommitInline,
+  onCancelInline,
+  onToggle,
   onEdit,
 }: {
   category: string;
   rows: BudgetLineDto[];
-  alertByLineId: Map<string, BudgetAlertDto>;
+  soldTotal: number;
+  preOpTotal: number;
+  postOpTotal: number;
+  catDiff: number;
+  catOverrun: boolean;
+  collapsed: boolean;
+  detailedView: boolean;
+  inlineEdit: {
+    lineId: string;
+    field: "saleTotalHt" | "preOpTotalHt";
+    value: string;
+  } | null;
+  savingInline: boolean;
+  onStartInline: (
+    lineId: string,
+    field: "saleTotalHt" | "preOpTotalHt",
+    value: string
+  ) => void;
+  onChangeInline: (value: string) => void;
+  onCommitInline: (
+    line: BudgetLineDto,
+    field: "saleTotalHt" | "preOpTotalHt",
+    value: string
+  ) => Promise<void>;
+  onCancelInline: () => void;
+  onToggle: () => void;
   onEdit: (line: BudgetLineDto) => void;
 }) {
   return (
     <>
-      <tr className="border-b border-[#232b3d] bg-[#171d2b]/80">
+      <tr
+        onClick={onToggle}
+        className="cursor-pointer border-b border-slate-200 bg-slate-50/90 transition-colors hover:bg-slate-100/80 dark:border-slate-800 dark:bg-slate-800/70 dark:hover:bg-slate-800"
+      >
         <td
-          colSpan={12}
-          className="px-3 py-2 text-xs font-bold tracking-wide text-slate-100 uppercase"
+          colSpan={detailedView ? 4 : 2}
+          className="px-3.5 py-2.5 text-[11px] font-bold tracking-wide text-slate-700 uppercase dark:text-slate-200"
         >
-          {category}
+          <div className="flex items-center gap-1.5">
+            {collapsed ? (
+              <ChevronRight className="h-3.5 w-3.5 shrink-0 text-slate-400" />
+            ) : (
+              <ChevronDown className="h-3.5 w-3.5 shrink-0 text-slate-400" />
+            )}
+            <span>{category}</span>
+            <span className="font-normal text-slate-400">({rows.length})</span>
+          </div>
         </td>
-      </tr>
-      {rows.map((line) => {
-        const alert = alertByLineId.get(line.id);
-        return (
-          <tr
-            key={line.id}
-            className="border-b border-[#232b3d]/60 transition-colors hover:bg-[#171d2b]/40"
+        <td className="px-3 py-2.5 text-right font-mono text-[11px] font-semibold text-slate-600 dark:text-slate-300">
+          {formatEur(soldTotal)}
+        </td>
+        {detailedView && <td colSpan={2} />}
+        <td className="px-3 py-2.5 text-right font-mono text-[11px] font-semibold text-slate-600 dark:text-slate-300">
+          {formatEur(preOpTotal)}
+        </td>
+        {detailedView && <td colSpan={2} />}
+        <td className="px-3 py-2.5 text-right font-mono text-[11px] font-semibold text-slate-800 dark:text-white">
+          {formatEur(postOpTotal)}
+        </td>
+        {!detailedView && (
+          <td
+            className={`px-3 py-2.5 text-right font-mono text-[11px] font-semibold ${
+              catOverrun ? "text-rose-600 dark:text-rose-400" : "text-slate-500 dark:text-slate-400"
+            }`}
           >
-            <td className="px-3 py-2 font-medium text-white">
-              <div>{line.objet}</div>
-              {line.invoiceNumbersNote && (
-                <div className="mt-0.5 font-mono text-[10px] text-cyan-300/90">
-                  {line.invoiceNumbersNote}
+            {catOverrun ? `+${formatEur(catDiff)}` : formatEur(catDiff)}
+          </td>
+        )}
+        <td />
+      </tr>
+
+      {!collapsed &&
+        rows.map((line) => {
+          const diff =
+            Math.round((line.postOpTotalHt - line.preOpTotalHt) * 100) / 100;
+          const isOverrun = diff > 0;
+          const ratio =
+            line.preOpTotalHt > 0 ? line.postOpTotalHt / line.preOpTotalHt : 0;
+          const isWarning90 = !isOverrun && diff < 0 && ratio >= 0.9;
+          const isExactSold = line.preOpTotalHt > 0 && diff === 0;
+
+          return (
+            <tr
+              key={line.id}
+              className={`border-b border-slate-100 transition-colors dark:border-slate-800/70 ${
+                isOverrun
+                  ? "bg-rose-50/40 hover:bg-rose-50/80 dark:bg-rose-950/20 dark:hover:bg-rose-950/35"
+                  : isWarning90
+                    ? "bg-amber-50/35 hover:bg-amber-50/70 dark:bg-amber-950/15 dark:hover:bg-amber-950/30"
+                    : "bg-white hover:bg-slate-50/70 dark:bg-[#111827] dark:hover:bg-slate-800/40"
+              }`}
+            >
+              <td className="px-3.5 py-3 text-[13px] font-medium text-slate-800 dark:text-slate-100">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span>{line.objet}</span>
+                  {isOverrun && (
+                    <span
+                      data-testid="budget-alert-badge"
+                      className="rounded-full bg-rose-100 px-2 py-0.5 font-mono text-[10px] font-bold text-rose-700 dark:bg-rose-500/20 dark:text-rose-300"
+                    >
+                      +{formatEur(diff)}
+                    </span>
+                  )}
+                  {isWarning90 && (
+                    <span className="rounded-full bg-amber-100 px-2 py-0.5 font-mono text-[10px] font-semibold text-amber-800 dark:bg-amber-500/20 dark:text-amber-300">
+                      {Math.round(ratio * 100)}%
+                    </span>
+                  )}
+                  {isExactSold && (
+                    <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300">
+                      Soldé 100%
+                    </span>
+                  )}
                 </div>
-              )}
-            </td>
-            <td className="px-2 py-2 text-slate-300">
-              {line.realisePar ?? "—"}
-            </td>
-            <td className="px-2 py-2 text-right font-mono text-slate-300">
-              {line.saleQty}
-            </td>
-            <td className="px-2 py-2 text-right font-mono text-slate-300">
-              {line.saleDays}
-            </td>
-            <td className="border-r border-[#232b3d] px-3 py-2 text-right font-mono font-semibold text-cyan-300">
-              {formatEur(line.saleTotalHt)}
-            </td>
-            <td className="px-2 py-2">
-              <span className="rounded bg-[#090b10] px-1.5 py-0.5 text-[10px] text-slate-300">
-                {line.expenseType}
-              </span>
-            </td>
-            <td className="px-2 py-2 text-right font-mono text-slate-300">
-              {formatEur(line.preOpUnitCost)}
-            </td>
-            <td className="border-r border-[#232b3d] px-3 py-2 text-right font-mono font-semibold text-amber-300">
-              {formatEur(line.preOpTotalHt)}
-            </td>
-            <td className="px-2 py-2 text-right font-mono text-slate-300">
-              {line.postOpQty}
-            </td>
-            <td className="px-2 py-2 text-right font-mono text-slate-300">
-              {formatEur(line.postOpUnitCost)}
-            </td>
-            <td className="px-3 py-2 text-right font-mono font-semibold text-rose-300">
-              {formatEur(line.postOpTotalHt)}
-            </td>
-            <td className="px-2 py-2 text-center">
-              <div className="flex items-center justify-center gap-1.5">
-                {alert && (
-                  <span
-                    data-testid="budget-alert-badge"
-                    title={alert.message}
-                    className={`rounded-full border px-2 py-0.5 font-mono text-[10px] font-bold ${
-                      alert.level === "CRITICAL"
-                        ? "border-red-500/60 bg-red-500/20 text-red-300"
-                        : "border-amber-500/60 bg-amber-500/20 text-amber-300"
-                    }`}
-                  >
-                    {alert.thresholdPct}%
-                  </span>
+                {line.invoiceNumbersNote && (
+                  <div className="mt-0.5 font-mono text-[10px] text-indigo-600 dark:text-indigo-400">
+                    {line.invoiceNumbersNote}
+                  </div>
                 )}
+              </td>
+
+              {detailedView && (
+                <td className="px-2 py-2.5 text-slate-500 dark:text-slate-400">
+                  {line.realisePar ?? "—"}
+                </td>
+              )}
+              {detailedView && (
+                <td className="px-2 py-2.5 text-right font-mono text-slate-600 dark:text-slate-300">
+                  {line.saleQty}
+                </td>
+              )}
+              {detailedView && (
+                <td className="px-2 py-2.5 text-right font-mono text-slate-600 dark:text-slate-300">
+                  {line.saleDays}
+                </td>
+              )}
+
+              {!detailedView && (
+                <td className="px-2 py-2.5">
+                  <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                    {line.expenseType}
+                  </span>
+                </td>
+              )}
+
+              <td className="px-3 py-2.5 text-right font-mono text-slate-600 dark:text-slate-300">
+                {inlineEdit?.lineId === line.id &&
+                inlineEdit.field === "saleTotalHt" ? (
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    autoFocus
+                    disabled={savingInline}
+                    value={inlineEdit.value}
+                    onChange={(e) => onChangeInline(e.target.value)}
+                    onBlur={() =>
+                      void onCommitInline(line, "saleTotalHt", inlineEdit.value)
+                    }
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        void onCommitInline(
+                          line,
+                          "saleTotalHt",
+                          inlineEdit.value
+                        );
+                      } else if (e.key === "Escape") {
+                        onCancelInline();
+                      }
+                    }}
+                    className="w-24 rounded-lg border border-indigo-500 bg-white px-2 py-0.5 text-right font-mono text-xs text-slate-900 focus:outline-none dark:bg-slate-900 dark:text-white"
+                  />
+                ) : (
+                  <button
+                    type="button"
+                    title="Cliquer pour modifier directement"
+                    onClick={() =>
+                      onStartInline(
+                        line.id,
+                        "saleTotalHt",
+                        String(line.saleTotalHt)
+                      )
+                    }
+                    className="rounded px-1.5 py-0.5 transition-colors hover:bg-indigo-50 hover:text-indigo-700 dark:hover:bg-indigo-500/15 dark:hover:text-indigo-300"
+                  >
+                    {formatEur(line.saleTotalHt)}
+                  </button>
+                )}
+              </td>
+
+              {detailedView && (
+                <td className="px-2 py-2.5">
+                  <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                    {line.expenseType}
+                  </span>
+                </td>
+              )}
+              {detailedView && (
+                <td className="px-2 py-2.5 text-right font-mono text-slate-500 dark:text-slate-400">
+                  {formatEur(line.preOpUnitCost)}
+                </td>
+              )}
+
+              <td className="px-3 py-2.5 text-right font-mono text-slate-700 dark:text-slate-200">
+                {inlineEdit?.lineId === line.id &&
+                inlineEdit.field === "preOpTotalHt" ? (
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    autoFocus
+                    disabled={savingInline}
+                    value={inlineEdit.value}
+                    onChange={(e) => onChangeInline(e.target.value)}
+                    onBlur={() =>
+                      void onCommitInline(
+                        line,
+                        "preOpTotalHt",
+                        inlineEdit.value
+                      )
+                    }
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        void onCommitInline(
+                          line,
+                          "preOpTotalHt",
+                          inlineEdit.value
+                        );
+                      } else if (e.key === "Escape") {
+                        onCancelInline();
+                      }
+                    }}
+                    className="w-24 rounded-lg border border-indigo-500 bg-white px-2 py-0.5 text-right font-mono text-xs text-slate-900 focus:outline-none dark:bg-slate-900 dark:text-white"
+                  />
+                ) : (
+                  <button
+                    type="button"
+                    title="Cliquer pour modifier directement"
+                    onClick={() =>
+                      onStartInline(
+                        line.id,
+                        "preOpTotalHt",
+                        String(line.preOpTotalHt)
+                      )
+                    }
+                    className="rounded px-1.5 py-0.5 transition-colors hover:bg-indigo-50 hover:text-indigo-700 dark:hover:bg-indigo-500/15 dark:hover:text-indigo-300"
+                  >
+                    {formatEur(line.preOpTotalHt)}
+                  </button>
+                )}
+              </td>
+
+              {detailedView && (
+                <td className="px-2 py-2.5 text-right font-mono text-slate-500 dark:text-slate-400">
+                  {line.postOpQty}
+                </td>
+              )}
+              {detailedView && (
+                <td className="px-2 py-2.5 text-right font-mono text-slate-500 dark:text-slate-400">
+                  {formatEur(line.postOpUnitCost)}
+                </td>
+              )}
+
+              <td
+                className={`px-3 py-2.5 text-right font-mono font-semibold ${
+                  isOverrun
+                    ? "text-rose-600 dark:text-rose-400"
+                    : "text-slate-900 dark:text-white"
+                }`}
+              >
+                {formatEur(line.postOpTotalHt)}
+              </td>
+
+              {!detailedView && (
+                <td
+                  className={`px-3 py-2.5 text-right font-mono font-semibold ${
+                    isOverrun
+                      ? "text-rose-600 dark:text-rose-400"
+                      : diff < 0
+                        ? "text-emerald-600 dark:text-emerald-400"
+                        : "text-slate-400"
+                  }`}
+                >
+                  {isOverrun ? `+${formatEur(diff)}` : formatEur(diff)}
+                </td>
+              )}
+
+              <td className="px-2.5 py-2.5 text-center">
                 <button
                   type="button"
                   onClick={() => onEdit(line)}
-                  className="rounded border border-[#232b3d] bg-[#090b10] px-2 py-0.5 text-[11px] text-slate-300 hover:border-cyan-500/50 hover:text-white"
+                  className="rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-medium text-slate-600 hover:bg-slate-50 hover:text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:text-white dark:hover:bg-slate-800/70"
                 >
-                  Éditer
+                  Modifier
                 </button>
-              </div>
-            </td>
-          </tr>
-        );
-      })}
+              </td>
+            </tr>
+          );
+        })}
     </>
   );
 }

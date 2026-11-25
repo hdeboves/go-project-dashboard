@@ -3,10 +3,13 @@
 import {
   AlertTriangle,
   CheckCircle2,
-  FileCheck2,
+  ExternalLink,
+  Eye,
+  EyeOff,
   Mail,
   RefreshCw,
   ShieldAlert,
+  Trash2,
   Upload,
 } from "lucide-react";
 import { useState } from "react";
@@ -15,6 +18,7 @@ import {
   type InvoiceDto,
   formatEur,
 } from "@/components/budget/types";
+import { showToast } from "@/lib/toast";
 
 interface InvoicePipelinePanelProps {
   projectId: string;
@@ -43,14 +47,37 @@ export function InvoicePipelinePanel({
   onCpConflictDetected,
 }: InvoicePipelinePanelProps) {
   const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<string | null>(null);
   const [scanningGmail, setScanningGmail] = useState(false);
   const [validatingId, setValidatingId] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [statusFilter, setStatusFilter] = useState<
+    "PENDING" | "BLOCKED" | "VALIDATED" | "ALL"
+  >("PENDING");
   const [dragOver, setDragOver] = useState(false);
+  const [openPdfIds, setOpenPdfIds] = useState<Record<string, boolean>>({});
   const [feedback, setFeedback] = useState<{
     type: "success" | "error";
     text: string;
   } | null>(null);
   const [editsById, setEditsById] = useState<Record<string, DraftEdits>>({});
+
+  const firstPendingId =
+    invoices.find((i) => i.status === "PENDING_VALIDATION" && !i.cpConflict)
+      ?.id ?? null;
+
+  function isPdfOpen(inv: InvoiceDto): boolean {
+    if (inv.id in openPdfIds) return openPdfIds[inv.id];
+    // Pennylane UX: auto-open ONLY the first pending invoice (prevents loading 20 PDFs at once)
+    return inv.id === firstPendingId;
+  }
+
+  function togglePdf(inv: InvoiceDto) {
+    setOpenPdfIds((prev) => ({
+      ...prev,
+      [inv.id]: !isPdfOpen(inv),
+    }));
+  }
 
   function getEdits(inv: InvoiceDto): DraftEdits {
     const existing = editsById[inv.id];
@@ -61,7 +88,7 @@ export function InvoicePipelinePanel({
       invoiceDate: inv.invoiceDate ?? new Date().toISOString().slice(0, 10),
       amountHt: String(inv.amountHt ?? 0),
       prestationLabel: inv.prestationLabel ?? "",
-      budgetLineId: inv.budgetLineId ?? budgetLines[0]?.id ?? "",
+      budgetLineId: inv.budgetLineId ?? "",
     };
   }
 
@@ -69,60 +96,95 @@ export function InvoicePipelinePanel({
     const cur = getEdits(inv);
     setEditsById((prev) => ({
       ...prev,
-      [inv.id]: {
-        ...cur,
-        [field]: value,
-      },
+      [inv.id]: { ...cur, [field]: value },
     }));
   }
 
-  async function uploadPdfFile(file: File) {
+  async function uploadPdfFiles(fileList: FileList | File[]) {
+    const files = Array.from(fileList).filter((f) =>
+      f.name.toLowerCase().endsWith(".pdf")
+    );
+    if (files.length === 0) return;
     setUploading(true);
     setFeedback(null);
+    let okCount = 0;
+    let conflictCount = 0;
     try {
-      const formData = new FormData();
-      formData.append("file", file);
-      const res = await fetch(`/api/projects/${projectId}/invoices`, {
-        method: "POST",
-        body: formData,
-      });
-      const json = (await res.json()) as {
-        error?: string;
-        code?: string;
-        detectedCps?: string[];
-        isDuplicate?: boolean;
-        invoice?: InvoiceDto;
-      };
+      for (let i = 0; i < files.length; i += 1) {
+        const file = files[i];
+        if (files.length > 1) {
+          setUploadProgress(`Lecture ${i + 1}/${files.length} : ${file.name}`);
+        }
+        const formData = new FormData();
+        formData.append("file", file);
+        const res = await fetch(`/api/projects/${projectId}/invoices`, {
+          method: "POST",
+          body: formData,
+        });
+        const json = (await res.json()) as {
+          error?: string;
+          code?: string;
+          detectedCps?: string[];
+          isDuplicate?: boolean;
+          invoice?: InvoiceDto;
+        };
 
-      if (res.status === 409 && json.code === "CP_CONFLICT") {
-        onCpConflictDetected(
-          json.error ?? "Conflit de Code Projet détecté.",
-          json.detectedCps
-        );
+        if (res.status === 409 && json.code === "CP_CONFLICT") {
+          conflictCount += 1;
+          onCpConflictDetected(
+            json.error ?? "Cette facture appartient à un autre projet.",
+            json.detectedCps
+          );
+          continue;
+        }
+        if (!res.ok) {
+          onError(res.status, json);
+          setFeedback({
+            type: "error",
+            text: json.error ?? `Erreur sur ${file.name}.`,
+          });
+          continue;
+        }
+        okCount += 1;
+      }
+
+      if (okCount > 0 || conflictCount > 0) {
+        const msg =
+          files.length === 1 && okCount === 1
+            ? "Facture PDF lue ! Vérifiez les champs puis cliquez sur Valider."
+            : `${okCount} facture(s) lue(s)${conflictCount > 0 ? ` · ${conflictCount} bloquée(s) (autre CP)` : ""}.`;
+        setFeedback({
+          type: conflictCount > 0 && okCount === 0 ? "error" : "success",
+          text: msg,
+        });
+        showToast(msg, conflictCount > 0 && okCount === 0 ? "error" : "success");
         await onRefresh();
         window.dispatchEvent(new CustomEvent("go:shell-refresh"));
-        return;
       }
+    } finally {
+      setUploading(false);
+      setUploadProgress(null);
+    }
+  }
 
+  async function handleDeleteInvoice(inv: InvoiceDto) {
+    setDeletingId(inv.id);
+    setFeedback(null);
+    try {
+      const res = await fetch(
+        `/api/projects/${projectId}/invoices/${inv.id}`,
+        { method: "DELETE" }
+      );
+      const json = (await res.json()) as { error?: string };
       if (!res.ok) {
-        onError(res.status, json);
-        setFeedback({
-          type: "error",
-          text: json.error ?? "Échec de l'ingestion de la facture PDF.",
-        });
+        showToast(json.error ?? "Impossible de supprimer la facture.", "error");
         return;
       }
-
-      setFeedback({
-        type: "success",
-        text: json.isDuplicate
-          ? `Facture "${file.name}" ingérée (Doublon N° Facture signalé).`
-          : `Facture "${file.name}" extraite par Gemini et prête pour validation.`,
-      });
+      showToast("Facture retirée de la file.");
       await onRefresh();
       window.dispatchEvent(new CustomEvent("go:shell-refresh"));
     } finally {
-      setUploading(false);
+      setDeletingId(null);
     }
   }
 
@@ -140,28 +202,26 @@ export function InvoicePipelinePanel({
         code?: string;
         ingestedCount?: number;
         conflictCount?: number;
-        skippedDuplicates?: number;
       };
 
       if (!res.ok) {
         onError(res.status, json);
         setFeedback({
           type: "error",
-          text: json.error ?? "Échec du scan Gmail.",
+          text: json.error ?? "Impossible de rechercher dans Gmail.",
         });
         return;
       }
 
       if ((json.conflictCount ?? 0) > 0) {
         onCpConflictDetected(
-          `${json.conflictCount} facture(s) bloquée(s) pour conflit de Code Projet lors du scan Gmail.`
+          `${json.conflictCount} facture(s) bloquée(s) car elles concernent un autre projet.`
         );
       }
 
-      setFeedback({
-        type: "success",
-        text: `Scan Gmail terminé : ${json.ingestedCount ?? 0} ingérée(s), ${json.conflictCount ?? 0} conflit(s) bloqué(s), ${json.skippedDuplicates ?? 0} ignorée(s).`,
-      });
+      const msg = `Recherche Gmail terminée : ${json.ingestedCount ?? 0} nouvelle(s) facture(s).`;
+      setFeedback({ type: "success", text: msg });
+      showToast(msg);
       await onRefresh();
       window.dispatchEvent(new CustomEvent("go:shell-refresh"));
     } finally {
@@ -193,27 +253,25 @@ export function InvoicePipelinePanel({
       const json = (await res.json()) as {
         error?: string;
         code?: string;
-        invoice?: InvoiceDto;
-        pennylaneDraft?: { draftId?: string; subject?: string };
       };
 
       if (!res.ok) {
         if (res.status === 409 && json.code === "CP_CONFLICT") {
-          onCpConflictDetected(json.error ?? "Conflit de Code Projet détecté.");
+          onCpConflictDetected(json.error ?? "Autre Code Projet détecté.");
         } else {
           onError(res.status, json);
         }
         setFeedback({
           type: "error",
-          text: json.error ?? "Échec de la validation de facture.",
+          text: json.error ?? "Impossible de valider la facture.",
         });
         return;
       }
 
-      setFeedback({
-        type: "success",
-        text: `Facture validée : ${json.invoice?.renamedFilename ?? "PDF"} archivée dans 001.3 Factures, cumulée dans le Sheet et brouillon Pennylane créé.`,
-      });
+      const msg =
+        "Facture validée : classée Drive, ajoutée au budget et brouillon Pennylane prêt.";
+      setFeedback({ type: "success", text: msg });
+      showToast(msg);
       await onRefresh();
       window.dispatchEvent(new CustomEvent("go:shell-refresh"));
     } finally {
@@ -222,99 +280,181 @@ export function InvoicePipelinePanel({
   }
 
   return (
-    <section className="rounded-xl border border-[#232b3d] bg-[#11151f] p-5">
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-2">
-          <FileCheck2 className="h-5 w-5 text-[#ff2e58]" />
-          <h2 className="text-base font-semibold text-white">
-            Pipeline Factures PDF (Gmail + Dépôt Manuel + Pennylane)
-          </h2>
+    <section className="space-y-5">
+      {/* Pennylane-style Dropzone Card */}
+      <div className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-[0_1px_2px_rgba(15,23,42,0.04)] dark:border-slate-800 dark:bg-[#111827]">
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="text-base font-semibold text-slate-900 dark:text-white">
+              Ajouter une facture prestataire
+            </h2>
+            <p className="text-xs text-slate-500 dark:text-slate-400">
+              Déposez un PDF ou importez depuis Gmail — contrôlez la facture
+              côte à côte avant validation Pennylane.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => void handleScanGmail()}
+            disabled={scanningGmail}
+            className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+          >
+            {scanningGmail ? (
+              <RefreshCw className="h-4 w-4 animate-spin text-indigo-600 dark:text-indigo-400" />
+            ) : (
+              <Mail className="h-4 w-4 text-indigo-600 dark:text-indigo-400" />
+            )}
+            Rechercher dans Gmail
+          </button>
         </div>
-        <button
-          type="button"
-          onClick={() => void handleScanGmail()}
-          disabled={scanningGmail}
-          className="inline-flex items-center gap-2 rounded-lg border border-cyan-500/40 bg-cyan-500/10 px-3.5 py-2 text-xs font-semibold text-cyan-300 transition-colors hover:bg-cyan-500/20 disabled:opacity-50"
-        >
-          {scanningGmail ? (
-            <RefreshCw className="h-4 w-4 animate-spin" />
-          ) : (
-            <Mail className="h-4 w-4" />
-          )}
-          Scanner Gmail
-        </button>
-      </div>
 
-      {/* PDF Dropzone */}
-      <label
-        htmlFor="invoice-pdf-upload"
-        onDragOver={(e) => {
-          e.preventDefault();
-          setDragOver(true);
-        }}
-        onDragLeave={() => setDragOver(false)}
-        onDrop={(e) => {
-          e.preventDefault();
-          setDragOver(false);
-          const dropped = e.dataTransfer.files?.[0];
-          if (dropped) void uploadPdfFile(dropped);
-        }}
-        className={`mb-5 flex cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed px-4 py-6 text-center transition-colors ${
-          dragOver
-            ? "border-[#ff2e58] bg-[#e11d48]/10"
-            : "border-[#232b3d] bg-[#171d2b]/60 hover:border-cyan-500/60"
-        }`}
-      >
-        <Upload className="mb-2 h-6 w-6 text-cyan-400" />
-        <span className="text-sm font-medium text-white">
-          {uploading
-            ? "Extraction Gemini en cours..."
-            : "Glisser-déposer une facture PDF ici ou cliquer pour sélectionner"}
-        </span>
-        <span className="mt-1 text-xs text-slate-400">
-          Vérification Code Projet automatique + proposition de ligne budgétaire
-        </span>
-        <input
-          id="invoice-pdf-upload"
-          type="file"
-          accept=".pdf,application/pdf"
-          className="sr-only"
-          disabled={uploading}
-          onChange={(e) => {
-            const file = e.target.files?.[0];
-            if (file) {
-              void uploadPdfFile(file);
-              e.target.value = "";
+        <label
+          htmlFor="invoice-pdf-upload"
+          onDragOver={(e) => {
+            e.preventDefault();
+            setDragOver(true);
+          }}
+          onDragLeave={() => setDragOver(false)}
+          onDrop={(e) => {
+            e.preventDefault();
+            setDragOver(false);
+            if (e.dataTransfer.files?.length) {
+              void uploadPdfFiles(e.dataTransfer.files);
             }
           }}
-        />
-      </label>
-
-      {feedback && (
-        <div
-          role="status"
-          className={`mb-4 rounded-lg border px-4 py-2.5 text-xs ${
-            feedback.type === "success"
-              ? "border-emerald-500/40 bg-emerald-950/40 text-emerald-200"
-              : "border-red-500/40 bg-red-950/40 text-red-200"
+          className={`flex cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed px-6 py-8 text-center transition-colors ${
+            dragOver
+              ? "border-rose-500 bg-rose-50/50 dark:bg-rose-500/15"
+              : "border-slate-200 bg-slate-50/60 hover:border-indigo-400 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800/40 dark:hover:bg-slate-800/70"
           }`}
         >
-          {feedback.text}
-        </div>
-      )}
+          <div className="mb-2.5 flex h-10 w-10 items-center justify-center rounded-xl bg-white text-rose-600 shadow-2xs ring-1 ring-slate-200/80 dark:bg-slate-900 dark:text-rose-400 dark:ring-slate-700">
+            <Upload className="h-5 w-5" />
+          </div>
+          <span className="text-sm font-semibold text-slate-800 dark:text-slate-100">
+            {uploading
+              ? (uploadProgress ?? "Lecture des PDF en cours...")
+              : "Glissez une ou plusieurs factures PDF ici ou cliquez pour choisir"}
+          </span>
+          <span className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+            Multi-upload PDF · Vérification côte à côte & brouillon Pennylane
+          </span>
+          <input
+            id="invoice-pdf-upload"
+            type="file"
+            multiple
+            accept=".pdf,application/pdf"
+            className="sr-only"
+            disabled={uploading}
+            onChange={(e) => {
+              if (e.target.files?.length) {
+                void uploadPdfFiles(e.target.files);
+                e.target.value = "";
+              }
+            }}
+          />
+        </label>
 
-      {/* Invoice Cards */}
+        {feedback && (
+          <div
+            role="status"
+            className={`mt-4 rounded-xl border px-4 py-3 text-xs ${
+              feedback.type === "success"
+                ? "border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-500/30 dark:bg-emerald-500/15 dark:text-emerald-300"
+                : "border-rose-200 bg-rose-50 text-rose-800 dark:border-rose-500/30 dark:bg-rose-500/15 dark:text-rose-200"
+            }`}
+          >
+            {feedback.text}
+          </div>
+        )}
+      </div>
+
+      {/* Queue Filter Tabs & Pending Totals */}
+      {invoices.length > 0 && (() => {
+        const pendingList = invoices.filter(
+          (i) => i.status === "PENDING_VALIDATION" && !i.cpConflict
+        );
+        const blockedList = invoices.filter(
+          (i) => i.cpConflict || i.status === "CONFLICT_BLOCKED"
+        );
+        const validatedList = invoices.filter((i) => i.status === "VALIDATED");
+        const pendingTotalHt = pendingList.reduce(
+          (acc, i) => acc + (i.amountHt || 0),
+          0
+        );
+        const effectiveFilter =
+          statusFilter === "PENDING" && pendingList.length === 0
+            ? blockedList.length > 0
+              ? "BLOCKED"
+              : validatedList.length > 0
+                ? "ALL"
+                : "PENDING"
+            : statusFilter;
+
+        return (
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-slate-200/80 bg-white px-4 py-2.5 dark:border-slate-800 dark:bg-[#111827]">
+            <div className="flex flex-wrap items-center gap-1.5">
+              {(
+                [
+                  { id: "PENDING", label: `À valider (${pendingList.length})` },
+                  { id: "BLOCKED", label: `Bloquées (${blockedList.length})` },
+                  { id: "VALIDATED", label: `Validées (${validatedList.length})` },
+                  { id: "ALL", label: `Toutes (${invoices.length})` },
+                ] as const
+              ).map((tab) => (
+                <button
+                  key={tab.id}
+                  type="button"
+                  onClick={() => setStatusFilter(tab.id)}
+                  className={`rounded-lg px-2.5 py-1 text-xs font-semibold transition-colors ${
+                    effectiveFilter === tab.id
+                      ? "bg-indigo-50 text-indigo-700 dark:bg-indigo-500/20 dark:text-indigo-300"
+                      : "text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800"
+                  }`}
+                >
+                  {tab.label}
+                </button>
+              ))}
+            </div>
+            {pendingList.length > 0 && (
+              <span className="font-mono text-xs font-semibold text-slate-700 dark:text-slate-200">
+                En attente : {formatEur(pendingTotalHt)} HT
+              </span>
+            )}
+          </div>
+        );
+      })()}
+
+      {/* Invoice Cards with Side-by-Side Pennylane PDF Preview */}
       {invoices.length === 0 ? (
-        <p className="py-4 text-center text-sm text-slate-400">
-          Aucune facture ingérée sur ce projet.
-        </p>
+        <div className="rounded-2xl border border-slate-200/80 bg-white p-10 text-center text-sm text-slate-500 dark:border-slate-800 dark:bg-[#111827] dark:text-slate-400">
+          Aucune facture enregistrée pour ce projet.
+        </div>
       ) : (
         <div className="space-y-4">
-          {invoices.map((inv) => {
+          {invoices
+            .filter((inv) => {
+              const hasPendingOrBlocked = invoices.some(
+                (i) => i.status !== "VALIDATED"
+              );
+              const active =
+                statusFilter === "PENDING" && !hasPendingOrBlocked
+                  ? "ALL"
+                  : statusFilter;
+              if (active === "ALL") return true;
+              const blocked =
+                inv.cpConflict || inv.status === "CONFLICT_BLOCKED";
+              if (active === "BLOCKED") return blocked;
+              if (active === "VALIDATED") return inv.status === "VALIDATED";
+              return inv.status === "PENDING_VALIDATION" && !blocked;
+            })
+            .map((inv) => {
             const edits = getEdits(inv);
             const isBlocked =
               inv.cpConflict || inv.status === "CONFLICT_BLOCKED";
             const isValidated = inv.status === "VALIDATED";
+            const showPdf = isPdfOpen(inv);
+            const previewUrl = `/api/projects/${projectId}/invoices/${inv.id}/preview`;
 
             let rawWarnings: string[] = [];
             let isDuplicate = false;
@@ -333,249 +473,363 @@ export function InvoicePipelinePanel({
               <div
                 key={inv.id}
                 data-testid={`invoice-card-${inv.id}`}
-                className={`rounded-xl border p-4 ${
+                className={`rounded-2xl border bg-white p-5 shadow-[0_1px_2px_rgba(15,23,42,0.04)] dark:bg-[#111827] ${
                   isBlocked
-                    ? "border-red-500/70 bg-red-950/30"
+                    ? "border-rose-300 bg-rose-50/30 dark:border-rose-500/40 dark:bg-rose-950/20"
                     : isValidated
-                      ? "border-emerald-500/40 bg-[#171d2b]/70"
-                      : "border-[#232b3d] bg-[#171d2b]"
+                      ? "border-slate-200/80 dark:border-slate-800"
+                      : "border-indigo-200 dark:border-indigo-500/40"
                 }`}
               >
                 <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                   <div className="flex flex-wrap items-center gap-2">
-                    <span className="font-mono text-xs font-semibold text-white">
+                    <span className="text-sm font-semibold text-slate-900 dark:text-white">
                       {inv.renamedFilename ?? inv.originalFilename}
                     </span>
                     <span
-                      className={`rounded-full px-2.5 py-0.5 font-mono text-[11px] font-bold ${
+                      className={`rounded-full px-2.5 py-0.5 text-[11px] font-semibold ${
                         isBlocked
-                          ? "bg-red-500/20 text-red-300"
+                          ? "bg-rose-100 text-rose-700 dark:bg-rose-500/20 dark:text-rose-300"
                           : isValidated
-                            ? "bg-emerald-500/20 text-emerald-300"
-                            : "bg-amber-500/20 text-amber-300"
+                            ? "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-600/20 dark:bg-emerald-500/15 dark:text-emerald-300"
+                            : "bg-indigo-50 text-indigo-700 ring-1 ring-indigo-600/20 dark:bg-indigo-500/15 dark:text-indigo-300"
                       }`}
                     >
                       {isBlocked
-                        ? "CONFLICT_BLOCKED"
+                        ? "Autre projet (bloquée)"
                         : isValidated
-                          ? "VALIDATED · Validée"
-                          : "PENDING_VALIDATION"}
+                          ? "Validée"
+                          : "À valider"}
                     </span>
                     {isDuplicate && (
-                      <span className="inline-flex items-center gap-1 rounded-full border border-amber-500/50 bg-amber-500/15 px-2 py-0.5 text-[11px] font-semibold text-amber-300">
+                      <span className="inline-flex items-center gap-1 rounded-full bg-rose-100 px-2 py-0.5 text-[11px] font-semibold text-rose-700 dark:bg-rose-500/20 dark:text-rose-300">
                         <AlertTriangle className="h-3 w-3" />
-                        Doublon N° Facture
-                      </span>
-                    )}
-                    {inv.detectedCodeProjet && (
-                      <span className="rounded bg-[#090b10] px-2 py-0.5 font-mono text-[11px] text-slate-300">
-                        CP détecté : {inv.detectedCodeProjet}
+                        Doublon possible
                       </span>
                     )}
                   </div>
 
-                  {isValidated && (
-                    <div className="flex flex-wrap items-center gap-2 font-mono text-[11px] text-emerald-300">
-                      <span className="inline-flex items-center gap-1">
-                        <CheckCircle2 className="h-3.5 w-3.5" />
-                        Drive 001.3
-                      </span>
-                      <span className="inline-flex items-center gap-1">
-                        <CheckCircle2 className="h-3.5 w-3.5" />
-                        Sheet + Note
-                      </span>
-                      <span className="inline-flex items-center gap-1">
-                        <CheckCircle2 className="h-3.5 w-3.5" />
-                        Brouillon Pennylane
-                      </span>
-                    </div>
-                  )}
+                  <div className="flex flex-wrap items-center gap-2">
+                    {isValidated && (
+                      <>
+                        {inv.driveFileId && (
+                          <a
+                            href={`https://drive.google.com/file/d/${inv.driveFileId}/view`}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="inline-flex items-center gap-1 rounded-lg bg-emerald-50 px-2.5 py-1 text-[11px] font-semibold text-emerald-700 hover:bg-emerald-100 dark:bg-emerald-500/15 dark:text-emerald-300"
+                          >
+                            Drive
+                            <ExternalLink className="h-3 w-3" />
+                          </a>
+                        )}
+                        {inv.pennylaneDraftId && (
+                          <a
+                            href="https://mail.google.com/mail/u/0/#drafts"
+                            target="_blank"
+                            rel="noreferrer"
+                            className="inline-flex items-center gap-1 rounded-lg bg-indigo-50 px-2.5 py-1 text-[11px] font-semibold text-indigo-700 hover:bg-indigo-100 dark:bg-indigo-500/15 dark:text-indigo-300"
+                          >
+                            Brouillon Pennylane
+                            <ExternalLink className="h-3 w-3" />
+                          </a>
+                        )}
+                        {!inv.driveFileId && !inv.pennylaneDraftId && (
+                          <span className="inline-flex items-center gap-1 text-xs font-medium text-emerald-700 dark:text-emerald-400">
+                            <CheckCircle2 className="h-3.5 w-3.5" />
+                            Drive & Pennylane OK
+                          </span>
+                        )}
+                      </>
+                    )}
+                    {!isValidated && (
+                      <button
+                        type="button"
+                        disabled={deletingId === inv.id}
+                        onClick={() => void handleDeleteInvoice(inv)}
+                        title="Rejeter / retirer cette facture"
+                        className="inline-flex items-center gap-1 rounded-xl border border-slate-200 bg-white px-2.5 py-1 text-xs font-medium text-slate-500 hover:border-rose-300 hover:bg-rose-50 hover:text-rose-700 disabled:opacity-40 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:text-rose-300"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                        Rejeter
+                      </button>
+                    )}
+                    {!isBlocked && (
+                      <button
+                        type="button"
+                        onClick={() => togglePdf(inv)}
+                        className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-2.5 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50 hover:text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:text-white"
+                      >
+                        {showPdf ? (
+                          <EyeOff className="h-3.5 w-3.5" />
+                        ) : (
+                          <Eye className="h-3.5 w-3.5 text-indigo-600 dark:text-indigo-400" />
+                        )}
+                        {showPdf ? "Masquer le PDF" : "Voir le PDF"}
+                      </button>
+                    )}
+                  </div>
                 </div>
 
                 {isBlocked && (
-                  <div className="mb-3 flex items-center gap-2 rounded-lg border border-red-500/50 bg-red-950/60 px-3 py-2 text-xs text-red-200">
-                    <ShieldAlert className="h-4 w-4 shrink-0 text-red-400" />
+                  <div className="mb-3 flex items-center gap-2 rounded-xl border border-rose-200 bg-rose-50 px-3.5 py-2.5 text-xs text-rose-800 dark:border-rose-500/30 dark:bg-rose-500/15 dark:text-rose-200">
+                    <ShieldAlert className="h-4 w-4 shrink-0 text-rose-600 dark:text-rose-400" />
                     <span>
-                      Injection bloquée : Code Projet détecté (
-                      {inv.detectedCodeProjet ?? "différent"}) incompatible avec
-                      le projet actif.
+                      Cette facture mentionne un autre Code Projet (
+                      {inv.detectedCodeProjet ?? "différent"}) et a été bloquée
+                      par sécurité.
                     </span>
                   </div>
                 )}
 
                 {rawWarnings.length > 0 && (
-                  <div className="mb-3 space-y-1">
+                  <div className="mb-3 space-y-1 text-xs text-rose-700 dark:text-rose-300">
                     {rawWarnings.map((w, i) => (
-                      <p
-                        key={i}
-                        className="text-xs text-amber-300"
-                      >
-                        ⚠ {w}
-                      </p>
+                      <p key={i}>• {w}</p>
                     ))}
                   </div>
                 )}
 
-                {isValidated ? (
-                  <div className="grid gap-2 text-xs text-slate-300 sm:grid-cols-4">
-                    <div>
-                      <span className="text-slate-400">Prestataire : </span>
-                      <span className="font-medium text-white">
-                        {inv.vendorName}
-                      </span>
-                    </div>
-                    <div>
-                      <span className="text-slate-400">N° Facture : </span>
-                      <span className="font-mono text-white">
-                        {inv.invoiceNumber}
-                      </span>
-                    </div>
-                    <div>
-                      <span className="text-slate-400">Montant HT : </span>
-                      <span className="font-mono font-semibold text-rose-300">
-                        {formatEur(inv.amountHt)}
-                      </span>
-                    </div>
-                    <div>
-                      <span className="text-slate-400">Prestation : </span>
-                      <span className="text-white">{inv.prestationLabel}</span>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                    <div>
-                      <label
-                        htmlFor={`inv-vendor-${inv.id}`}
-                        className="mb-1 block text-xs text-slate-300"
-                      >
-                        Prestataire
-                      </label>
-                      <input
-                        id={`inv-vendor-${inv.id}`}
-                        type="text"
-                        value={edits.vendorName}
-                        disabled={isBlocked}
-                        onChange={(e) =>
-                          updateEdit(inv, "vendorName", e.target.value)
-                        }
-                        className="w-full rounded-md border border-[#232b3d] bg-[#090b10] px-2.5 py-1.5 text-xs text-white focus:border-cyan-500 focus:outline-none disabled:opacity-50"
-                      />
-                    </div>
-                    <div>
-                      <label
-                        htmlFor={`inv-num-${inv.id}`}
-                        className="mb-1 block text-xs text-slate-300"
-                      >
-                        N° Facture
-                      </label>
-                      <input
-                        id={`inv-num-${inv.id}`}
-                        type="text"
-                        value={edits.invoiceNumber}
-                        disabled={isBlocked}
-                        onChange={(e) =>
-                          updateEdit(inv, "invoiceNumber", e.target.value)
-                        }
-                        className="w-full rounded-md border border-[#232b3d] bg-[#090b10] px-2.5 py-1.5 font-mono text-xs text-white focus:border-cyan-500 focus:outline-none disabled:opacity-50"
-                      />
-                    </div>
-                    <div>
-                      <label
-                        htmlFor={`inv-date-${inv.id}`}
-                        className="mb-1 block text-xs text-slate-300"
-                      >
-                        Date
-                      </label>
-                      <input
-                        id={`inv-date-${inv.id}`}
-                        type="text"
-                        value={edits.invoiceDate}
-                        disabled={isBlocked}
-                        onChange={(e) =>
-                          updateEdit(inv, "invoiceDate", e.target.value)
-                        }
-                        className="w-full rounded-md border border-[#232b3d] bg-[#090b10] px-2.5 py-1.5 font-mono text-xs text-white focus:border-cyan-500 focus:outline-none disabled:opacity-50"
-                      />
-                    </div>
-                    <div>
-                      <label
-                        htmlFor={`inv-ht-${inv.id}`}
-                        className="mb-1 block text-xs text-slate-300"
-                      >
-                        Montant HT
-                      </label>
-                      <input
-                        id={`inv-ht-${inv.id}`}
-                        type="number"
-                        step="0.01"
-                        min="0"
-                        value={edits.amountHt}
-                        disabled={isBlocked}
-                        onChange={(e) =>
-                          updateEdit(inv, "amountHt", e.target.value)
-                        }
-                        className="w-full rounded-md border border-[#232b3d] bg-[#090b10] px-2.5 py-1.5 font-mono text-xs text-white focus:border-cyan-500 focus:outline-none disabled:opacity-50"
-                      />
-                    </div>
-                    <div>
-                      <label
-                        htmlFor={`inv-label-${inv.id}`}
-                        className="mb-1 block text-xs text-slate-300"
-                      >
-                        Résumé prestation
-                      </label>
-                      <input
-                        id={`inv-label-${inv.id}`}
-                        type="text"
-                        value={edits.prestationLabel}
-                        disabled={isBlocked}
-                        onChange={(e) =>
-                          updateEdit(inv, "prestationLabel", e.target.value)
-                        }
-                        className="w-full rounded-md border border-[#232b3d] bg-[#090b10] px-2.5 py-1.5 text-xs text-white focus:border-cyan-500 focus:outline-none disabled:opacity-50"
-                      />
-                    </div>
-                    <div>
-                      <label
-                        htmlFor={`inv-line-${inv.id}`}
-                        className="mb-1 block text-xs text-slate-300"
-                      >
-                        Ligne budgétaire
-                      </label>
-                      <select
-                        id={`inv-line-${inv.id}`}
-                        value={edits.budgetLineId}
-                        disabled={isBlocked}
-                        onChange={(e) =>
-                          updateEdit(inv, "budgetLineId", e.target.value)
-                        }
-                        className="w-full rounded-md border border-[#232b3d] bg-[#090b10] px-2.5 py-1.5 text-xs text-white focus:border-cyan-500 focus:outline-none disabled:opacity-50"
-                      >
-                        <option value="">— Sélectionner un poste —</option>
-                        {budgetLines.map((line) => (
-                          <option key={line.id} value={line.id}>
-                            {line.category} — {line.objet} (Pré-op{" "}
-                            {formatEur(line.preOpTotalHt)})
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                  </div>
-                )}
-
-                {!isValidated && (
-                  <div className="mt-3 flex justify-end">
-                    <button
-                      type="button"
-                      disabled={isBlocked || validatingId === inv.id}
-                      onClick={() => void handleValidate(inv)}
-                      className="inline-flex items-center gap-1.5 rounded-lg bg-[#e11d48] px-4 py-2 text-xs font-semibold text-white transition-colors hover:bg-[#ff2e58] disabled:cursor-not-allowed disabled:opacity-40"
+                {/* Pennylane Split View: PDF left + Fields right */}
+                <div
+                  className={
+                    showPdf ? "grid gap-5 lg:grid-cols-12" : "space-y-3"
+                  }
+                >
+                  {showPdf && (
+                    <div
+                      data-testid={`invoice-pdf-preview-${inv.id}`}
+                      className="flex flex-col overflow-hidden rounded-xl border border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-900 lg:col-span-5"
                     >
-                      <CheckCircle2 className="h-4 w-4" />
-                      {validatingId === inv.id ? "Validation..." : "Valider"}
-                    </button>
+                      <div className="flex items-center justify-between border-b border-slate-200 px-3 py-2 text-[11px] font-medium text-slate-600 dark:border-slate-800 dark:text-slate-400">
+                        <span>Aperçu PDF original</span>
+                        <a
+                          href={previewUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="inline-flex items-center gap-1 font-semibold text-indigo-600 hover:underline dark:text-indigo-400"
+                        >
+                          Plein écran
+                          <ExternalLink className="h-3 w-3" />
+                        </a>
+                      </div>
+                      <iframe
+                        src={previewUrl}
+                        title={`PDF ${inv.originalFilename}`}
+                        className="h-72 w-full bg-white lg:h-80"
+                      />
+                    </div>
+                  )}
+
+                  <div className={showPdf ? "lg:col-span-7" : ""}>
+                    {isValidated ? (
+                      <div className="grid gap-3 rounded-xl bg-slate-50 px-4 py-3 text-xs text-slate-600 dark:bg-slate-800/60 dark:text-slate-300 sm:grid-cols-2">
+                        <div>
+                          <span className="block text-[11px] text-slate-400">
+                            Prestataire
+                          </span>
+                          <span className="font-semibold text-slate-900 dark:text-white">
+                            {inv.vendorName}
+                          </span>
+                        </div>
+                        <div>
+                          <span className="block text-[11px] text-slate-400">
+                            N° Facture
+                          </span>
+                          <span className="font-mono font-medium text-slate-800 dark:text-slate-200">
+                            {inv.invoiceNumber}
+                          </span>
+                        </div>
+                        <div>
+                          <span className="block text-[11px] text-slate-400">
+                            Montant HT
+                          </span>
+                          <span className="font-mono font-bold text-slate-900 dark:text-white">
+                            {formatEur(inv.amountHt)}
+                          </span>
+                        </div>
+                        <div>
+                          <span className="block text-[11px] text-slate-400">
+                            Prestation
+                          </span>
+                          <span className="text-slate-800 dark:text-slate-200">
+                            {inv.prestationLabel}
+                          </span>
+                        </div>
+                      </div>
+                    ) : (
+                      <>
+                        <div className="grid gap-3 sm:grid-cols-2">
+                          <div>
+                            <label
+                              htmlFor={`inv-vendor-${inv.id}`}
+                              className="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-300"
+                            >
+                              Prestataire
+                            </label>
+                            <input
+                              id={`inv-vendor-${inv.id}`}
+                              type="text"
+                              value={edits.vendorName}
+                              disabled={isBlocked}
+                              onChange={(e) =>
+                                updateEdit(inv, "vendorName", e.target.value)
+                              }
+                              className="w-full rounded-xl border border-slate-200 bg-slate-50/70 px-3 py-1.5 text-xs text-slate-900 focus:border-indigo-500 focus:bg-white focus:outline-none disabled:opacity-50 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+                            />
+                          </div>
+                          <div>
+                            <label
+                              htmlFor={`inv-num-${inv.id}`}
+                              className="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-300"
+                            >
+                              N° Facture
+                            </label>
+                            <input
+                              id={`inv-num-${inv.id}`}
+                              type="text"
+                              value={edits.invoiceNumber}
+                              disabled={isBlocked}
+                              onChange={(e) =>
+                                updateEdit(inv, "invoiceNumber", e.target.value)
+                              }
+                              className="w-full rounded-xl border border-slate-200 bg-slate-50/70 px-3 py-1.5 font-mono text-xs text-slate-900 focus:border-indigo-500 focus:bg-white focus:outline-none disabled:opacity-50 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+                            />
+                          </div>
+                          <div>
+                            <label
+                              htmlFor={`inv-date-${inv.id}`}
+                              className="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-300"
+                            >
+                              Date
+                            </label>
+                            <input
+                              id={`inv-date-${inv.id}`}
+                              type="text"
+                              value={edits.invoiceDate}
+                              disabled={isBlocked}
+                              onChange={(e) =>
+                                updateEdit(inv, "invoiceDate", e.target.value)
+                              }
+                              className="w-full rounded-xl border border-slate-200 bg-slate-50/70 px-3 py-1.5 font-mono text-xs text-slate-900 focus:border-indigo-500 focus:bg-white focus:outline-none disabled:opacity-50 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+                            />
+                          </div>
+                          <div>
+                            <label
+                              htmlFor={`inv-ht-${inv.id}`}
+                              className="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-300"
+                            >
+                              Montant HT (€)
+                            </label>
+                            <input
+                              id={`inv-ht-${inv.id}`}
+                              type="number"
+                              step="0.01"
+                              min="0"
+                              value={edits.amountHt}
+                              disabled={isBlocked}
+                              onChange={(e) =>
+                                updateEdit(inv, "amountHt", e.target.value)
+                              }
+                              className="w-full rounded-xl border border-slate-200 bg-slate-50/70 px-3 py-1.5 font-mono text-xs text-slate-900 focus:border-indigo-500 focus:bg-white focus:outline-none disabled:opacity-50 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+                            />
+                          </div>
+                          <div>
+                            <label
+                              htmlFor={`inv-label-${inv.id}`}
+                              className="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-300"
+                            >
+                              Prestation
+                            </label>
+                            <input
+                              id={`inv-label-${inv.id}`}
+                              type="text"
+                              value={edits.prestationLabel}
+                              disabled={isBlocked}
+                              onChange={(e) =>
+                                updateEdit(
+                                  inv,
+                                  "prestationLabel",
+                                  e.target.value
+                                )
+                              }
+                              className="w-full rounded-xl border border-slate-200 bg-slate-50/70 px-3 py-1.5 text-xs text-slate-900 focus:border-indigo-500 focus:bg-white focus:outline-none disabled:opacity-50 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+                            />
+                          </div>
+                          <div>
+                            <label
+                              htmlFor={`inv-line-${inv.id}`}
+                              className="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-300"
+                            >
+                              Poste budgétaire
+                            </label>
+                            <select
+                              id={`inv-line-${inv.id}`}
+                              value={edits.budgetLineId}
+                              disabled={isBlocked}
+                              onChange={(e) =>
+                                updateEdit(inv, "budgetLineId", e.target.value)
+                              }
+                              className="w-full rounded-xl border border-slate-200 bg-slate-50/70 px-3 py-1.5 text-xs text-slate-900 focus:border-indigo-500 focus:bg-white focus:outline-none disabled:opacity-50 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+                            >
+                              <option value="">— Choisir un poste —</option>
+                              {budgetLines.map((line) => {
+                                const rem = line.preOpTotalHt - line.postOpTotalHt;
+                                return (
+                                  <option key={line.id} value={line.id}>
+                                    {line.category} — {line.objet} (Reste :{" "}
+                                    {formatEur(rem)})
+                                  </option>
+                                );
+                              })}
+                            </select>
+                            {(() => {
+                              const picked = budgetLines.find(
+                                (l) => l.id === edits.budgetLineId
+                              );
+                              if (!picked) return null;
+                              const amt = Number(edits.amountHt) || 0;
+                              const nextTotal = picked.postOpTotalHt + amt;
+                              const over = nextTotal - picked.preOpTotalHt;
+                              if (over > 0) {
+                                return (
+                                  <p className="mt-1 text-[11px] font-semibold text-rose-600 dark:text-rose-400">
+                                    Impact : dépassement de +{formatEur(over)}{" "}
+                                    sur ce poste après validation
+                                  </p>
+                                );
+                              }
+                              return (
+                                <p className="mt-1 text-[11px] text-emerald-700 dark:text-emerald-400">
+                                  Reste disponible après validation :{" "}
+                                  {formatEur(picked.preOpTotalHt - nextTotal)}
+                                </p>
+                              );
+                            })()}
+                          </div>
+                        </div>
+
+                        <div className="mt-4 flex justify-end">
+                          <button
+                            type="button"
+                            disabled={
+                              isBlocked ||
+                              validatingId === inv.id ||
+                              !edits.budgetLineId
+                            }
+                            onClick={() => void handleValidate(inv)}
+                            className="inline-flex items-center gap-1.5 rounded-xl bg-rose-600 px-4 py-2 text-xs font-semibold text-white hover:bg-rose-700 disabled:cursor-not-allowed disabled:opacity-40"
+                          >
+                            <CheckCircle2 className="h-4 w-4" />
+                            {validatingId === inv.id
+                              ? "Validation..."
+                              : "Valider et préparer Pennylane"}
+                          </button>
+                        </div>
+                      </>
+                    )}
                   </div>
-                )}
+                </div>
               </div>
             );
           })}

@@ -2,7 +2,6 @@
 
 import {
   AlertTriangle,
-  BarChart3,
   CheckCircle2,
   Download,
   ExternalLink,
@@ -141,6 +140,8 @@ type EditableMetricDraft = {
   sparkCode: string;
 };
 
+type StepTab = "fortnite" | "influence" | "consolidate" | "slides";
+
 function parseConfidenceMap(json: string | null): Record<string, number> {
   if (!json) return {};
   try {
@@ -155,7 +156,7 @@ function parseConfidenceMap(json: string | null): Record<string, number> {
       return out;
     }
   } catch {
-    // Ignore invalid JSON
+    // ignore
   }
   return {};
 }
@@ -187,6 +188,7 @@ export function ReportingDashboard() {
   const searchParams = useSearchParams();
   const queryProjectId = searchParams.get("projectId");
 
+  const [stepTab, setStepTab] = useState<StepTab>("fortnite");
   const [shell, setShell] = useState<ShellStatus | null>(null);
   const [projectId, setProjectId] = useState<string | null>(queryProjectId);
   const [loading, setLoading] = useState(true);
@@ -197,14 +199,12 @@ export function ReportingDashboard() {
   } | null>(null);
   const [successBanner, setSuccessBanner] = useState<string | null>(null);
 
-  // Fortnite state
   const [fortniteFile, setFortniteFile] = useState<File | null>(null);
   const [uploadingFortnite, setUploadingFortnite] = useState(false);
   const [fortniteRows, setFortniteRows] = useState<FortniteRow[]>([]);
   const [fortniteSummary, setFortniteSummary] =
     useState<FortniteSummary | null>(null);
 
-  // Influence state
   const [influenceMetrics, setInfluenceMetrics] = useState<
     InfluenceMetricItem[]
   >([]);
@@ -222,7 +222,6 @@ export function ReportingDashboard() {
   const [driveCandidates, setDriveCandidates] = useState<DriveCandidate[]>([]);
   const [uploadingInfluence, setUploadingInfluence] = useState(false);
 
-  // Verbatims state
   const [verbatims, setVerbatims] = useState<VerbatimItem[]>([]);
   const [verbHandle, setVerbHandle] = useState("");
   const [verbPlatform, setVerbPlatform] = useState<InfluencePlatform>("TIKTOK");
@@ -232,7 +231,6 @@ export function ReportingDashboard() {
   const [verbSelected, setVerbSelected] = useState(true);
   const [addingVerbatim, setAddingVerbatim] = useState(false);
 
-  // Consolidation & Slides state
   const [activeTab, setActiveTab] = useState<ReportingTab>(REPORTING_TABS[0]);
   const [consolidating, setConsolidating] = useState(false);
   const [reportingSheetId, setReportingSheetId] = useState<string | null>(null);
@@ -246,6 +244,8 @@ export function ReportingDashboard() {
   const [publishedExtMessage, setPublishedExtMessage] = useState<string | null>(
     null
   );
+  const [unverifiedOnly, setUnverifiedOnly] = useState(false);
+  const [projectBudgetSoldHt, setProjectBudgetSoldHt] = useState<number>(0);
 
   const handleApiFailure = useCallback(
     (status: number, json: { error?: string; code?: string }) => {
@@ -254,7 +254,7 @@ export function ReportingDashboard() {
           kind: "setup",
           text:
             json.error ??
-            "Connexion Google Workspace ou clé Gemini requise dans /settings.",
+            "Connectez Google Workspace et l'assistant IA dans Paramètres.",
         });
         return;
       }
@@ -263,15 +263,13 @@ export function ReportingDashboard() {
           kind: "cp_conflict",
           text:
             json.error ??
-            "Conflit de Code Projet détecté. Injection automatique bloquée.",
+            "Document bloqué : appartient à un autre projet.",
         });
         return;
       }
       setErrorBanner({
         kind: "error",
-        text: `[HTTP ${status}${json.code ? ` · ${json.code}` : ""}] ${
-          json.error ?? "Une erreur est survenue."
-        }`,
+        text: json.error ?? "Une erreur est survenue.",
       });
     },
     []
@@ -288,33 +286,35 @@ export function ReportingDashboard() {
         if (shellRes.ok) {
           const shellJson = (await shellRes.json()) as ShellStatus;
           setShell(shellJson);
-          if (!resolvedId) {
-            resolvedId = shellJson.activeProjectId;
-          }
-          if (
-            shellJson.activeProject?.reportingSheetId &&
-            !reportingSheetId
-          ) {
+          if (!resolvedId) resolvedId = shellJson.activeProjectId;
+          if (shellJson.activeProject?.reportingSheetId && !reportingSheetId) {
             setReportingSheetId(shellJson.activeProject.reportingSheetId);
           }
         }
         setProjectId(resolvedId);
-        if (!resolvedId) {
-          return;
-        }
+        if (!resolvedId) return;
 
-        const [fortRes, infRes, verbRes, driveRes] = await Promise.all([
-          fetch(`/api/projects/${resolvedId}/reporting/fortnite`, {
-            cache: "no-store",
-          }),
-          fetch(`/api/projects/${resolvedId}/reporting/influence`, {
-            cache: "no-store",
-          }),
-          fetch(`/api/projects/${resolvedId}/reporting/verbatims`, {
-            cache: "no-store",
-          }),
-          fetch(`/api/projects/${resolvedId}/drive`, { cache: "no-store" }),
-        ]);
+        const [fortRes, infRes, verbRes, driveRes, budgetRes] =
+          await Promise.all([
+            fetch(`/api/projects/${resolvedId}/reporting/fortnite`, {
+              cache: "no-store",
+            }),
+            fetch(`/api/projects/${resolvedId}/reporting/influence`, {
+              cache: "no-store",
+            }),
+            fetch(`/api/projects/${resolvedId}/reporting/verbatims`, {
+              cache: "no-store",
+            }),
+            fetch(`/api/projects/${resolvedId}/drive`, { cache: "no-store" }),
+            fetch(`/api/projects/${resolvedId}/budget`, { cache: "no-store" }),
+          ]);
+
+        if (budgetRes.ok) {
+          const bJson = (await budgetRes.json()) as {
+            summary?: { soldTotalHt?: number };
+          };
+          setProjectBudgetSoldHt(bJson.summary?.soldTotalHt ?? 0);
+        }
 
         if (fortRes.ok) {
           const fortJson = (await fortRes.json()) as {
@@ -337,9 +337,7 @@ export function ReportingDashboard() {
             setInfTalent(infJson.talents[0]);
           }
           const drafts: Record<string, EditableMetricDraft> = {};
-          for (const m of list) {
-            drafts[m.id] = metricToDraft(m);
-          }
+          for (const m of list) drafts[m.id] = metricToDraft(m);
           setMetricDrafts(drafts);
         }
 
@@ -353,10 +351,7 @@ export function ReportingDashboard() {
         if (driveRes.ok) {
           const driveJson = (await driveRes.json()) as {
             nodes: DriveNodeItem[];
-            project?: {
-              reportingSheetId?: string | null;
-              reportingTemplateSlidesId?: string | null;
-            };
+            project?: { reportingSheetId?: string | null };
           };
           if (driveJson.project?.reportingSheetId) {
             setReportingSheetId(driveJson.project.reportingSheetId);
@@ -370,17 +365,13 @@ export function ReportingDashboard() {
             ) ??
             null;
           setNode0063(found0063);
-          if (found0063?.driveFileId) {
-            setSlidesFileId(found0063.driveFileId);
-          }
+          if (found0063?.driveFileId) setSlidesFileId(found0063.driveFileId);
           if (
             found0063?.extMirrorFileId &&
             (found0063.syncStatus?.validationStatus === "VALIDE_CLIENT" ||
               found0063.validationStatus === "VALIDE_CLIENT")
           ) {
-            setPublishedExtMessage(
-              `Publié dans [EXT] / 04. Reporting Final (VALIDE_CLIENT) — ID ${found0063.extMirrorFileId}`
-            );
+            setPublishedExtMessage("Publié dans l'espace client");
           }
         }
       } finally {
@@ -467,13 +458,14 @@ export function ReportingDashboard() {
   }, [verifiedMetrics]);
 
   const cumulativeTotals = useMemo(() => {
-    const views = byPlatformConsolidated.reduce((s, p) => s + p.views, 0);
-    const likes = byPlatformConsolidated.reduce((s, p) => s + p.likes, 0);
-    const interactions = byPlatformConsolidated.reduce(
-      (s, p) => s + p.interactions,
-      0
-    );
-    return { views, likes, interactions };
+    return {
+      views: byPlatformConsolidated.reduce((s, p) => s + p.views, 0),
+      likes: byPlatformConsolidated.reduce((s, p) => s + p.likes, 0),
+      interactions: byPlatformConsolidated.reduce(
+        (s, p) => s + p.interactions,
+        0
+      ),
+    };
   }, [byPlatformConsolidated]);
 
   async function handleFortniteUpload() {
@@ -481,18 +473,16 @@ export function ReportingDashboard() {
     if (!fortniteFile) {
       setErrorBanner({
         kind: "error",
-        text: "Sélectionnez un fichier CSV ou Excel (.xlsx) Fortnite avant d'importer.",
+        text: "Choisissez d'abord un fichier CSV ou Excel Fortnite.",
       });
       return;
     }
-
     setUploadingFortnite(true);
     setErrorBanner(null);
     setSuccessBanner(null);
     try {
       const form = new FormData();
       form.append("file", fortniteFile);
-
       const res = await fetch(`/api/projects/${projectId}/reporting/fortnite`, {
         method: "POST",
         body: form,
@@ -511,9 +501,7 @@ export function ReportingDashboard() {
       setFortniteRows(json.rows ?? []);
       setFortniteSummary(json.summary ?? null);
       setFortniteFile(null);
-      setSuccessBanner(
-        `${json.importedCount ?? 0} jour(s) Fortnite importé(s) et archivé(s) dans 006.1.1.`
-      );
+      setSuccessBanner(`${json.importedCount ?? 0} jour(s) Fortnite importé(s).`);
     } finally {
       setUploadingFortnite(false);
     }
@@ -537,9 +525,7 @@ export function ReportingDashboard() {
     }
     setDriveCandidates(json.driveCandidates ?? []);
     if ((json.driveCandidates ?? []).length === 0) {
-      setSuccessBanner(
-        "Aucune capture image trouvée actuellement dans 006.1/02_Influence."
-      );
+      setSuccessBanner("Aucune capture trouvée dans le dossier Drive Influence.");
     }
   }
 
@@ -549,18 +535,17 @@ export function ReportingDashboard() {
     if (!cleanTalent) {
       setErrorBanner({
         kind: "error",
-        text: "Renseignez le nom du talent avant d'extraire la capture.",
+        text: "Indiquez le nom du talent avant d'analyser.",
       });
       return;
     }
     if (!infFile && !infDriveFileId) {
       setErrorBanner({
         kind: "error",
-        text: "Choisissez une capture image locale ou un fichier Drive 006.1.2.",
+        text: "Choisissez une capture image ou un fichier Drive.",
       });
       return;
     }
-
     setUploadingInfluence(true);
     setErrorBanner(null);
     setSuccessBanner(null);
@@ -590,7 +575,6 @@ export function ReportingDashboard() {
           }),
         });
       }
-
       const json = (await res.json()) as {
         error?: string;
         code?: string;
@@ -600,7 +584,6 @@ export function ReportingDashboard() {
         handleApiFailure(res.status, json);
         return;
       }
-
       if (json.metric) {
         setInfluenceMetrics((prev) => [json.metric!, ...prev]);
         setMetricDrafts((prev) => ({
@@ -611,7 +594,7 @@ export function ReportingDashboard() {
       setInfFile(null);
       setInfDriveFileId("");
       setSuccessBanner(
-        `Capture analysée par Gemini Vision pour ${cleanTalent} (${PLATFORM_LABELS[infPlatform]}). Vérifiez les chiffres ci-dessous.`
+        `Capture lue pour ${cleanTalent}. Vérifiez les chiffres ci-dessous puis validez.`
       );
     } finally {
       setUploadingInfluence(false);
@@ -622,7 +605,6 @@ export function ReportingDashboard() {
     if (!projectId) return;
     const draft = metricDrafts[metricId];
     if (!draft) return;
-
     setSavingMetricId(metricId);
     setErrorBanner(null);
     setSuccessBanner(null);
@@ -645,7 +627,6 @@ export function ReportingDashboard() {
           }),
         }
       );
-
       const json = (await res.json()) as {
         error?: string;
         code?: string;
@@ -655,7 +636,6 @@ export function ReportingDashboard() {
         handleApiFailure(res.status, json);
         return;
       }
-
       if (json.metric) {
         setInfluenceMetrics((prev) =>
           prev.map((m) => (m.id === metricId ? json.metric! : m))
@@ -665,7 +645,7 @@ export function ReportingDashboard() {
           [metricId]: metricToDraft(json.metric!),
         }));
       }
-      setSuccessBanner("Métrique vérifiée et sauvegardée.");
+      setSuccessBanner("Chiffres validés.");
     } finally {
       setSavingMetricId(null);
     }
@@ -702,15 +682,15 @@ export function ReportingDashboard() {
         return;
       }
       if (json.verbatim) {
-        setVerbatims((prev) => {
-          const withoutDup = prev.filter((v) => v.id !== json.verbatim!.id);
-          return [json.verbatim!, ...withoutDup];
-        });
+        setVerbatims((prev) => [
+          json.verbatim!,
+          ...prev.filter((v) => v.id !== json.verbatim!.id),
+        ]);
       }
       setVerbHandle("");
       setVerbQuote("");
       setVerbLikes("0");
-      setSuccessBanner("Verbatim ajouté.");
+      setSuccessBanner("Commentaire ajouté.");
     } finally {
       setAddingVerbatim(false);
     }
@@ -752,20 +732,13 @@ export function ReportingDashboard() {
         error?: string;
         code?: string;
         reportingSheetId?: string;
-        warnings?: string[];
       };
       if (!res.ok) {
         handleApiFailure(res.status, json);
         return;
       }
-      if (json.reportingSheetId) {
-        setReportingSheetId(json.reportingSheetId);
-      }
-      setSuccessBanner(
-        `Consolidation 4 onglets réussie dans Google Sheets (006.2 : ${json.reportingSheetId ?? ""}).${
-          json.warnings?.length ? ` ${json.warnings.join(" ")}` : ""
-        }`
-      );
+      if (json.reportingSheetId) setReportingSheetId(json.reportingSheetId);
+      setSuccessBanner("Tableur Google Sheets mis à jour avec vos 4 onglets.");
     } finally {
       setConsolidating(false);
     }
@@ -798,7 +771,7 @@ export function ReportingDashboard() {
       setSlidesFileId(json.slidesFileId ?? null);
       setGeneratedSlides(json.slides ?? []);
       setSuccessBanner(
-        `Slides générés dans 006.3 (${json.slides?.length ?? 0} slides, format 16:9 charté).`
+        `Présentation générée (${json.slides?.length ?? 0} slides).`
       );
       await loadAllData(projectId);
     } finally {
@@ -837,7 +810,7 @@ export function ReportingDashboard() {
           }
         : prev
     );
-    setSuccessBanner(`Statut de validation 006.3 mis à jour : ${nextStatus}.`);
+    setSuccessBanner("Statut de validation mis à jour.");
   }
 
   async function handlePublishExt() {
@@ -857,17 +830,13 @@ export function ReportingDashboard() {
       const json = (await res.json()) as {
         error?: string;
         code?: string;
-        extMirrorFileId?: string;
       };
       if (!res.ok) {
         handleApiFailure(res.status, json);
         return;
       }
-      const msg = `Publié dans [EXT] / 04. Reporting Final (VALIDE_CLIENT) — ID ${
-        json.extMirrorFileId ?? ""
-      }`;
-      setPublishedExtMessage(msg);
-      setSuccessBanner(msg);
+      setPublishedExtMessage("Publié dans l'espace client");
+      setSuccessBanner("Reporting publié dans le dossier client.");
       await loadAllData(projectId);
     } finally {
       setPublishingExt(false);
@@ -883,26 +852,65 @@ export function ReportingDashboard() {
     node0063?.validationStatus ??
     "BROUILLON_INTERNE";
 
+  const verifiedInfluenceCount = influenceMetrics.filter(
+    (m) => m.verifiedByHuman
+  ).length;
+
+  const reportingSteps = [
+    {
+      id: "fortnite" as const,
+      num: 1,
+      label: "Stats Fortnite",
+      done: fortniteRows.length > 0,
+      meta:
+        fortniteRows.length > 0
+          ? `${fortniteRows.length} j. importés`
+          : "CSV / Excel à importer",
+    },
+    {
+      id: "influence" as const,
+      num: 2,
+      label: "Captures Influence",
+      done:
+        influenceMetrics.length > 0 &&
+        verifiedInfluenceCount === influenceMetrics.length,
+      meta:
+        influenceMetrics.length > 0
+          ? `${verifiedInfluenceCount}/${influenceMetrics.length} validées`
+          : "0 capture",
+    },
+    {
+      id: "consolidate" as const,
+      num: 3,
+      label: "Synthèse & Excel",
+      done: Boolean(reportingSheetId),
+      meta: reportingSheetId ? "4 onglets prêts" : "À consolider",
+    },
+    {
+      id: "slides" as const,
+      num: 4,
+      label: "Slides Client",
+      done: Boolean(publishedExtMessage || slidesFileId),
+      meta: publishedExtMessage
+        ? "Publié client"
+        : slidesFileId
+          ? "Slides prêtes"
+          : "À générer",
+    },
+  ];
+
   return (
-    <div className="mx-auto max-w-7xl space-y-6">
-      {/* Header */}
+    <div className="mx-auto max-w-6xl space-y-6">
+      {/* Calm Header */}
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
-          <div className="flex items-center gap-2.5">
-            <BarChart3 className="h-6 w-6 text-[#e11d48]" />
-            <h1 className="text-2xl font-bold text-white">
-              Reporting Fin de Jeu Fortnite &amp; Influence
-            </h1>
-            <span className="rounded-full border border-[#e11d48]/40 bg-[#e11d48]/10 px-2.5 py-0.5 font-mono text-[11px] font-semibold text-rose-300">
-              Jalon 3 · M4
-            </span>
-          </div>
-          <p className="mt-1 text-sm text-slate-400">
+          <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-white">
+            Reporting Bilan
+          </h1>
+          <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
             {shell?.activeProject
-              ? `CP ${shell.activeProject.codeProjet} · ${shell.activeProject.client} — ${shell.activeProject.nomJeu}`
-              : projectId
-                ? `Projet ${projectId}`
-                : "Sélectionnez un projet pour démarrer le reporting."}
+              ? `${shell.activeProject.client} — ${shell.activeProject.nomJeu} (CP ${shell.activeProject.codeProjet})`
+              : "Sélectionnez un projet dans la barre latérale."}
           </p>
         </div>
 
@@ -910,38 +918,159 @@ export function ReportingDashboard() {
           type="button"
           onClick={() => void loadAllData(projectId)}
           disabled={loading}
-          className="inline-flex items-center gap-2 rounded-lg border border-[#232b3d] bg-[#171d2b] px-3.5 py-2 text-xs font-semibold text-slate-200 hover:bg-[#232b3d] disabled:opacity-50"
+          className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 dark:border-slate-800 dark:bg-[#111827] dark:text-slate-200 dark:hover:bg-slate-800/70"
         >
           <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
           Actualiser
         </button>
       </div>
 
-      {/* Precondition 412 Banner */}
+      {/* Executive Summary Strip (Vues, Joueurs, Engagement pondéré, CPV) */}
+      <section className="grid grid-cols-2 divide-y divide-slate-100 overflow-hidden rounded-2xl border border-slate-200/80 bg-white shadow-[0_1px_2px_rgba(15,23,42,0.04)] lg:grid-cols-4 lg:divide-x lg:divide-y-0 dark:divide-slate-800 dark:border-slate-800 dark:bg-[#111827]">
+        <div className="px-4 py-3.5">
+          <p className="text-[11px] font-medium text-slate-500 dark:text-slate-400">
+            Vues Influence validées
+          </p>
+          <p className="mt-1 font-mono text-xl font-bold text-slate-900 dark:text-white">
+            {formatFrenchInteger(cumulativeTotals.views)}
+          </p>
+          <p className="mt-0.5 text-[11px] text-slate-400">
+            {verifiedInfluenceCount}/{influenceMetrics.length} captures validées
+          </p>
+        </div>
+        <div className="px-4 py-3.5">
+          <p className="text-[11px] font-medium text-slate-500 dark:text-slate-400">
+            Joueurs uniques Fortnite
+          </p>
+          <p className="mt-1 font-mono text-xl font-bold text-slate-900 dark:text-white">
+            {formatFrenchInteger(fortniteSummary?.totalUniquePlayers ?? 0)}
+          </p>
+          <p className="mt-0.5 text-[11px] text-slate-400">
+            {fortniteRows.length} jour(s) importé(s)
+          </p>
+        </div>
+        <div className="px-4 py-3.5">
+          <p className="text-[11px] font-medium text-slate-500 dark:text-slate-400">
+            Engagement pondéré
+          </p>
+          <p className="mt-1 font-mono text-xl font-bold text-indigo-600 dark:text-indigo-400">
+            {cumulativeTotals.views > 0
+              ? `${computeEngagementRate({
+                  views: cumulativeTotals.views,
+                  likes: cumulativeTotals.likes,
+                  comments: cumulativeTotals.interactions,
+                  shares: 0,
+                  reposts: 0,
+                  saves: 0,
+                }) ?? 0}%`
+              : "—"}
+          </p>
+          <p className="mt-0.5 text-[11px] text-slate-400">
+            {formatFrenchInteger(
+              cumulativeTotals.likes + cumulativeTotals.interactions
+            )}{" "}
+            interactions totales
+          </p>
+        </div>
+        <div className="px-4 py-3.5">
+          <p className="text-[11px] font-medium text-slate-500 dark:text-slate-400">
+            CPV / Coût joueur (ROI)
+          </p>
+          <p className="mt-1 font-mono text-xl font-bold text-emerald-700 dark:text-emerald-400">
+            {projectBudgetSoldHt > 0 && cumulativeTotals.views > 0
+              ? `${(projectBudgetSoldHt / cumulativeTotals.views).toFixed(3)} €`
+              : projectBudgetSoldHt > 0 &&
+                  (fortniteSummary?.totalUniquePlayers ?? 0) > 0
+                ? `${(projectBudgetSoldHt / (fortniteSummary?.totalUniquePlayers ?? 1)).toFixed(2)} €`
+                : "—"}
+          </p>
+          <p className="mt-0.5 text-[11px] text-slate-400">
+            {projectBudgetSoldHt > 0
+              ? `Base vendue ${formatFrenchInteger(Math.round(projectBudgetSoldHt))} € HT`
+              : "Budget projet non importé"}
+          </p>
+        </div>
+      </section>
+
+      {/* Smart 4-Step Progress Stepper */}
+      <nav
+        aria-label="Étapes du reporting"
+        className="grid grid-cols-2 divide-y divide-slate-100 overflow-hidden rounded-2xl border border-slate-200/80 bg-white shadow-[0_1px_2px_rgba(15,23,42,0.04)] lg:grid-cols-4 lg:divide-x lg:divide-y-0 dark:divide-slate-800 dark:border-slate-800 dark:bg-[#111827]"
+      >
+        {reportingSteps.map((step) => {
+          const active = stepTab === step.id;
+          return (
+            <button
+              key={step.id}
+              type="button"
+              onClick={() => setStepTab(step.id)}
+              className={`relative flex items-center gap-3 px-4 py-3.5 text-left transition-colors ${
+                active
+                  ? "bg-indigo-50/40 dark:bg-indigo-500/10"
+                  : "hover:bg-slate-50/70 dark:hover:bg-slate-800/40"
+              }`}
+            >
+              <span
+                className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-bold transition-colors ${
+                  step.done
+                    ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-300"
+                    : active
+                      ? "bg-indigo-600 text-white"
+                      : "bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400"
+                }`}
+              >
+                {step.done ? (
+                  <CheckCircle2 className="h-4 w-4" />
+                ) : (
+                  step.num
+                )}
+              </span>
+              <div className="min-w-0">
+                <p
+                  className={`truncate text-xs font-semibold ${
+                    active
+                      ? "text-indigo-700 dark:text-indigo-300"
+                      : "text-slate-800 dark:text-slate-100"
+                  }`}
+                >
+                  {step.label}
+                </p>
+                <p className="mt-0.5 truncate text-[11px] text-slate-500 dark:text-slate-400">
+                  {step.meta}
+                </p>
+              </div>
+              {active && (
+                <span className="absolute right-0 bottom-0 left-0 h-0.5 bg-indigo-600 dark:bg-indigo-400" />
+              )}
+            </button>
+          );
+        })}
+      </nav>
+
+      {/* Alerts */}
       {showSetupWarning && (
         <div
           role="alert"
           data-testid="setup-required-banner"
-          className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-500/50 bg-amber-950/30 p-4 text-sm text-amber-100"
+          className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-indigo-200 bg-indigo-50 p-4 text-xs text-indigo-900 dark:border-indigo-500/30 dark:bg-indigo-500/15 dark:text-indigo-200"
         >
-          <div className="flex items-center gap-2.5">
-            <AlertTriangle className="h-5 w-5 shrink-0 text-amber-400" />
+          <div className="flex items-center gap-2">
+            <AlertTriangle className="h-4 w-4 text-indigo-600 dark:text-indigo-400" />
             <span>
               {errorBanner?.kind === "setup"
                 ? errorBanner.text
-                : "Configuration requise : connectez Google Workspace (OAuth2) et renseignez GEMINI_API_KEY pour exécuter les imports Drive/Sheets/Slides et l'extraction Vision."}
+                : "Connectez Google Workspace et l'assistant IA dans Paramètres."}
             </span>
           </div>
           <Link
             href="/settings"
-            className="rounded-lg bg-amber-500 px-3.5 py-1.5 text-xs font-bold text-slate-950 hover:bg-amber-400"
+            className="rounded-xl bg-indigo-600 px-3.5 py-1.5 font-semibold text-white hover:bg-indigo-700"
           >
-            Configurer dans Paramètres
+            Paramètres
           </Link>
         </div>
       )}
 
-      {/* CP Conflict or Error Banner */}
       {errorBanner && errorBanner.kind !== "setup" && (
         <div
           role="alert"
@@ -950,745 +1079,192 @@ export function ReportingDashboard() {
               ? "cp-conflict-banner"
               : "error-banner"
           }
-          className="flex items-center gap-2.5 rounded-xl border border-red-500 bg-red-950/50 p-4 text-sm text-red-200"
+          className="flex items-center gap-2.5 rounded-2xl border border-rose-200 bg-rose-50 p-4 text-xs text-rose-800 dark:border-rose-500/30 dark:bg-rose-500/15 dark:text-rose-200"
         >
-          <ShieldAlert className="h-5 w-5 shrink-0 text-red-400" />
+          <ShieldAlert className="h-4 w-4 shrink-0 text-rose-600 dark:text-rose-400" />
           <span>{errorBanner.text}</span>
         </div>
       )}
 
-      {/* Success Banner */}
       {successBanner && (
         <div
           role="status"
           data-testid="reporting-success-banner"
-          className="flex items-center gap-2.5 rounded-xl border border-emerald-500/40 bg-emerald-950/30 p-4 text-sm text-emerald-200"
+          className="flex items-center gap-2.5 rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-xs text-emerald-800 dark:border-emerald-500/30 dark:bg-emerald-500/15 dark:text-emerald-300"
         >
-          <CheckCircle2 className="h-5 w-5 shrink-0 text-emerald-400" />
+          <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-600 dark:text-emerald-400" />
           <span>{successBanner}</span>
         </div>
       )}
 
-      {/* SECTION 1: Fortnite Creator Portal (F20) */}
-      <section className="rounded-xl border border-[#232b3d] bg-[#11151f] p-6 space-y-5">
-        <div className="flex flex-wrap items-center justify-between gap-4 border-b border-[#232b3d] pb-4">
-          <div>
-            <h2 className="text-base font-bold text-white">
-              1. Portail Créateur Fortnite (006.1.1)
-            </h2>
-            <p className="text-xs text-slate-400">
-              Importez les exports CSV (virgule ou point-virgule) ou Excel
-              (.xlsx) Epic Games Creator Portal.
-            </p>
-          </div>
-          <div className="flex flex-wrap items-center gap-3">
-            <input
-              type="file"
-              accept=".csv,.xlsx"
-              data-testid="fortnite-file-input"
-              onChange={(e) => setFortniteFile(e.target.files?.[0] ?? null)}
-              className="block text-xs text-slate-300 file:mr-3 file:rounded-lg file:border file:border-[#232b3d] file:bg-[#171d2b] file:px-3 file:py-1.5 file:text-xs file:font-semibold file:text-slate-200 hover:file:bg-[#232b3d]"
-            />
-            <button
-              type="button"
-              disabled={uploadingFortnite || !projectId}
-              onClick={() => void handleFortniteUpload()}
-              data-testid="fortnite-import-btn"
-              className="inline-flex items-center gap-2 rounded-lg bg-[#e11d48] px-4 py-2 text-xs font-semibold text-white hover:bg-[#ff2e58] disabled:opacity-50"
-            >
-              <Upload className="h-3.5 w-3.5" />
-              {uploadingFortnite
-                ? "Import en cours..."
-                : "Importer le fichier Fortnite"}
-            </button>
-          </div>
-        </div>
-
-        {/* Fortnite KPI Cards */}
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
-          <div className="rounded-lg border border-[#232b3d] bg-[#171d2b] p-4">
-            <p className="text-[11px] uppercase tracking-wider text-slate-400">
-              Joueurs uniques
-            </p>
-            <p className="mt-1 font-mono text-xl font-bold text-white">
-              {formatFrenchInteger(fortniteSummary?.totalUniquePlayers ?? 0)}
-            </p>
-          </div>
-          <div className="rounded-lg border border-[#232b3d] bg-[#171d2b] p-4">
-            <p className="text-[11px] uppercase tracking-wider text-slate-400">
-              Sessions totales
-            </p>
-            <p className="mt-1 font-mono text-xl font-bold text-white">
-              {formatFrenchInteger(fortniteSummary?.totalSessions ?? 0)}
-            </p>
-          </div>
-          <div className="rounded-lg border border-[#232b3d] bg-[#171d2b] p-4">
-            <p className="text-[11px] uppercase tracking-wider text-slate-400">
-              Temps moyen / session
-            </p>
-            <p className="mt-1 font-mono text-xl font-bold text-cyan-300">
-              {formatFrenchInteger(fortniteSummary?.avgPlaytimeSec ?? 0)} s
-            </p>
-          </div>
-          <div className="rounded-lg border border-[#232b3d] bg-[#171d2b] p-4">
-            <p className="text-[11px] uppercase tracking-wider text-slate-400">
-              Rétention J1 moyenne
-            </p>
-            <p className="mt-1 font-mono text-xl font-bold text-emerald-300">
-              {fortniteSummary?.avgRetentionD1 ?? 0}%
-            </p>
-          </div>
-          <div className="rounded-lg border border-[#232b3d] bg-[#171d2b] p-4">
-            <p className="text-[11px] uppercase tracking-wider text-slate-400">
-              Pic simultané max
-            </p>
-            <p className="mt-1 font-mono text-xl font-bold text-amber-300">
-              {formatFrenchInteger(fortniteSummary?.maxPeakConcurrent ?? 0)}
-            </p>
-          </div>
-        </div>
-
-        {/* Daily Fortnite Table */}
-        {fortniteRows.length > 0 && (
-          <div className="overflow-x-auto rounded-lg border border-[#232b3d]">
-            <table className="w-full text-left text-xs">
-              <thead className="bg-[#171d2b] text-[11px] uppercase text-slate-400">
-                <tr>
-                  <th className="px-3 py-2.5">Date</th>
-                  <th className="px-3 py-2.5">Joueurs uniques</th>
-                  <th className="px-3 py-2.5">Sessions</th>
-                  <th className="px-3 py-2.5">Temps moyen (s)</th>
-                  <th className="px-3 py-2.5">Rétention J1 (%)</th>
-                  <th className="px-3 py-2.5">Pic simultané</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-[#232b3d]/60">
-                {fortniteRows.map((r) => (
-                  <tr key={r.id} className="hover:bg-[#171d2b]/50">
-                    <td className="px-3 py-2 font-mono text-slate-200">
-                      {r.date}
-                    </td>
-                    <td className="px-3 py-2 font-mono">
-                      {formatFrenchInteger(r.uniquePlayers)}
-                    </td>
-                    <td className="px-3 py-2 font-mono">
-                      {formatFrenchInteger(r.sessions)}
-                    </td>
-                    <td className="px-3 py-2 font-mono">{r.avgPlaytimeSec}</td>
-                    <td className="px-3 py-2 font-mono">
-                      {r.retentionD1 !== null ? `${r.retentionD1}%` : "—"}
-                    </td>
-                    <td className="px-3 py-2 font-mono">
-                      {formatFrenchInteger(r.peakConcurrent)}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
-
-      {/* SECTION 2: Influence Gemini Vision & Side-by-Side Control UI (F21) */}
-      <section className="rounded-xl border border-[#232b3d] bg-[#11151f] p-6 space-y-5">
-        <div className="flex flex-wrap items-center justify-between gap-4 border-b border-[#232b3d] pb-4">
-          <div>
-            <h2 className="text-base font-bold text-white">
-              2. Captures WhatsApp Influence &amp; Contrôle Côte à Côte (006.1.2)
-            </h2>
-            <p className="text-xs text-slate-400">
-              Extraction multimodale Gemini Vision puis validation humaine
-              obligatoire avant consolidation.
-            </p>
-          </div>
-          <button
-            type="button"
-            disabled={!projectId}
-            onClick={() => void handleLoadDriveCandidates()}
-            className="inline-flex items-center gap-2 rounded-lg border border-[#232b3d] bg-[#171d2b] px-3 py-1.5 text-xs font-semibold text-slate-200 hover:bg-[#232b3d]"
-          >
-            <FolderSearch className="h-3.5 w-3.5 text-cyan-400" />
-            Charger depuis Drive 006.1.2
-          </button>
-        </div>
-
-        {/* Upload / Drive Pick Form */}
-        <div className="grid gap-3 rounded-lg border border-[#232b3d] bg-[#171d2b]/70 p-4 md:grid-cols-6">
-          <div className="md:col-span-1">
-            <label className="mb-1 block text-[11px] font-medium text-slate-300">
-              Talent
-            </label>
-            <input
-              type="text"
-              list="talents-datalist"
-              value={infTalent}
-              onChange={(e) => setInfTalent(e.target.value)}
-              placeholder="ex: Kalut"
-              className="w-full rounded-lg border border-[#232b3d] bg-[#090b10] px-2.5 py-1.5 text-xs text-white focus:border-cyan-500 focus:outline-none"
-            />
-            <datalist id="talents-datalist">
-              {talents.map((t) => (
-                <option key={t} value={t} />
-              ))}
-            </datalist>
-          </div>
-
-          <div className="md:col-span-1">
-            <label className="mb-1 block text-[11px] font-medium text-slate-300">
-              Plateforme
-            </label>
-            <select
-              value={infPlatform}
-              onChange={(e) =>
-                setInfPlatform(e.target.value as InfluencePlatform)
-              }
-              className="w-full rounded-lg border border-[#232b3d] bg-[#090b10] px-2.5 py-1.5 text-xs text-white focus:border-cyan-500 focus:outline-none"
-            >
-              {INFLUENCE_PLATFORMS.map((p) => (
-                <option key={p} value={p}>
-                  {PLATFORM_LABELS[p]}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div className="md:col-span-1">
-            <label className="mb-1 block text-[11px] font-medium text-slate-300">
-              URL Contenu
-            </label>
-            <input
-              type="text"
-              value={infContentUrl}
-              onChange={(e) => setInfContentUrl(e.target.value)}
-              placeholder="https://..."
-              className="w-full rounded-lg border border-[#232b3d] bg-[#090b10] px-2.5 py-1.5 text-xs text-white focus:border-cyan-500 focus:outline-none"
-            />
-          </div>
-
-          <div className="md:col-span-1">
-            <label className="mb-1 block text-[11px] font-medium text-slate-300">
-              Code Spark Ads
-            </label>
-            <input
-              type="text"
-              value={infSparkCode}
-              onChange={(e) => setInfSparkCode(e.target.value)}
-              placeholder="#SPARK..."
-              className="w-full rounded-lg border border-[#232b3d] bg-[#090b10] px-2.5 py-1.5 text-xs text-white focus:border-cyan-500 focus:outline-none"
-            />
-          </div>
-
-          <div className="md:col-span-2 flex flex-col justify-end gap-2">
-            <input
-              type="file"
-              accept=".png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp"
-              data-testid="influence-file-input"
-              onChange={(e) => {
-                setInfFile(e.target.files?.[0] ?? null);
-                setInfDriveFileId("");
-              }}
-              className="block text-xs text-slate-300 file:mr-2 file:rounded file:border file:border-[#232b3d] file:bg-[#090b10] file:px-2.5 file:py-1 file:text-xs file:text-slate-200"
-            />
-            {driveCandidates.length > 0 && (
-              <select
-                value={infDriveFileId}
-                onChange={(e) => {
-                  const chosen = driveCandidates.find(
-                    (c) => c.driveFileId === e.target.value
-                  );
-                  setInfDriveFileId(e.target.value);
-                  setInfFile(null);
-                  if (chosen?.talentHint) setInfTalent(chosen.talentHint);
-                  if (chosen?.platformHint) setInfPlatform(chosen.platformHint);
-                }}
-                className="rounded border border-[#232b3d] bg-[#090b10] px-2 py-1 text-xs text-slate-200"
-              >
-                <option value="">-- Ou choisir un fichier Drive 006.1.2 --</option>
-                {driveCandidates.map((c) => (
-                  <option key={c.driveFileId} value={c.driveFileId}>
-                    {c.talentHint ? `${c.talentHint} / ` : ""}
-                    {c.name}
-                  </option>
-                ))}
-              </select>
-            )}
-            <button
-              type="button"
-              disabled={uploadingInfluence || !projectId}
-              onClick={() => void handleInfluenceUpload()}
-              data-testid="influence-extract-btn"
-              className="inline-flex items-center justify-center gap-2 rounded-lg bg-[#e11d48] px-3.5 py-1.5 text-xs font-semibold text-white hover:bg-[#ff2e58] disabled:opacity-50"
-            >
-              <Sparkles className="h-3.5 w-3.5" />
-              {uploadingInfluence
-                ? "Extraction Vision..."
-                : "Analyser avec Gemini Vision"}
-            </button>
-          </div>
-        </div>
-
-        {/* Side-by-Side Verification Cards */}
-        {influenceMetrics.length === 0 ? (
-          <p className="text-xs text-slate-400">
-            Aucune capture Influence ingérée pour ce projet.
-          </p>
-        ) : (
-          <div className="space-y-4">
-            {influenceMetrics.map((m) => {
-              const draft = metricDrafts[m.id] ?? metricToDraft(m);
-              const confidenceMap = parseConfidenceMap(m.confidenceJson);
-              const previewSrc =
-                m.rawFileId && projectId
-                  ? `/api/projects/${projectId}/reporting/preview/${m.rawFileId}`
-                  : null;
-              const platLabel =
-                PLATFORM_LABELS[m.platform as InfluencePlatform] ?? m.platform;
-
-              const previewEng = computeEngagementRate({
-                views: toNullableIntInput(draft.views),
-                likes: toNullableIntInput(draft.likes),
-                comments: toNullableIntInput(draft.comments),
-                shares: toNullableIntInput(draft.shares),
-                reposts: toNullableIntInput(draft.reposts),
-                saves: toNullableIntInput(draft.saves),
-              });
-
-              const previewInteractions = computeInteractions({
-                comments: toNullableIntInput(draft.comments),
-                shares: toNullableIntInput(draft.shares),
-                reposts: toNullableIntInput(draft.reposts),
-                saves: toNullableIntInput(draft.saves),
-              });
-
-              const numericFields: Array<{
-                key: keyof Pick<
-                  EditableMetricDraft,
-                  "views" | "likes" | "comments" | "shares" | "reposts" | "saves"
-                >;
-                label: string;
-              }> = [
-                { key: "views", label: "Vues" },
-                { key: "likes", label: "Likes" },
-                { key: "comments", label: "Commentaires" },
-                { key: "shares", label: "Partages" },
-                { key: "reposts", label: "Reposts" },
-                { key: "saves", label: "Enregistrements" },
-              ];
-
-              return (
-                <div
-                  key={m.id}
-                  data-testid={`influence-card-${m.id}`}
-                  className="grid gap-5 rounded-xl border border-[#232b3d] bg-[#171d2b]/70 p-4 lg:grid-cols-12"
-                >
-                  {/* Left: Raw Screenshot Preview */}
-                  <div
-                    data-testid="influence-preview-pane"
-                    className="flex flex-col items-center justify-center rounded-lg border border-[#232b3d] bg-[#090b10] p-3 lg:col-span-4"
-                  >
-                    {previewSrc ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img
-                        data-testid="influence-screenshot-preview"
-                        src={previewSrc}
-                        alt={`Capture Influence ${m.talentName} ${platLabel}`}
-                        className="max-h-72 w-auto rounded object-contain"
-                      />
-                    ) : (
-                      <div className="py-10 text-xs text-slate-500">
-                        Aperçu image indisponible
-                      </div>
-                    )}
-                    <p className="mt-2 font-mono text-[10px] text-slate-400">
-                      Original immuable dans 006.1.2
-                    </p>
-                  </div>
-
-                  {/* Right: Editable Verified Fields */}
-                  <div className="space-y-4 lg:col-span-8">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <div className="flex items-center gap-2.5">
-                        <span className="text-sm font-bold text-white">
-                          {m.talentName}
-                        </span>
-                        <span className="rounded bg-[#232b3d] px-2 py-0.5 font-mono text-[11px] text-cyan-300">
-                          {platLabel}
-                        </span>
-                        {m.verifiedByHuman ? (
-                          <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/40 bg-emerald-500/15 px-2.5 py-0.5 text-[11px] font-semibold text-emerald-300">
-                            <CheckCircle2 className="h-3 w-3" />
-                            Vérifié
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center gap-1 rounded-full border border-amber-500/40 bg-amber-500/15 px-2.5 py-0.5 text-[11px] font-semibold text-amber-300">
-                            <AlertTriangle className="h-3 w-3" />À vérifier
-                          </span>
-                        )}
-                      </div>
-
-                      <div className="flex items-center gap-3 font-mono text-xs">
-                        <span className="text-slate-300">
-                          Interactions :{" "}
-                          <strong className="text-white">
-                            {formatFrenchInteger(previewInteractions)}
-                          </strong>
-                        </span>
-                        <span className="text-slate-300">
-                          Engagement :{" "}
-                          <strong className="text-amber-300">
-                            {previewEng}%
-                          </strong>
-                        </span>
-                      </div>
-                    </div>
-
-                    {/* Numeric Grid */}
-                    <div className="grid gap-3 sm:grid-cols-3 lg:grid-cols-6">
-                      {numericFields.map(({ key, label }) => {
-                        const conf = confidenceMap[key];
-                        const isLowConfidence =
-                          typeof conf === "number" && conf < 0.8;
-                        return (
-                          <div key={key}>
-                            <label className="mb-1 flex items-center justify-between text-[11px] text-slate-300">
-                              <span>{label}</span>
-                              {isLowConfidence && (
-                                <span
-                                  title={`Confiance IA : ${Math.round(conf * 100)}%`}
-                                  className="rounded bg-amber-500/20 px-1 text-[9px] font-bold text-amber-300"
-                                >
-                                  {Math.round(conf * 100)}%
-                                </span>
-                              )}
-                            </label>
-                            <input
-                              type="number"
-                              min={0}
-                              name={key}
-                              data-testid={`influence-${key}-input`}
-                              value={draft[key]}
-                              onChange={(e) =>
-                                setMetricDrafts((prev) => ({
-                                  ...prev,
-                                  [m.id]: {
-                                    ...draft,
-                                    [key]: e.target.value,
-                                  },
-                                }))
-                              }
-                              placeholder="—"
-                              className={`w-full rounded-lg border bg-[#090b10] px-2.5 py-1.5 font-mono text-xs text-white focus:outline-none ${
-                                isLowConfidence
-                                  ? "border-amber-500/70 focus:border-amber-400"
-                                  : "border-[#232b3d] focus:border-cyan-500"
-                              }`}
-                            />
-                          </div>
-                        );
-                      })}
-                    </div>
-
-                    {/* Content URL & Spark Code */}
-                    <div className="grid gap-3 sm:grid-cols-2">
-                      <div>
-                        <label className="mb-1 block text-[11px] text-slate-400">
-                          Lien du contenu ({m.contentUrl ?? "non renseigné"})
-                        </label>
-                        <input
-                          type="text"
-                          name="contentUrl"
-                          value={draft.contentUrl}
-                          onChange={(e) =>
-                            setMetricDrafts((prev) => ({
-                              ...prev,
-                              [m.id]: {
-                                ...draft,
-                                contentUrl: e.target.value,
-                              },
-                            }))
-                          }
-                          className="w-full rounded-lg border border-[#232b3d] bg-[#090b10] px-2.5 py-1.5 text-xs text-slate-200 focus:border-cyan-500 focus:outline-none"
-                        />
-                      </div>
-                      <div>
-                        <label className="mb-1 block text-[11px] text-slate-400">
-                          Code Spark Ads ({m.sparkCode ?? "non renseigné"})
-                        </label>
-                        <input
-                          type="text"
-                          name="sparkCode"
-                          value={draft.sparkCode}
-                          onChange={(e) =>
-                            setMetricDrafts((prev) => ({
-                              ...prev,
-                              [m.id]: {
-                                ...draft,
-                                sparkCode: e.target.value,
-                              },
-                            }))
-                          }
-                          className="w-full rounded-lg border border-[#232b3d] bg-[#090b10] px-2.5 py-1.5 font-mono text-xs text-slate-200 focus:border-cyan-500 focus:outline-none"
-                        />
-                      </div>
-                    </div>
-
-                    <div className="flex justify-end">
-                      <button
-                        type="button"
-                        disabled={savingMetricId === m.id}
-                        onClick={() => void handleSaveMetric(m.id)}
-                        className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-1.5 text-xs font-semibold text-white hover:bg-emerald-500 disabled:opacity-50"
-                      >
-                        <CheckCircle2 className="h-3.5 w-3.5" />
-                        {savingMetricId === m.id
-                          ? "Enregistrement..."
-                          : "Valider & Vérifier"}
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </section>
-
-      {/* SECTION 3: Verbatims & 4-Tab Consolidation + .xlsx Export (F22) */}
-      <section className="rounded-xl border border-[#232b3d] bg-[#11151f] p-6 space-y-5">
-        <div className="flex flex-wrap items-center justify-between gap-4 border-b border-[#232b3d] pb-4">
-          <div>
-            <h2 className="text-base font-bold text-white">
-              3. Consolidation 4 Onglets (006.2) &amp; Export Excel
-            </h2>
-            <p className="text-xs text-slate-400">
-              Réconciliation automatique des métriques vérifiées + gestion des
-              verbatims sélectionnés pour les Slides.
-            </p>
-          </div>
-          <div className="flex flex-wrap items-center gap-2.5">
-            <button
-              type="button"
-              disabled={consolidating || !projectId}
-              onClick={() => void handleConsolidate()}
-              data-testid="consolidate-sheets-btn"
-              className="inline-flex items-center gap-2 rounded-lg border border-cyan-500/40 bg-cyan-500/15 px-3.5 py-2 text-xs font-semibold text-cyan-200 hover:bg-cyan-500/25 disabled:opacity-50"
-            >
-              <FileSpreadsheet className="h-4 w-4" />
-              {consolidating
-                ? "Consolidation..."
-                : "Consolider vers Sheets (006.2)"}
-            </button>
-
-            {projectId && (
-              <a
-                href={`/api/projects/${projectId}/reporting/export-xlsx`}
-                download={`reporting_${shell?.activeProject?.codeProjet ?? projectId}.xlsx`}
-                data-testid="export-xlsx-link"
-                className="inline-flex items-center gap-2 rounded-lg bg-[#e11d48] px-4 py-2 text-xs font-semibold text-white hover:bg-[#ff2e58]"
-              >
-                <Download className="h-4 w-4" />
-                Exporter .xlsx
-              </a>
-            )}
-          </div>
-        </div>
-
-        {reportingSheetId && (
-          <div className="flex items-center gap-2 rounded-lg border border-[#232b3d] bg-[#171d2b] px-3 py-2 text-xs text-slate-300">
-            <Layers className="h-4 w-4 text-cyan-400" />
-            <span>
-              Google Sheet 006.2 lié :{" "}
-              <code className="font-mono text-cyan-300">{reportingSheetId}</code>
-            </span>
-          </div>
-        )}
-
-        {/* 4-Tab Bar (All 4 exact tab names rendered simultaneously) */}
-        <div className="flex flex-wrap gap-2 border-b border-[#232b3d] pb-2">
-          {REPORTING_TABS.map((tabName) => {
-            const isActive = activeTab === tabName;
-            return (
+      {/* STEP 1: FORTNITE */}
+      {stepTab === "fortnite" && (
+        <section className="space-y-5 rounded-2xl border border-slate-200/80 bg-white p-6 shadow-[0_1px_2px_rgba(15,23,42,0.04)] dark:border-slate-800 dark:bg-[#111827]">
+          <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-100 pb-4 dark:border-slate-800/80">
+            <div>
+              <h2 className="text-base font-semibold text-slate-900 dark:text-white">
+                Statistiques Portail Créateur Fortnite
+              </h2>
+              <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
+                Importez votre fichier CSV ou Excel (.xlsx) Epic Games.
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2.5">
+              <input
+                type="file"
+                accept=".csv,.xlsx"
+                data-testid="fortnite-file-input"
+                onChange={(e) => setFortniteFile(e.target.files?.[0] ?? null)}
+                className="block text-xs text-slate-600 file:mr-3 file:rounded-xl file:border file:border-slate-200 file:bg-slate-50 file:px-3 file:py-1.5 file:text-xs file:font-medium file:text-slate-700 hover:file:bg-slate-100 dark:text-slate-300 dark:file:border-slate-700 dark:file:bg-slate-800 dark:file:text-slate-200 dark:hover:file:bg-slate-700"
+              />
               <button
-                key={tabName}
                 type="button"
-                onClick={() => setActiveTab(tabName)}
-                className={`rounded-lg px-3.5 py-2 text-xs font-semibold transition ${
-                  isActive
-                    ? "bg-[#e11d48] text-white"
-                    : "border border-[#232b3d] bg-[#171d2b] text-slate-300 hover:bg-[#232b3d]"
-                }`}
+                disabled={uploadingFortnite || !projectId}
+                onClick={() => void handleFortniteUpload()}
+                data-testid="fortnite-import-btn"
+                className="inline-flex items-center gap-1.5 rounded-xl bg-rose-600 px-4 py-2 text-xs font-semibold text-white hover:bg-rose-700 disabled:opacity-50"
               >
-                {tabName}
+                <Upload className="h-3.5 w-3.5" />
+                {uploadingFortnite ? "Import..." : "Importer"}
               </button>
-            );
-          })}
-        </div>
+            </div>
+          </div>
 
-        {/* Tab Preview Panel */}
-        {activeTab === "Synthèse Fortnite" && (
-          <div className="overflow-x-auto rounded-lg border border-[#232b3d]">
-            <table className="w-full text-left text-xs">
-              <thead className="bg-[#171d2b] text-[11px] uppercase text-slate-400">
-                <tr>
-                  <th className="px-3 py-2">Date</th>
-                  <th className="px-3 py-2">Joueurs uniques</th>
-                  <th className="px-3 py-2">Sessions</th>
-                  <th className="px-3 py-2">Temps moyen (s)</th>
-                  <th className="px-3 py-2">Rétention J1 (%)</th>
-                  <th className="px-3 py-2">Pic simultané</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-[#232b3d]/60">
-                {fortniteRows.length === 0 ? (
+          <div className="grid divide-y divide-slate-100 overflow-hidden rounded-xl border border-slate-200/80 bg-slate-50/40 sm:grid-cols-2 lg:grid-cols-5 lg:divide-x lg:divide-y-0 dark:divide-slate-800 dark:border-slate-800 dark:bg-slate-800/30">
+            {[
+              {
+                label: "Joueurs uniques",
+                value: formatFrenchInteger(
+                  fortniteSummary?.totalUniquePlayers ?? 0
+                ),
+              },
+              {
+                label: "Sessions",
+                value: formatFrenchInteger(fortniteSummary?.totalSessions ?? 0),
+              },
+              {
+                label: "Temps moyen",
+                value: `${formatFrenchInteger(fortniteSummary?.avgPlaytimeSec ?? 0)} s`,
+              },
+              {
+                label: "Rétention J1",
+                value: `${fortniteSummary?.avgRetentionD1 ?? 0}%`,
+              },
+              {
+                label: "Pic simultané",
+                value: formatFrenchInteger(
+                  fortniteSummary?.maxPeakConcurrent ?? 0
+                ),
+              },
+            ].map((kpi) => (
+              <div key={kpi.label} className="px-4 py-3.5">
+                <p className="text-[11px] font-medium text-slate-500 dark:text-slate-400">
+                  {kpi.label}
+                </p>
+                <p className="mt-1 font-mono text-xl font-bold tracking-tight text-slate-900 dark:text-white">
+                  {kpi.value}
+                </p>
+              </div>
+            ))}
+          </div>
+
+          {fortniteRows.length > 0 && (
+            <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-800">
+              <table className="w-full text-left text-xs">
+                <thead className="bg-slate-50 text-[11px] text-slate-500 dark:bg-slate-800/60 dark:text-slate-400">
                   <tr>
-                    <td
-                      colSpan={6}
-                      className="px-3 py-4 text-center text-slate-400"
-                    >
-                      Aucune donnée Fortnite importée.
-                    </td>
+                    <th className="px-3.5 py-2.5">Date</th>
+                    <th className="px-3.5 py-2.5">Joueurs uniques</th>
+                    <th className="px-3.5 py-2.5">Sessions</th>
+                    <th className="px-3.5 py-2.5">Temps moyen (s)</th>
+                    <th className="px-3.5 py-2.5">Rétention J1</th>
+                    <th className="px-3.5 py-2.5">Pic simultané</th>
                   </tr>
-                ) : (
-                  fortniteRows.map((r) => (
+                </thead>
+                <tbody className="divide-y divide-slate-100 bg-white dark:divide-slate-800/80 dark:bg-[#111827]">
+                  {fortniteRows.map((r) => (
                     <tr key={r.id}>
-                      <td className="px-3 py-2 font-mono">{r.date}</td>
-                      <td className="px-3 py-2 font-mono">
+                      <td className="px-3.5 py-2 font-mono text-slate-700 dark:text-slate-200">
+                        {r.date}
+                      </td>
+                      <td className="px-3.5 py-2 font-mono">
                         {formatFrenchInteger(r.uniquePlayers)}
                       </td>
-                      <td className="px-3 py-2 font-mono">
+                      <td className="px-3.5 py-2 font-mono">
                         {formatFrenchInteger(r.sessions)}
                       </td>
-                      <td className="px-3 py-2 font-mono">{r.avgPlaytimeSec}</td>
-                      <td className="px-3 py-2 font-mono">
-                        {r.retentionD1 ?? "—"}
+                      <td className="px-3.5 py-2 font-mono">
+                        {r.avgPlaytimeSec}
                       </td>
-                      <td className="px-3 py-2 font-mono">
+                      <td className="px-3.5 py-2 font-mono">
+                        {r.retentionD1 !== null ? `${r.retentionD1}%` : "—"}
+                      </td>
+                      <td className="px-3.5 py-2 font-mono">
                         {formatFrenchInteger(r.peakConcurrent)}
                       </td>
                     </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
-        )}
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+      )}
 
-        {activeTab === "Influence par Talent" && (
-          <div className="overflow-x-auto rounded-lg border border-[#232b3d]">
-            <table className="w-full text-left text-xs">
-              <thead className="bg-[#171d2b] text-[11px] uppercase text-slate-400">
-                <tr>
-                  <th className="px-3 py-2">Talent</th>
-                  <th className="px-3 py-2">Contenus vérifiés</th>
-                  <th className="px-3 py-2">Vues</th>
-                  <th className="px-3 py-2">Likes</th>
-                  <th className="px-3 py-2">Interactions (hors Likes)</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-[#232b3d]/60">
-                {byTalentConsolidated.length === 0 ? (
-                  <tr>
-                    <td
-                      colSpan={5}
-                      className="px-3 py-4 text-center text-slate-400"
-                    >
-                      Aucune métrique Influence vérifiée (verifiedByHuman =
-                      true).
-                    </td>
-                  </tr>
-                ) : (
-                  byTalentConsolidated.map((t) => (
-                    <tr key={t.talentName}>
-                      <td className="px-3 py-2 font-semibold text-white">
-                        {t.talentName}
-                      </td>
-                      <td className="px-3 py-2 font-mono">{t.count}</td>
-                      <td className="px-3 py-2 font-mono">
-                        {formatFrenchInteger(t.views)}
-                      </td>
-                      <td className="px-3 py-2 font-mono">
-                        {formatFrenchInteger(t.likes)}
-                      </td>
-                      <td className="px-3 py-2 font-mono">
-                        {formatFrenchInteger(t.interactions)}
-                      </td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
+      {/* STEP 2: INFLUENCE */}
+      {stepTab === "influence" && (
+        <section className="space-y-5 rounded-2xl border border-slate-200/80 bg-white p-6 shadow-[0_1px_2px_rgba(15,23,42,0.04)] dark:border-slate-800 dark:bg-[#111827]">
+          <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-100 pb-4 dark:border-slate-800/80">
+            <div>
+              <h2 className="text-base font-semibold text-slate-900 dark:text-white">
+                Captures WhatsApp Influence
+              </h2>
+              <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
+                L&apos;IA lit automatiquement les vues, likes et partages — vous
+                validez côte à côte.
+              </p>
+            </div>
+            <button
+              type="button"
+              disabled={!projectId}
+              onClick={() => void handleLoadDriveCandidates()}
+              className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-800 dark:bg-[#111827] dark:text-slate-200 dark:hover:bg-slate-800/70"
+            >
+              <FolderSearch className="h-3.5 w-3.5 text-indigo-600 dark:text-indigo-400" />
+              Importer depuis Drive
+            </button>
           </div>
-        )}
 
-        {activeTab === "Cumulé Réseaux" && (
-          <div className="overflow-x-auto rounded-lg border border-[#232b3d]">
-            <table className="w-full text-left text-xs">
-              <thead className="bg-[#171d2b] text-[11px] uppercase text-slate-400">
-                <tr>
-                  <th className="px-3 py-2">Plateforme</th>
-                  <th className="px-3 py-2">Contenus</th>
-                  <th className="px-3 py-2">Vues</th>
-                  <th className="px-3 py-2">Likes</th>
-                  <th className="px-3 py-2">Interactions</th>
-                  <th className="px-3 py-2">Engagement %</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-[#232b3d]/60">
-                {byPlatformConsolidated.map((p) => (
-                  <tr key={p.platform}>
-                    <td className="px-3 py-2 font-semibold text-white">
-                      {p.label}
-                    </td>
-                    <td className="px-3 py-2 font-mono">{p.count}</td>
-                    <td className="px-3 py-2 font-mono">
-                      {formatFrenchInteger(p.views)}
-                    </td>
-                    <td className="px-3 py-2 font-mono">
-                      {formatFrenchInteger(p.likes)}
-                    </td>
-                    <td className="px-3 py-2 font-mono">
-                      {formatFrenchInteger(p.interactions)}
-                    </td>
-                    <td className="px-3 py-2 font-mono">{p.engagementRate}%</td>
-                  </tr>
-                ))}
-                <tr className="bg-[#171d2b] font-bold text-white">
-                  <td className="px-3 py-2">Total Général</td>
-                  <td className="px-3 py-2 font-mono">
-                    {verifiedMetrics.length}
-                  </td>
-                  <td className="px-3 py-2 font-mono">
-                    {formatFrenchInteger(cumulativeTotals.views)}
-                  </td>
-                  <td className="px-3 py-2 font-mono">
-                    {formatFrenchInteger(cumulativeTotals.likes)}
-                  </td>
-                  <td className="px-3 py-2 font-mono">
-                    {formatFrenchInteger(cumulativeTotals.interactions)}
-                  </td>
-                  <td className="px-3 py-2 font-mono">—</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        )}
-
-        {activeTab === "Verbatims" && (
-          <div className="space-y-4">
-            <div className="grid gap-3 rounded-lg border border-[#232b3d] bg-[#171d2b]/60 p-4 md:grid-cols-6">
+          <div className="grid gap-3 rounded-xl bg-slate-50 p-4 md:grid-cols-6 dark:bg-slate-800/60">
+            <div>
+              <label className="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-300">
+                Talent
+              </label>
               <input
                 type="text"
-                value={verbHandle}
-                onChange={(e) => setVerbHandle(e.target.value)}
-                placeholder="@auteur"
-                className="rounded-lg border border-[#232b3d] bg-[#090b10] px-2.5 py-1.5 text-xs text-white"
+                list="talents-datalist"
+                value={infTalent}
+                onChange={(e) => setInfTalent(e.target.value)}
+                placeholder="ex : Kalut"
+                className="w-full rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-900 dark:border-slate-800 dark:bg-[#111827] dark:text-white"
               />
+              <datalist id="talents-datalist">
+                {talents.map((t) => (
+                  <option key={t} value={t} />
+                ))}
+              </datalist>
+            </div>
+
+            <div>
+              <label className="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-300">
+                Réseau
+              </label>
               <select
-                value={verbPlatform}
+                value={infPlatform}
                 onChange={(e) =>
-                  setVerbPlatform(e.target.value as InfluencePlatform)
+                  setInfPlatform(e.target.value as InfluencePlatform)
                 }
-                className="rounded-lg border border-[#232b3d] bg-[#090b10] px-2.5 py-1.5 text-xs text-white"
+                className="w-full rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-900 dark:border-slate-800 dark:bg-[#111827] dark:text-white"
               >
                 {INFLUENCE_PLATFORMS.map((p) => (
                   <option key={p} value={p}>
@@ -1696,196 +1272,736 @@ export function ReportingDashboard() {
                   </option>
                 ))}
               </select>
-              <input
-                type="text"
-                value={verbTalent}
-                onChange={(e) => setVerbTalent(e.target.value)}
-                placeholder="Talent (optionnel)"
-                className="rounded-lg border border-[#232b3d] bg-[#090b10] px-2.5 py-1.5 text-xs text-white"
-              />
-              <input
-                type="text"
-                value={verbQuote}
-                onChange={(e) => setVerbQuote(e.target.value)}
-                placeholder="Citation de la communauté..."
-                className="md:col-span-2 rounded-lg border border-[#232b3d] bg-[#090b10] px-2.5 py-1.5 text-xs text-white"
-              />
-              <div className="flex items-center gap-2">
-                <input
-                  type="number"
-                  min={0}
-                  value={verbLikes}
-                  onChange={(e) => setVerbLikes(e.target.value)}
-                  className="w-16 rounded-lg border border-[#232b3d] bg-[#090b10] px-2 py-1.5 font-mono text-xs text-white"
-                />
-                <label className="flex items-center gap-1 text-[11px] text-slate-300">
-                  <input
-                    type="checkbox"
-                    checked={verbSelected}
-                    onChange={(e) => setVerbSelected(e.target.checked)}
-                  />
-                  Slides
-                </label>
-                <button
-                  type="button"
-                  disabled={addingVerbatim || !projectId}
-                  onClick={() => void handleAddVerbatim()}
-                  className="rounded-lg bg-cyan-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-cyan-500 disabled:opacity-50"
-                >
-                  Ajouter
-                </button>
-              </div>
             </div>
 
-            <div className="divide-y divide-[#232b3d]/60 rounded-lg border border-[#232b3d]">
-              {verbatims.length === 0 ? (
-                <p className="p-4 text-center text-xs text-slate-400">
-                  Aucun verbatim enregistré.
+            <div>
+              <label className="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-300">
+                Lien vidéo
+              </label>
+              <input
+                type="text"
+                value={infContentUrl}
+                onChange={(e) => setInfContentUrl(e.target.value)}
+                placeholder="https://..."
+                className="w-full rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-900 dark:border-slate-800 dark:bg-[#111827] dark:text-white"
+              />
+            </div>
+
+            <div>
+              <label className="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-300">
+                Code Spark Ads
+              </label>
+              <input
+                type="text"
+                value={infSparkCode}
+                onChange={(e) => setInfSparkCode(e.target.value)}
+                placeholder="Optionnel"
+                className="w-full rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-900 dark:border-slate-800 dark:bg-[#111827] dark:text-white"
+              />
+            </div>
+
+            <div className="flex flex-col justify-end gap-2 md:col-span-2">
+              <input
+                type="file"
+                accept=".png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp"
+                data-testid="influence-file-input"
+                onChange={(e) => {
+                  setInfFile(e.target.files?.[0] ?? null);
+                  setInfDriveFileId("");
+                }}
+                className="block text-xs text-slate-600 file:mr-2 file:rounded-lg file:border file:border-slate-200 file:bg-white file:px-2.5 py-1 file:text-xs dark:text-slate-300"
+              />
+              {driveCandidates.length > 0 && (
+                <select
+                  value={infDriveFileId}
+                  onChange={(e) => {
+                    const chosen = driveCandidates.find(
+                      (c) => c.driveFileId === e.target.value
+                    );
+                    setInfDriveFileId(e.target.value);
+                    setInfFile(null);
+                    if (chosen?.talentHint) setInfTalent(chosen.talentHint);
+                    if (chosen?.platformHint)
+                      setInfPlatform(chosen.platformHint);
+                  }}
+                  className="rounded-xl border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-800 dark:border-slate-800 dark:bg-[#111827] dark:text-slate-100"
+                >
+                  <option value="">— Ou choisir depuis Drive —</option>
+                  {driveCandidates.map((c) => (
+                    <option key={c.driveFileId} value={c.driveFileId}>
+                      {c.talentHint ? `${c.talentHint} / ` : ""}
+                      {c.name}
+                    </option>
+                  ))}
+                </select>
+              )}
+              <button
+                type="button"
+                disabled={uploadingInfluence || !projectId}
+                onClick={() => void handleInfluenceUpload()}
+                data-testid="influence-extract-btn"
+                className="inline-flex items-center justify-center gap-1.5 rounded-xl bg-rose-600 px-4 py-2 text-xs font-semibold text-white hover:bg-rose-700 disabled:opacity-50"
+              >
+                <Sparkles className="h-3.5 w-3.5" />
+                {uploadingInfluence ? "Lecture..." : "Lire la capture"}
+              </button>
+            </div>
+          </div>
+
+          {influenceMetrics.length === 0 ? (
+            <p className="py-8 text-center text-xs text-slate-500 dark:text-slate-400">
+              Aucune capture ajoutée pour le moment.
+            </p>
+          ) : (
+            <div className="space-y-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-xs font-medium text-slate-500 dark:text-slate-400">
+                  {verifiedInfluenceCount}/{influenceMetrics.length} capture(s)
+                  validée(s)
                 </p>
-              ) : (
-                verbatims.map((v) => (
+                <button
+                  type="button"
+                  onClick={() => setUnverifiedOnly((v) => !v)}
+                  className={`rounded-lg px-2.5 py-1 text-xs font-semibold transition-colors ${
+                    unverifiedOnly
+                      ? "bg-rose-50 text-rose-700 dark:bg-rose-500/20 dark:text-rose-300"
+                      : "border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300"
+                  }`}
+                >
+                  À vérifier uniquement (
+                  {influenceMetrics.length - verifiedInfluenceCount})
+                </button>
+              </div>
+              {influenceMetrics
+                .filter((m) => !unverifiedOnly || !m.verifiedByHuman)
+                .map((m) => {
+                const draft = metricDrafts[m.id] ?? metricToDraft(m);
+                const confidenceMap = parseConfidenceMap(m.confidenceJson);
+                const previewSrc =
+                  m.rawFileId && projectId
+                    ? `/api/projects/${projectId}/reporting/preview/${m.rawFileId}`
+                    : null;
+                const platLabel =
+                  PLATFORM_LABELS[m.platform as InfluencePlatform] ??
+                  m.platform;
+
+                const previewEng = computeEngagementRate({
+                  views: toNullableIntInput(draft.views),
+                  likes: toNullableIntInput(draft.likes),
+                  comments: toNullableIntInput(draft.comments),
+                  shares: toNullableIntInput(draft.shares),
+                  reposts: toNullableIntInput(draft.reposts),
+                  saves: toNullableIntInput(draft.saves),
+                });
+
+                const previewInteractions = computeInteractions({
+                  comments: toNullableIntInput(draft.comments),
+                  shares: toNullableIntInput(draft.shares),
+                  reposts: toNullableIntInput(draft.reposts),
+                  saves: toNullableIntInput(draft.saves),
+                });
+
+                const numericFields: Array<{
+                  key: keyof Pick<
+                    EditableMetricDraft,
+                    "views" | "likes" | "comments" | "shares" | "reposts" | "saves"
+                  >;
+                  label: string;
+                }> = [
+                  { key: "views", label: "Vues" },
+                  { key: "likes", label: "Likes" },
+                  { key: "comments", label: "Comms" },
+                  { key: "shares", label: "Partages" },
+                  { key: "reposts", label: "Reposts" },
+                  { key: "saves", label: "Enreg." },
+                ];
+
+                return (
                   <div
-                    key={v.id}
-                    className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 text-xs"
+                    key={m.id}
+                    data-testid={`influence-card-${m.id}`}
+                    className="grid gap-5 rounded-2xl border border-slate-200 bg-slate-50/40 p-4 lg:grid-cols-12 dark:border-slate-800 dark:bg-slate-800/60"
                   >
-                    <div className="space-y-1">
-                      <div className="flex items-center gap-2">
-                        <MessageSquareQuote className="h-3.5 w-3.5 text-cyan-400" />
-                        <span className="font-semibold text-white">
-                          {v.authorHandle}
-                        </span>
-                        <span className="font-mono text-[10px] text-slate-400">
-                          {PLATFORM_LABELS[v.platform as InfluencePlatform] ??
-                            v.platform}
-                          {v.talentName ? ` · ${v.talentName}` : ""}
-                        </span>
-                      </div>
-                      <p className="text-slate-200">&ldquo;{v.quote}&rdquo;</p>
+                    <div
+                      data-testid="influence-preview-pane"
+                      className="flex flex-col items-center justify-center rounded-xl border border-slate-200 bg-white p-3 lg:col-span-4 dark:border-slate-800 dark:bg-[#111827]"
+                    >
+                      {previewSrc ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                          data-testid="influence-screenshot-preview"
+                          src={previewSrc}
+                          alt={`Capture ${m.talentName}`}
+                          className="max-h-64 w-auto rounded object-contain"
+                        />
+                      ) : (
+                        <div className="py-10 text-xs text-slate-400">
+                          Aperçu indisponible
+                        </div>
+                      )}
                     </div>
-                    <label className="flex items-center gap-2 text-[11px] text-slate-300">
-                      <input
-                        type="checkbox"
-                        checked={v.selectedForSlides}
-                        onChange={() => void handleToggleVerbatim(v)}
-                      />
-                      Sélectionné Slides
-                    </label>
+
+                    <div className="space-y-4 lg:col-span-8">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm font-bold text-slate-900 dark:text-white">
+                            {m.talentName}
+                          </span>
+                          <span className="rounded-full bg-slate-200/70 px-2.5 py-0.5 text-[11px] font-medium text-slate-700 dark:text-slate-200">
+                            {platLabel}
+                          </span>
+                          {m.verifiedByHuman ? (
+                            <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2.5 py-0.5 text-[11px] font-semibold text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300">
+                              <CheckCircle2 className="h-3 w-3" />
+                              Validé
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 rounded-full bg-indigo-50 px-2.5 py-0.5 text-[11px] font-semibold text-indigo-700 dark:bg-indigo-500/15 dark:text-indigo-300">
+                              À vérifier
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-3 text-xs text-slate-600 dark:text-slate-300">
+                          <span>
+                            Interactions :{" "}
+                            <strong>
+                              {formatFrenchInteger(previewInteractions)}
+                            </strong>
+                          </span>
+                          <span>
+                            Engagement : <strong>{previewEng}%</strong>
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="grid gap-2.5 sm:grid-cols-3 lg:grid-cols-6">
+                        {numericFields.map(({ key, label }) => {
+                          const conf = confidenceMap[key];
+                          const isLow = typeof conf === "number" && conf < 0.8;
+                          return (
+                            <div key={key}>
+                              <label className="mb-1 block text-[11px] font-medium text-slate-600 dark:text-slate-300">
+                                {label}
+                              </label>
+                              <input
+                                type="number"
+                                min={0}
+                                name={key}
+                                data-testid={`influence-${key}-input`}
+                                value={draft[key]}
+                                onChange={(e) =>
+                                  setMetricDrafts((prev) => ({
+                                    ...prev,
+                                    [m.id]: {
+                                      ...draft,
+                                      [key]: e.target.value,
+                                    },
+                                  }))
+                                }
+                                placeholder="—"
+                                className={`w-full rounded-xl border bg-white px-2.5 py-1.5 font-mono text-xs text-slate-900 focus:outline-none dark:bg-[#111827] dark:text-white ${
+                                  isLow
+                                    ? "border-rose-400 dark:border-rose-500"
+                                    : "border-slate-200 focus:border-indigo-500 dark:border-slate-700"
+                                }`}
+                              />
+                            </div>
+                          );
+                        })}
+                      </div>
+
+                      <div className="flex justify-end">
+                        <button
+                          type="button"
+                          disabled={savingMetricId === m.id}
+                          onClick={() => void handleSaveMetric(m.id)}
+                          className="inline-flex items-center gap-1.5 rounded-xl bg-emerald-600 px-4 py-2 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
+                        >
+                          <CheckCircle2 className="h-3.5 w-3.5" />
+                          {savingMetricId === m.id
+                            ? "Enregistrement..."
+                            : "Valider ces chiffres"}
+                        </button>
+                      </div>
+                    </div>
                   </div>
-                ))
+                );
+              })}
+            </div>
+          )}
+        </section>
+      )}
+
+      {/* STEP 3: CONSOLIDATION & EXCEL */}
+      {stepTab === "consolidate" && (
+        <section className="space-y-5 rounded-2xl border border-slate-200/80 bg-white p-6 shadow-[0_1px_2px_rgba(15,23,42,0.04)] dark:border-slate-800 dark:bg-[#111827]">
+          <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-100 pb-4 dark:border-slate-800/80">
+            <div>
+              <h2 className="text-base font-semibold text-slate-900 dark:text-white">
+                Synthèse consolidée & Export Excel
+              </h2>
+              <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
+                Toutes vos données validées réunies dans un classeur à 4
+                onglets.
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                disabled={consolidating || !projectId}
+                onClick={() => void handleConsolidate()}
+                data-testid="consolidate-sheets-btn"
+                className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50 dark:border-slate-800 dark:bg-[#111827] dark:text-slate-200 dark:hover:bg-slate-800/70"
+              >
+                <FileSpreadsheet className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
+                {consolidating ? "Mise à jour..." : "Envoyer vers Google Sheets"}
+              </button>
+
+              {projectId && (
+                <a
+                  href={`/api/projects/${projectId}/reporting/export-xlsx`}
+                  download={`reporting_${shell?.activeProject?.codeProjet ?? projectId}.xlsx`}
+                  data-testid="export-xlsx-link"
+                  className="inline-flex items-center gap-1.5 rounded-xl bg-rose-600 px-4 py-2 text-xs font-semibold text-white hover:bg-rose-700"
+                >
+                  <Download className="h-4 w-4" />
+                  Télécharger Excel
+                </a>
               )}
             </div>
           </div>
-        )}
-      </section>
 
-      {/* SECTION 4: Branded Slides Generator (006.3) & [EXT] Publish (F23) */}
-      <section className="rounded-xl border border-[#232b3d] bg-[#11151f] p-6 space-y-5">
-        <div className="flex flex-wrap items-center justify-between gap-4 border-b border-[#232b3d] pb-4">
-          <div>
-            <h2 className="text-base font-bold text-white">
-              4. Google Slides Reporting Charté (006.3) &amp; Publication [EXT]
-            </h2>
-            <p className="text-xs text-slate-400">
-              Format 16:9 (9144000×5143500 EMU), charte GamersOrigin / client
-              appliquée, graphique détaché en image fixe lors de la publication
-              [EXT]/04. Reporting Final.
-            </p>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-2.5">
-            <button
-              type="button"
-              disabled={generatingSlides || !projectId}
-              onClick={() => void handleGenerateSlides()}
-              data-testid="generate-slides-btn"
-              className="inline-flex items-center gap-2 rounded-lg bg-[#2543BD] px-4 py-2 text-xs font-semibold text-white hover:bg-[#4C6CFF] disabled:opacity-50"
-            >
-              <Presentation className="h-4 w-4" />
-              {generatingSlides
-                ? "Génération..."
-                : "Générer Slides Reporting (006.3)"}
-            </button>
-
-            {node0063 && (
-              <select
-                name="validationStatus"
-                data-testid="reporting-validation-select"
-                aria-label="Statut de validation 006.3"
-                value={currentValidationStatus}
-                onChange={(e) =>
-                  void handleValidationStatusChange(
-                    e.target.value as
-                      | "BROUILLON_INTERNE"
-                      | "EN_REVUE"
-                      | "VALIDE_CLIENT"
-                  )
-                }
-                className="rounded-lg border border-[#232b3d] bg-[#171d2b] px-3 py-2 font-mono text-xs text-white focus:border-cyan-500 focus:outline-none"
+          {reportingSheetId && (
+            <div className="flex items-center justify-between rounded-xl bg-slate-50 px-4 py-2.5 text-xs text-slate-700 dark:bg-slate-800/60 dark:text-slate-200">
+              <span className="inline-flex items-center gap-2 font-medium">
+                <Layers className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
+                Tableur Google Sheets lié
+              </span>
+              <a
+                href={`https://docs.google.com/spreadsheets/d/${reportingSheetId}/edit`}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-1 font-semibold text-indigo-700 hover:underline dark:text-indigo-300"
               >
-                <option value="BROUILLON_INTERNE">Brouillon Interne</option>
-                <option value="EN_REVUE">En Revue</option>
-                <option value="VALIDE_CLIENT">Validé Client</option>
-              </select>
-            )}
-
-            <button
-              type="button"
-              disabled={publishingExt || !projectId}
-              onClick={() => void handlePublishExt()}
-              data-testid="publish-ext-btn"
-              className="inline-flex items-center gap-2 rounded-lg bg-[#e11d48] px-4 py-2 text-xs font-semibold text-white hover:bg-[#ff2e58] disabled:opacity-50"
-            >
-              <ExternalLink className="h-4 w-4" />
-              {publishingExt ? "Publication..." : "Publier vers [EXT]"}
-            </button>
-          </div>
-        </div>
-
-        {/* Status Bar */}
-        <div className="flex flex-wrap items-center gap-3 text-xs">
-          {slidesFileId && (
-            <span className="rounded-lg border border-[#232b3d] bg-[#171d2b] px-3 py-1.5 font-mono text-slate-200">
-              Slides généré (006.3) : {slidesFileId}
-            </span>
+                Ouvrir le Google Sheet
+                <ExternalLink className="h-3.5 w-3.5" />
+              </a>
+            </div>
           )}
-          {publishedExtMessage && (
-            <span
-              data-testid="published-ext-status"
-              className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/40 bg-emerald-950/30 px-3 py-1.5 font-semibold text-emerald-300"
-            >
-              <CheckCircle2 className="h-4 w-4" />
-              {publishedExtMessage}
-            </span>
-          )}
-        </div>
 
-        {/* Generated Slide Deck Preview */}
-        {generatedSlides.length > 0 && (
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {generatedSlides.map((slide) => (
-              <div
-                key={slide.objectId}
-                className="rounded-xl border border-[#3A3566] bg-[#141031] p-4 space-y-1.5"
+          {/* 4 Sub-tabs */}
+          <div className="flex flex-wrap gap-1.5">
+            {REPORTING_TABS.map((tabName) => (
+              <button
+                key={tabName}
+                type="button"
+                onClick={() => setActiveTab(tabName)}
+                className={`rounded-xl px-3.5 py-1.5 text-xs font-semibold transition-colors ${
+                  activeTab === tabName
+                    ? "bg-slate-900 text-white dark:bg-indigo-600"
+                    : "bg-slate-100 text-slate-600 hover:bg-slate-200/70 dark:bg-slate-800 dark:text-slate-300"
+                }`}
               >
-                <div className="flex items-center justify-between text-[10px] font-mono text-[#4C6CFF]">
-                  <span>
-                    Slide {slide.index} · {slide.type}
-                  </span>
-                </div>
-                <h3 className="text-sm font-bold text-white">{slide.title}</h3>
-                {slide.subtitle && (
-                  <p className="text-[11px] font-semibold text-[#EFF85D]">
-                    {slide.subtitle}
-                  </p>
-                )}
-                <p className="text-xs leading-relaxed text-slate-300">
-                  {slide.content}
-                </p>
-              </div>
+                {tabName}
+              </button>
             ))}
           </div>
-        )}
-      </section>
+
+          {activeTab === "Synthèse Fortnite" && (
+            <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-800">
+              <table className="w-full text-left text-xs">
+                <thead className="bg-slate-50 text-[11px] text-slate-500 dark:bg-slate-800/60 dark:text-slate-400">
+                  <tr>
+                    <th className="px-3.5 py-2">Date</th>
+                    <th className="px-3.5 py-2">Joueurs</th>
+                    <th className="px-3.5 py-2">Sessions</th>
+                    <th className="px-3.5 py-2">Temps moyen (s)</th>
+                    <th className="px-3.5 py-2">Rétention J1</th>
+                    <th className="px-3.5 py-2">Pic simultané</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 bg-white dark:divide-slate-800/80 dark:bg-[#111827]">
+                  {fortniteRows.length === 0 ? (
+                    <tr>
+                      <td
+                        colSpan={6}
+                        className="px-4 py-6 text-center text-slate-400"
+                      >
+                        Aucune donnée Fortnite importée.
+                      </td>
+                    </tr>
+                  ) : (
+                    fortniteRows.map((r) => (
+                      <tr key={r.id}>
+                        <td className="px-3.5 py-2 font-mono">{r.date}</td>
+                        <td className="px-3.5 py-2 font-mono">
+                          {formatFrenchInteger(r.uniquePlayers)}
+                        </td>
+                        <td className="px-3.5 py-2 font-mono">
+                          {formatFrenchInteger(r.sessions)}
+                        </td>
+                        <td className="px-3.5 py-2 font-mono">
+                          {r.avgPlaytimeSec}
+                        </td>
+                        <td className="px-3.5 py-2 font-mono">
+                          {r.retentionD1 ?? "—"}
+                        </td>
+                        <td className="px-3.5 py-2 font-mono">
+                          {formatFrenchInteger(r.peakConcurrent)}
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {activeTab === "Influence par Talent" && (
+            <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-800">
+              <table className="w-full text-left text-xs">
+                <thead className="bg-slate-50 text-[11px] text-slate-500 dark:bg-slate-800/60 dark:text-slate-400">
+                  <tr>
+                    <th className="px-3.5 py-2">Talent</th>
+                    <th className="px-3.5 py-2">Contenus</th>
+                    <th className="px-3.5 py-2">Vues</th>
+                    <th className="px-3.5 py-2">Likes</th>
+                    <th className="px-3.5 py-2">Interactions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 bg-white dark:divide-slate-800/80 dark:bg-[#111827]">
+                  {byTalentConsolidated.length === 0 ? (
+                    <tr>
+                      <td
+                        colSpan={5}
+                        className="px-4 py-6 text-center text-slate-400"
+                      >
+                        Validez vos captures Influence à l&apos;étape 2 pour les
+                        voir apparaître ici.
+                      </td>
+                    </tr>
+                  ) : (
+                    byTalentConsolidated.map((t) => (
+                      <tr key={t.talentName}>
+                        <td className="px-3.5 py-2 font-semibold text-slate-900 dark:text-white">
+                          {t.talentName}
+                        </td>
+                        <td className="px-3.5 py-2 font-mono">{t.count}</td>
+                        <td className="px-3.5 py-2 font-mono">
+                          {formatFrenchInteger(t.views)}
+                        </td>
+                        <td className="px-3.5 py-2 font-mono">
+                          {formatFrenchInteger(t.likes)}
+                        </td>
+                        <td className="px-3.5 py-2 font-mono">
+                          {formatFrenchInteger(t.interactions)}
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {activeTab === "Cumulé Réseaux" && (
+            <div className="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-800">
+              <table className="w-full text-left text-xs">
+                <thead className="bg-slate-50 text-[11px] text-slate-500 dark:bg-slate-800/60 dark:text-slate-400">
+                  <tr>
+                    <th className="px-3.5 py-2">Réseau</th>
+                    <th className="px-3.5 py-2">Contenus</th>
+                    <th className="px-3.5 py-2">Vues</th>
+                    <th className="px-3.5 py-2">Likes</th>
+                    <th className="px-3.5 py-2">Interactions</th>
+                    <th className="px-3.5 py-2">Engagement</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 bg-white dark:divide-slate-800/80 dark:bg-[#111827]">
+                  {byPlatformConsolidated.map((p) => (
+                    <tr key={p.platform}>
+                      <td className="px-3.5 py-2 font-semibold text-slate-900 dark:text-white">
+                        {p.label}
+                      </td>
+                      <td className="px-3.5 py-2 font-mono">{p.count}</td>
+                      <td className="px-3.5 py-2 font-mono">
+                        {formatFrenchInteger(p.views)}
+                      </td>
+                      <td className="px-3.5 py-2 font-mono">
+                        {formatFrenchInteger(p.likes)}
+                      </td>
+                      <td className="px-3.5 py-2 font-mono">
+                        {formatFrenchInteger(p.interactions)}
+                      </td>
+                      <td className="px-3.5 py-2 font-mono">
+                        {p.engagementRate}%
+                      </td>
+                    </tr>
+                  ))}
+                  <tr className="bg-slate-50 font-bold text-slate-900 dark:bg-slate-800/60 dark:text-white">
+                    <td className="px-3.5 py-2">Total</td>
+                    <td className="px-3.5 py-2 font-mono">
+                      {verifiedMetrics.length}
+                    </td>
+                    <td className="px-3.5 py-2 font-mono">
+                      {formatFrenchInteger(cumulativeTotals.views)}
+                    </td>
+                    <td className="px-3.5 py-2 font-mono">
+                      {formatFrenchInteger(cumulativeTotals.likes)}
+                    </td>
+                    <td className="px-3.5 py-2 font-mono">
+                      {formatFrenchInteger(cumulativeTotals.interactions)}
+                    </td>
+                    <td className="px-3.5 py-2 font-mono">
+                      {cumulativeTotals.views > 0
+                        ? `${computeEngagementRate({
+                            views: cumulativeTotals.views,
+                            likes: cumulativeTotals.likes,
+                            comments: cumulativeTotals.interactions,
+                            shares: 0,
+                            reposts: 0,
+                            saves: 0,
+                          }) ?? 0}%`
+                        : "—"}
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {activeTab === "Verbatims" && (
+            <div className="space-y-4">
+              <div className="grid gap-2.5 rounded-xl bg-slate-50 p-4 md:grid-cols-6 dark:bg-slate-800/60">
+                <input
+                  type="text"
+                  value={verbHandle}
+                  onChange={(e) => setVerbHandle(e.target.value)}
+                  placeholder="@auteur"
+                  className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-900 dark:border-slate-800 dark:bg-[#111827] dark:text-white"
+                />
+                <select
+                  value={verbPlatform}
+                  onChange={(e) =>
+                    setVerbPlatform(e.target.value as InfluencePlatform)
+                  }
+                  className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-900 dark:border-slate-800 dark:bg-[#111827] dark:text-white"
+                >
+                  {INFLUENCE_PLATFORMS.map((p) => (
+                    <option key={p} value={p}>
+                      {PLATFORM_LABELS[p]}
+                    </option>
+                  ))}
+                </select>
+                <input
+                  type="text"
+                  value={verbTalent}
+                  onChange={(e) => setVerbTalent(e.target.value)}
+                  placeholder="Talent (optionnel)"
+                  className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-900 dark:border-slate-800 dark:bg-[#111827] dark:text-white"
+                />
+                <input
+                  type="text"
+                  value={verbQuote}
+                  onChange={(e) => setVerbQuote(e.target.value)}
+                  placeholder="Commentaire positif de la communauté..."
+                  className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-900 md:col-span-2 dark:border-slate-800 dark:bg-[#111827] dark:text-white"
+                />
+                <div className="flex items-center gap-2">
+                  <input
+                    type="number"
+                    min={0}
+                    value={verbLikes}
+                    onChange={(e) => setVerbLikes(e.target.value)}
+                    className="w-16 rounded-xl border border-slate-200 bg-white px-2 py-1.5 font-mono text-xs text-slate-900 dark:border-slate-800 dark:bg-[#111827] dark:text-white"
+                  />
+                  <label className="flex items-center gap-1 text-[11px] text-slate-600 dark:text-slate-300">
+                    <input
+                      type="checkbox"
+                      checked={verbSelected}
+                      onChange={(e) => setVerbSelected(e.target.checked)}
+                      className="accent-rose-600"
+                    />
+                    Slides
+                  </label>
+                  <button
+                    type="button"
+                    disabled={addingVerbatim || !projectId}
+                    onClick={() => void handleAddVerbatim()}
+                    className="rounded-xl bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-800 disabled:opacity-50 dark:bg-indigo-600 dark:hover:bg-indigo-500"
+                  >
+                    Ajouter
+                  </button>
+                </div>
+              </div>
+
+              <div className="divide-y divide-slate-100 rounded-xl border border-slate-200 dark:divide-slate-800/80 dark:border-slate-800">
+                {verbatims.length === 0 ? (
+                  <p className="p-6 text-center text-xs text-slate-400">
+                    Aucun commentaire enregistré.
+                  </p>
+                ) : (
+                  verbatims.map((v) => (
+                    <div
+                      key={v.id}
+                      className="flex flex-wrap items-center justify-between gap-3 bg-white px-4 py-3 text-xs dark:bg-[#111827]"
+                    >
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-2">
+                          <MessageSquareQuote className="h-3.5 w-3.5 text-indigo-600 dark:text-indigo-400" />
+                          <span className="font-semibold text-slate-900 dark:text-white">
+                            {v.authorHandle}
+                          </span>
+                          <span className="text-[11px] text-slate-400">
+                            {PLATFORM_LABELS[v.platform as InfluencePlatform] ??
+                              v.platform}
+                            {v.talentName ? ` · ${v.talentName}` : ""}
+                          </span>
+                        </div>
+                        <p className="text-slate-700 dark:text-slate-200">« {v.quote} »</p>
+                      </div>
+                      <label className="flex cursor-pointer items-center gap-2 text-xs text-slate-600 dark:text-slate-300">
+                        <input
+                          type="checkbox"
+                          checked={v.selectedForSlides}
+                          onChange={() => void handleToggleVerbatim(v)}
+                          className="accent-rose-600"
+                        />
+                        Inclure dans Slides
+                      </label>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          )}
+        </section>
+      )}
+
+      {/* STEP 4: SLIDES & PUBLISH */}
+      {stepTab === "slides" && (
+        <section className="space-y-5 rounded-2xl border border-slate-200/80 bg-white p-6 shadow-[0_1px_2px_rgba(15,23,42,0.04)] dark:border-slate-800 dark:bg-[#111827]">
+          <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-100 pb-4 dark:border-slate-800/80">
+            <div>
+              <h2 className="text-base font-semibold text-slate-900 dark:text-white">
+                Présentation Google Slides & Publication Client
+              </h2>
+              <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
+                Générez la présentation chartée puis publiez-la dans
+                l&apos;espace client une fois relue.
+              </p>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                disabled={generatingSlides || !projectId}
+                onClick={() => void handleGenerateSlides()}
+                data-testid="generate-slides-btn"
+                className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50 dark:border-slate-800 dark:bg-[#111827] dark:text-slate-200 dark:hover:bg-slate-800/70"
+              >
+                <Presentation className="h-4 w-4 text-indigo-600 dark:text-indigo-400" />
+                {generatingSlides ? "Création..." : "Générer les Slides"}
+              </button>
+
+              {node0063 && (
+                <select
+                  name="validationStatus"
+                  data-testid="reporting-validation-select"
+                  aria-label="Statut de validation du reporting"
+                  value={currentValidationStatus}
+                  onChange={(e) =>
+                    void handleValidationStatusChange(
+                      e.target.value as
+                        | "BROUILLON_INTERNE"
+                        | "EN_REVUE"
+                        | "VALIDE_CLIENT"
+                    )
+                  }
+                  className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-700 dark:border-slate-800 dark:bg-[#111827] dark:text-slate-200"
+                >
+                  <option value="BROUILLON_INTERNE">Brouillon interne</option>
+                  <option value="EN_REVUE">En relecture</option>
+                  <option value="VALIDE_CLIENT">Validé client</option>
+                </select>
+              )}
+
+              <button
+                type="button"
+                disabled={
+                  publishingExt ||
+                  !projectId ||
+                  !slidesFileId ||
+                  currentValidationStatus !== "VALIDE_CLIENT"
+                }
+                title={
+                  !slidesFileId
+                    ? "Générez d'abord les Slides avant de publier"
+                    : currentValidationStatus !== "VALIDE_CLIENT"
+                      ? "Passez le statut sur « Validé client » pour activer la publication"
+                      : "Copier les Slides validées dans l'espace client"
+                }
+                onClick={() => void handlePublishExt()}
+                data-testid="publish-ext-btn"
+                className="inline-flex items-center gap-1.5 rounded-xl bg-rose-600 px-4 py-2 text-xs font-semibold text-white hover:bg-rose-700 disabled:cursor-not-allowed disabled:opacity-45"
+              >
+                <ExternalLink className="h-4 w-4" />
+                {publishingExt ? "Publication..." : "Publier pour le client"}
+              </button>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-3 text-xs">
+            {slidesFileId && (
+              <a
+                href={`https://docs.google.com/presentation/d/${slidesFileId}/edit`}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-2 font-semibold text-slate-800 hover:bg-slate-100 dark:border-slate-800 dark:bg-slate-800/60 dark:text-slate-100 dark:hover:bg-slate-800"
+              >
+                <Presentation className="h-4 w-4 text-indigo-600 dark:text-indigo-400" />
+                Ouvrir les Google Slides
+                <ExternalLink className="h-3.5 w-3.5 text-slate-400" />
+              </a>
+            )}
+            {publishedExtMessage && (
+              <span
+                data-testid="published-ext-status"
+                className="inline-flex items-center gap-1.5 rounded-xl bg-emerald-50 px-3.5 py-2 font-semibold text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300"
+              >
+                <CheckCircle2 className="h-4 w-4" />
+                {publishedExtMessage}
+              </span>
+            )}
+          </div>
+
+          {generatedSlides.length > 0 && (
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              {generatedSlides.map((slide) => (
+                <div
+                  key={slide.objectId}
+                  className="space-y-1.5 rounded-xl border border-slate-200 bg-slate-50/70 p-4 dark:border-slate-800 dark:bg-slate-800/60"
+                >
+                  <span className="text-[10px] font-semibold text-indigo-600 uppercase dark:text-indigo-400">
+                    Slide {slide.index}
+                  </span>
+                  <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+                    {slide.title}
+                  </h3>
+                  {slide.subtitle && (
+                    <p className="text-xs font-medium text-rose-600 dark:text-rose-400">
+                      {slide.subtitle}
+                    </p>
+                  )}
+                  <p className="text-xs leading-relaxed text-slate-600 dark:text-slate-300">
+                    {slide.content}
+                  </p>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+      )}
     </div>
   );
 }

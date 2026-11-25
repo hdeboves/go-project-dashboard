@@ -304,10 +304,13 @@ describe("M2 1-Click Invoice Validation Pipeline (Drive 001.3, Sheet Cumulation 
       subject: "Facture | Studio Alpha - Acompte Map | CP 326077",
       attachmentNames: ["2026-09-10_326077_StudioAlpha_1000EUR.pdf"],
     });
-    expect(drafts[0].cc?.join(", ")).toContain("Souléimane");
+    expect(drafts[0].cc?.join(", ")).toContain("Souleimane <souleimane@gamersorigin.com>");
     expect(drafts[0].cc?.join(", ")).toContain("Louis");
     expect(drafts[0].cc?.join(", ")).toContain("Paul");
     expect(drafts[0].cc?.every((c) => c.includes("@"))).toBe(true);
+    expect(
+      drafts[0].cc?.every((c) => /^[\x20-\x7e]+$/.test(c))
+    ).toBe(true);
 
     // Partial failure test on Invoice 2: Drive succeeds, Sheet throws -> retry skips Drive and does NOT double-count HT
     failSheetOnce = true;
@@ -385,6 +388,148 @@ describe("M2 1-Click Invoice Validation Pipeline (Drive 001.3, Sheet Cumulation 
         invoiceId: dupInv.id,
       })
     ).rejects.toThrow(AppHttpError);
+
+    fs.rmSync(path.join(process.cwd(), ".data", "invoices", project.id), {
+      recursive: true,
+      force: true,
+    });
+  });
+
+  it("propagates Sheets getSpreadsheet errors without falling back to sheetId=0, recomputes amountTtc proportionally, and logs CP_CONFLICT_OVERRIDDEN", async () => {
+    const project = await prisma.project.create({
+      data: {
+        codeProjet: "326055",
+        client: "Caisse d'Épargne",
+        nomJeu: "Fortnite",
+        isSandbox: true,
+        budgetSheetId: "sbx_sheet_55",
+      },
+    });
+
+    const line = await prisma.budgetLine.create({
+      data: {
+        projectId: project.id,
+        category: "PRODUCTION",
+        objet: "Sonorisation",
+        expenseType: "Externe",
+        saleTotalHt: 5000,
+        preOpTotalHt: 3000,
+        sheetRowIndex: 15,
+      },
+    });
+
+    const inv = await prisma.invoice.create({
+      data: {
+        projectId: project.id,
+        budgetLineId: line.id,
+        originalFilename: "son.pdf",
+        vendorName: "Audio Lab",
+        invoiceNumber: "AUD-10",
+        invoiceDate: "2026-10-01",
+        amountHt: 1000,
+        tvaAmount: 200,
+        amountTtc: 1200,
+        invoiceType: "UNIQUE",
+        prestationLabel: "Mixage",
+        status: "PENDING_VALIDATION",
+      },
+    });
+    await stageInvoicePdf(project.id, inv.id, makePdf());
+
+    const gateway = createInMemoryGoogleDouble();
+    let failGetSpreadsheetOnce = true;
+    const sheetUpdates: Array<{ range: string; values: unknown[][] }> = [];
+    const cellNotes: Array<{ sheetId: number; rowIndex: number; note: string }> = [];
+
+    gateway.sheets.getSpreadsheet = async () => {
+      if (failGetSpreadsheetOnce) {
+        failGetSpreadsheetOnce = false;
+        throw new Error("Transient getSpreadsheet 503");
+      }
+      return {
+        sheets: [{ properties: { sheetId: 1432840320, title: "Postes de dépenses" } }],
+      };
+    };
+    gateway.sheets.updateValues = async (p) => {
+      sheetUpdates.push({ range: p.range, values: p.values });
+    };
+    gateway.sheets.updateCellNote = async (p) => {
+      cellNotes.push({ sheetId: p.sheetId, rowIndex: p.rowIndex, note: p.note });
+    };
+
+    // Edit amountHt -> 1500 without amountTtc; getSpreadsheet fails cleanly before updateValues/updateCellNote
+    await expect(
+      validateInvoicePipeline({
+        prisma,
+        getGoogleGateway: async () => gateway,
+        projectId: project.id,
+        invoiceId: inv.id,
+        rawInput: { amountHt: 1500 },
+      })
+    ).rejects.toThrow("Transient getSpreadsheet 503");
+
+    expect(sheetUpdates).toHaveLength(0);
+    expect(cellNotes).toHaveLength(0);
+
+    const midInv = await prisma.invoice.findUniqueOrThrow({ where: { id: inv.id } });
+    expect(midInv.stepDriveDone).toBe(true);
+    expect(midInv.stepSheetDone).toBe(false);
+    expect(midInv.amountHt).toBe(1500);
+    expect(midInv.amountTtc).toBe(1800); // Proportional 1500 * (1200/1000)
+    expect(midInv.tvaAmount).toBe(300);
+
+    const driveCountBeforeRetry = gateway.drive.createCalls.length;
+
+    // Retry completes cleanly without duplicate Drive upload and uses real sheetId 1432840320
+    const retried = await validateInvoicePipeline({
+      prisma,
+      getGoogleGateway: async () => gateway,
+      projectId: project.id,
+      invoiceId: inv.id,
+    });
+
+    expect(retried.invoice.status).toBe("VALIDATED");
+    expect(gateway.drive.createCalls.length).toBe(driveCountBeforeRetry);
+    expect(cellNotes[0].sheetId).toBe(1432840320);
+
+    const reloadedLine = await prisma.budgetLine.findUniqueOrThrow({ where: { id: line.id } });
+    expect(reloadedLine.postOpTotalHt).toBe(1500);
+
+    // If overrideCpConflict: true is explicitly passed via API, CP_CONFLICT_OVERRIDDEN is audited
+    const conflictInv = await prisma.invoice.create({
+      data: {
+        projectId: project.id,
+        budgetLineId: line.id,
+        originalFilename: "override.pdf",
+        vendorName: "Other",
+        invoiceNumber: "OVR-1",
+        invoiceDate: "2026-10-05",
+        amountHt: 100,
+        tvaAmount: 20,
+        amountTtc: 120,
+        detectedCodeProjet: "326018",
+        cpConflict: true,
+        status: "CONFLICT_BLOCKED",
+      },
+    });
+    await stageInvoicePdf(project.id, conflictInv.id, makePdf());
+
+    await validateInvoicePipeline({
+      prisma,
+      getGoogleGateway: async () => gateway,
+      projectId: project.id,
+      invoiceId: conflictInv.id,
+      rawInput: { overrideCpConflict: true },
+    });
+
+    const overrideAudit = await prisma.auditLog.findFirst({
+      where: {
+        projectId: project.id,
+        action: "CP_CONFLICT_OVERRIDDEN",
+        targetId: conflictInv.id,
+      },
+    });
+    expect(overrideAudit).not.toBeNull();
 
     fs.rmSync(path.join(process.cwd(), ".data", "invoices", project.id), {
       recursive: true,
