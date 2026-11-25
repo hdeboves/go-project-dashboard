@@ -4,12 +4,14 @@ const globalForPrisma = globalThis as unknown as {
   prisma?: PrismaClient;
 };
 
+const runtimeDbUrl = process.env.VITEST
+  ? process.env.DATABASE_URL
+  : process.env.DATABASE_URL_POOLED || process.env.DATABASE_URL;
+
 export const prisma =
   globalForPrisma.prisma ??
   new PrismaClient({
-    ...(process.env.VITEST && process.env.DATABASE_URL
-      ? { datasources: { db: { url: process.env.DATABASE_URL } } }
-      : {}),
+    ...(runtimeDbUrl ? { datasources: { db: { url: runtimeDbUrl } } } : {}),
     log: process.env.NODE_ENV === "development" ? ["warn", "error"] : ["error"],
   });
 

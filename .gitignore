@@ -1,10 +1,12 @@
 node_modules/
 .next/
+.vercel/
 out/
 build/
 .env
 .env.local
 .env.*.local
+.env.vercel*
 .data/
 *.db
 *.db-*
@@ -21,3 +23,6 @@ test-results/
 playwright-report/
 next-env.d.ts
 tsconfig.tsbuildinfo
+
+.vercel
+.env*
