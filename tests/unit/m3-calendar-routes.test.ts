@@ -1,8 +1,4 @@
-import { execFileSync } from "node:child_process";
 import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
-import { PrismaClient } from "@prisma/client";
 import { NextRequest } from "next/server";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { provisionProjectCalendar } from "@/lib/calendar/calendar-service";
@@ -13,7 +9,14 @@ import {
   createInMemoryGoogleDouble,
 } from "../doubles/in-memory-google";
 
-const hoisted = vi.hoisted(() => {
+// vi.hoisted runs before static imports are initialised, so its dependencies
+// must be loaded dynamically inside the factory.
+const hoisted = await vi.hoisted(async () => {
+  const { execFileSync } = await import("node:child_process");
+  const fs = await import("node:fs");
+  const os = await import("node:os");
+  const path = await import("node:path");
+  const { PrismaClient } = await import("@prisma/client");
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "go-m3-cal-routes-"));
   const dbPath = path.join(tempDir, "test.db");
   const baseDb = path.join(process.cwd(), "prisma", "dev.db");
