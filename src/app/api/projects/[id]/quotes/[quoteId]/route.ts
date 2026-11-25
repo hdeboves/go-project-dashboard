@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { toErrorResponse } from "@/lib/api-error";
@@ -58,6 +59,20 @@ export async function PATCH(
           : existing.amountTtc;
 
     await prisma.$transaction(async (tx) => {
+      if (input.budgetLineId) {
+        const bl = await tx.budgetLine.findUnique({
+          where: { id: input.budgetLineId },
+          select: { id: true, projectId: true },
+        });
+        if (!bl || bl.projectId !== id) {
+          throw new AppHttpError(
+            400,
+            "INVALID_BUDGET_LINE",
+            "Poste budgétaire introuvable pour ce projet."
+          );
+        }
+      }
+
       await tx.quote.update({
         where: { id: quoteId },
         data: {
@@ -150,6 +165,9 @@ export async function DELETE(
     }
 
     await prisma.quote.delete({ where: { id: quoteId } });
+    if (existing.localPdfPath) {
+      await fs.promises.unlink(existing.localPdfPath).catch(() => undefined);
+    }
     await prisma.auditLog.create({
       data: {
         projectId: id,

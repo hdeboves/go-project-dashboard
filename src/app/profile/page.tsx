@@ -3,20 +3,15 @@
 import {
   Check,
   Dices,
-  FileSpreadsheet,
-  GanttChartSquare,
   LogIn,
   LogOut,
-  Plus,
-  RotateCcw,
   Save,
   ShieldCheck,
-  Sparkles,
-  Trash2,
   UserCheck,
 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { AvatarDisplay } from "@/components/AvatarDisplay";
+import { TemplatesQuickLinksCard } from "@/components/templates/TemplatesQuickLinksCard";
 import {
   AVATAR_BG_OPTIONS,
   AVATAR_OPTIONS,
@@ -25,13 +20,6 @@ import {
   getAvatarMeta,
   getRandomAvatar,
 } from "@/lib/avatars";
-import {
-  PROJECT_CATEGORIES,
-  PROJECT_CATEGORY_META,
-  type BlankBudgetTemplateLine,
-  type BlankRetroTemplateTask,
-  type ProjectCategory,
-} from "@/lib/templates/project-templates";
 import { showToast } from "@/lib/toast";
 
 interface UserProfile {
@@ -44,13 +32,7 @@ interface UserProfile {
   avatarBg: string;
 }
 
-interface TemplateCategoryPayload {
-  category: ProjectCategory;
-  budgetLines: BlankBudgetTemplateLine[];
-}
-
 export default function ProfilePage() {
-  const [activeTab, setActiveTab] = useState<"profile" | "templates">("profile");
   const [user, setUser] = useState<UserProfile | null>(null);
   const [users, setUsers] = useState<UserProfile[]>([]);
   const [loading, setLoading] = useState(true);
@@ -67,40 +49,10 @@ export default function ProfilePage() {
   const [avatarBg, setAvatarBg] = useState(DEFAULT_AVATAR_BG);
   const [savingProfile, setSavingProfile] = useState(false);
 
-  // Templates editor
-  const [selectedTemplateTarget, setSelectedTemplateTarget] = useState<
-    ProjectCategory | "RETRO_GLOBAL"
-  >("JEU");
-  const [budgetTemplates, setBudgetTemplates] = useState<
-    Record<ProjectCategory, BlankBudgetTemplateLine[]>
-  >({
-    JEU: [],
-    YOUTUBE: [],
-    EVENEMENT: [],
-    SPONSOR: [],
-  });
-  const [retroTasks, setRetroTasks] = useState<BlankRetroTemplateTask[]>([]);
-  const [savingTemplate, setSavingTemplate] = useState(false);
-
-  // New blank budget line inputs
-  const [newLineCat, setNewLineCat] = useState("PRODUCTION");
-  const [newLineObjet, setNewLineObjet] = useState("");
-  const [newLineType, setNewLineType] = useState<
-    "Externe" | "RH Internes" | "Amortissement"
-  >("Externe");
-
-  // New blank retro task inputs
-  const [newRetroPhase, setNewRetroPhase] = useState("3. Production");
-  const [newRetroEtape, setNewRetroEtape] = useState("Réalisation");
-  const [newRetroTache, setNewRetroTache] = useState("");
-
   const loadAll = useCallback(async () => {
     setLoading(true);
     try {
-      const [sessionRes, tplRes] = await Promise.all([
-        fetch("/api/auth/session", { cache: "no-store" }),
-        fetch("/api/templates", { cache: "no-store" }),
-      ]);
+      const sessionRes = await fetch("/api/auth/session", { cache: "no-store" });
       if (sessionRes.ok) {
         const sJson = (await sessionRes.json()) as {
           user: UserProfile | null;
@@ -114,23 +66,6 @@ export default function ProfilePage() {
           setAvatarId(sJson.user.avatarId);
           setAvatarBg(sJson.user.avatarBg);
         }
-      }
-      if (tplRes.ok) {
-        const tJson = (await tplRes.json()) as {
-          categories: TemplateCategoryPayload[];
-          retroTasks: BlankRetroTemplateTask[];
-        };
-        const map: Record<ProjectCategory, BlankBudgetTemplateLine[]> = {
-          JEU: [],
-          YOUTUBE: [],
-          EVENEMENT: [],
-          SPONSOR: [],
-        };
-        for (const item of tJson.categories ?? []) {
-          map[item.category] = item.budgetLines;
-        }
-        setBudgetTemplates(map);
-        setRetroTasks(tJson.retroTasks ?? []);
       }
     } finally {
       setLoading(false);
@@ -224,98 +159,29 @@ export default function ProfilePage() {
     }
   }
 
-  async function handleSaveTemplate() {
-    setSavingTemplate(true);
-    try {
-      const payload =
-        selectedTemplateTarget === "RETRO_GLOBAL"
-          ? { target: "RETRO_GLOBAL", retroTasks }
-          : {
-              target: selectedTemplateTarget,
-              budgetLines: budgetTemplates[selectedTemplateTarget],
-            };
-      const res = await fetch("/api/templates", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      if (res.ok) {
-        showToast("Modèle vierge enregistré !");
-        await loadAll();
-      } else {
-        showToast("Impossible d'enregistrer le modèle.", "error");
-      }
-    } finally {
-      setSavingTemplate(false);
-    }
-  }
-
-  async function handleResetTemplate() {
-    setSavingTemplate(true);
-    try {
-      const res = await fetch("/api/templates", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ target: selectedTemplateTarget, reset: true }),
-      });
-      if (res.ok) {
-        showToast("Modèle par défaut restauré.", "info");
-        await loadAll();
-      }
-    } finally {
-      setSavingTemplate(false);
-    }
-  }
-
   const currentAvatarMeta = getAvatarMeta(avatarId);
 
   return (
-    <div className="mx-auto max-w-5xl space-y-6">
+    <div className="mx-auto max-w-6xl space-y-6">
       {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-white">
-            Mon profil, avatars & modèles vierges
+            Mon profil &amp; Avatar
           </h1>
           <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-            Personnalisez votre avatar, gérez votre session pour isoler vos
-            projets et ajustez vos modèles types par catégorie.
+            Personnalisez votre avatar mignon et gérez votre session pour isoler
+            vos projets.
           </p>
-        </div>
-
-        <div className="inline-flex rounded-xl border border-slate-200 bg-white p-1 dark:border-slate-800 dark:bg-[#111827]">
-          <button
-            type="button"
-            onClick={() => setActiveTab("profile")}
-            className={`inline-flex items-center gap-1.5 rounded-lg px-3.5 py-1.5 text-xs font-semibold transition-colors ${
-              activeTab === "profile"
-                ? "bg-rose-600 text-white"
-                : "text-slate-600 hover:text-slate-900 dark:text-slate-300"
-            }`}
-          >
-            <Sparkles className="h-3.5 w-3.5" />
-            Profil & Avatar
-          </button>
-          <button
-            type="button"
-            onClick={() => setActiveTab("templates")}
-            className={`inline-flex items-center gap-1.5 rounded-lg px-3.5 py-1.5 text-xs font-semibold transition-colors ${
-              activeTab === "templates"
-                ? "bg-rose-600 text-white"
-                : "text-slate-600 hover:text-slate-900 dark:text-slate-300"
-            }`}
-          >
-            <FileSpreadsheet className="h-3.5 w-3.5" />
-            Modèles vierges
-          </button>
         </div>
       </div>
 
       {loading ? (
-        <div className="rounded-2xl border border-slate-200/80 bg-white p-12 text-center text-sm text-slate-500 dark:border-slate-800 dark:bg-[#111827]">
-          Chargement du profil...
+        <div className="grid gap-6 lg:grid-cols-12">
+          <div className="h-96 animate-pulse rounded-2xl border border-slate-200/80 bg-white lg:col-span-8 dark:border-slate-800 dark:bg-[#111827]" />
+          <div className="h-96 animate-pulse rounded-2xl border border-slate-200/80 bg-white lg:col-span-4 dark:border-slate-800 dark:bg-[#111827]" />
         </div>
-      ) : activeTab === "profile" ? (
+      ) : (
         <div className="grid gap-6 lg:grid-cols-12">
           {/* LEFT: Avatar Customizer & Info */}
           <div className="space-y-6 lg:col-span-8">
@@ -611,246 +477,10 @@ export default function ProfilePage() {
                 </div>
               </section>
             )}
+
+            <TemplatesQuickLinksCard />
           </aside>
         </div>
-      ) : (
-        /* TAB 2: Blank Templates Editor */
-        <section className="space-y-5 rounded-2xl border border-slate-200/80 bg-white p-6 shadow-[0_1px_2px_rgba(15,23,42,0.04)] dark:border-slate-800 dark:bg-[#111827]">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="flex flex-wrap gap-2">
-              {PROJECT_CATEGORIES.map((cat) => {
-                const meta = PROJECT_CATEGORY_META[cat];
-                const active = selectedTemplateTarget === cat;
-                return (
-                  <button
-                    key={cat}
-                    type="button"
-                    onClick={() => setSelectedTemplateTarget(cat)}
-                    className={`rounded-xl px-3.5 py-2 text-xs font-semibold transition-colors ${
-                      active
-                        ? "bg-slate-900 text-white dark:bg-indigo-600"
-                        : "border border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
-                    }`}
-                  >
-                    Budget · {meta.label} ({budgetTemplates[cat].length})
-                  </button>
-                );
-              })}
-              <button
-                type="button"
-                onClick={() => setSelectedTemplateTarget("RETRO_GLOBAL")}
-                className={`inline-flex items-center gap-1.5 rounded-xl px-3.5 py-2 text-xs font-semibold transition-colors ${
-                  selectedTemplateTarget === "RETRO_GLOBAL"
-                    ? "bg-slate-900 text-white dark:bg-indigo-600"
-                    : "border border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
-                }`}
-              >
-                <GanttChartSquare className="h-3.5 w-3.5" />
-                Rétroplanning vierge ({retroTasks.length})
-              </button>
-            </div>
-
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                disabled={savingTemplate}
-                onClick={() => void handleResetTemplate()}
-                className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300"
-              >
-                <RotateCcw className="h-3.5 w-3.5" />
-                Réinitialiser
-              </button>
-              <button
-                type="button"
-                disabled={savingTemplate}
-                onClick={() => void handleSaveTemplate()}
-                className="inline-flex items-center gap-1.5 rounded-xl bg-rose-600 px-4 py-2 text-xs font-semibold text-white hover:bg-rose-700 disabled:opacity-50"
-              >
-                <Save className="h-3.5 w-3.5" />
-                {savingTemplate ? "Enregistrement..." : "Sauvegarder le modèle"}
-              </button>
-            </div>
-          </div>
-
-          {selectedTemplateTarget === "RETRO_GLOBAL" ? (
-            <div className="space-y-4">
-              <p className="text-xs text-slate-500 dark:text-slate-400">
-                Ces tâches types sont pré-créées automatiquement (sans dates)
-                sur chaque nouveau projet.
-              </p>
-
-              <div className="grid gap-2 sm:grid-cols-4">
-                <input
-                  type="text"
-                  value={newRetroPhase}
-                  onChange={(e) => setNewRetroPhase(e.target.value)}
-                  placeholder="Phase (ex: 3. Production)"
-                  className="rounded-xl border border-slate-200 bg-slate-50/70 px-3 py-2 text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
-                />
-                <input
-                  type="text"
-                  value={newRetroEtape}
-                  onChange={(e) => setNewRetroEtape(e.target.value)}
-                  placeholder="Étape"
-                  className="rounded-xl border border-slate-200 bg-slate-50/70 px-3 py-2 text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
-                />
-                <input
-                  type="text"
-                  value={newRetroTache}
-                  onChange={(e) => setNewRetroTache(e.target.value)}
-                  placeholder="Nom de la tâche..."
-                  className="rounded-xl border border-slate-200 bg-slate-50/70 px-3 py-2 text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
-                />
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (!newRetroTache.trim()) return;
-                    setRetroTasks((prev) => [
-                      ...prev,
-                      {
-                        phase: newRetroPhase.trim() || "Production",
-                        etape: newRetroEtape.trim() || "Général",
-                        tache: newRetroTache.trim(),
-                        isMilestone: false,
-                        milestoneType: null,
-                      },
-                    ]);
-                    setNewRetroTache("");
-                  }}
-                  className="inline-flex items-center justify-center gap-1.5 rounded-xl bg-slate-900 px-3 py-2 text-xs font-semibold text-white hover:bg-slate-800 dark:bg-indigo-600"
-                >
-                  <Plus className="h-3.5 w-3.5" />
-                  Ajouter tâche
-                </button>
-              </div>
-
-              <div className="divide-y divide-slate-100 rounded-xl border border-slate-200 dark:divide-slate-800 dark:border-slate-800">
-                {retroTasks.map((t, idx) => (
-                  <div
-                    key={`${t.phase}-${t.tache}-${idx}`}
-                    className="flex items-center justify-between gap-3 px-4 py-2.5 text-xs"
-                  >
-                    <div className="min-w-0">
-                      <span className="font-semibold text-slate-900 dark:text-white">
-                        {t.tache}
-                      </span>
-                      <span className="ml-2 text-slate-400">
-                        {t.phase} · {t.etape}
-                      </span>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setRetroTasks((prev) => prev.filter((_, i) => i !== idx))
-                      }
-                      className="rounded-lg p-1 text-slate-400 hover:bg-rose-50 hover:text-rose-600"
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            </div>
-          ) : (
-            <div className="space-y-4">
-              <p className="text-xs text-slate-500 dark:text-slate-400">
-                Lignes de dépenses habituelles pré-créées à{" "}
-                <strong>0&nbsp;€</strong> pour chaque nouveau{" "}
-                <strong>
-                  {PROJECT_CATEGORY_META[selectedTemplateTarget].label}
-                </strong>
-                .
-              </p>
-
-              <div className="grid gap-2 sm:grid-cols-4">
-                <input
-                  type="text"
-                  value={newLineCat}
-                  onChange={(e) => setNewLineCat(e.target.value)}
-                  placeholder="Section / Catégorie"
-                  className="rounded-xl border border-slate-200 bg-slate-50/70 px-3 py-2 text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
-                />
-                <input
-                  type="text"
-                  value={newLineObjet}
-                  onChange={(e) => setNewLineObjet(e.target.value)}
-                  placeholder="Nom du poste de dépense..."
-                  className="rounded-xl border border-slate-200 bg-slate-50/70 px-3 py-2 text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
-                />
-                <select
-                  value={newLineType}
-                  onChange={(e) =>
-                    setNewLineType(
-                      e.target.value as
-                        | "Externe"
-                        | "RH Internes"
-                        | "Amortissement"
-                    )
-                  }
-                  className="rounded-xl border border-slate-200 bg-slate-50/70 px-3 py-2 text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
-                >
-                  <option value="Externe">Externe</option>
-                  <option value="RH Internes">RH Internes</option>
-                  <option value="Amortissement">Amortissement</option>
-                </select>
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (!newLineObjet.trim()) return;
-                    setBudgetTemplates((prev) => ({
-                      ...prev,
-                      [selectedTemplateTarget]: [
-                        ...prev[selectedTemplateTarget],
-                        {
-                          category: newLineCat.trim() || "PRODUCTION",
-                          objet: newLineObjet.trim(),
-                          expenseType: newLineType,
-                        },
-                      ],
-                    }));
-                    setNewLineObjet("");
-                  }}
-                  className="inline-flex items-center justify-center gap-1.5 rounded-xl bg-slate-900 px-3 py-2 text-xs font-semibold text-white hover:bg-slate-800 dark:bg-indigo-600"
-                >
-                  <Plus className="h-3.5 w-3.5" />
-                  Ajouter poste
-                </button>
-              </div>
-
-              <div className="divide-y divide-slate-100 rounded-xl border border-slate-200 dark:divide-slate-800 dark:border-slate-800">
-                {budgetTemplates[selectedTemplateTarget].map((line, idx) => (
-                  <div
-                    key={`${line.category}-${line.objet}-${idx}`}
-                    className="flex items-center justify-between gap-3 px-4 py-2.5 text-xs"
-                  >
-                    <div className="min-w-0">
-                      <span className="font-semibold text-slate-900 dark:text-white">
-                        {line.objet}
-                      </span>
-                      <span className="ml-2 text-slate-400">
-                        {line.category} · {line.expenseType}
-                      </span>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setBudgetTemplates((prev) => ({
-                          ...prev,
-                          [selectedTemplateTarget]: prev[
-                            selectedTemplateTarget
-                          ].filter((_, i) => i !== idx),
-                        }))
-                      }
-                      className="rounded-lg p-1 text-slate-400 hover:bg-rose-50 hover:text-rose-600"
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-        </section>
       )}
     </div>
   );

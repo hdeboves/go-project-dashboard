@@ -3,6 +3,7 @@
 import {
   AlertTriangle,
   CalendarClock,
+  ChevronDown,
   Download,
   ExternalLink,
   FileSpreadsheet,
@@ -17,7 +18,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   GanttBoard,
   type RetroTaskView,
@@ -31,6 +32,7 @@ import {
   VeilleProposalPanel,
   type RetroProposalView,
 } from "@/components/retroplanning/VeilleProposalPanel";
+import { RetroTemplateEditor } from "@/components/templates/RetroTemplateEditor";
 import { showToast } from "@/lib/toast";
 
 interface ShellStatusResponse {
@@ -47,7 +49,7 @@ interface ShellStatusResponse {
   geminiConfigured: boolean;
 }
 
-type AsanaTab = "list" | "kanban" | "timeline" | "ai" | "history";
+type AsanaTab = "list" | "kanban" | "timeline" | "ai" | "history" | "template";
 
 export function RetroplanningWorkspace() {
   const searchParams = useSearchParams();
@@ -57,11 +59,29 @@ export function RetroplanningWorkspace() {
     queryTab === "kanban" ||
     queryTab === "timeline" ||
     queryTab === "ai" ||
-    queryTab === "history"
+    queryTab === "history" ||
+    queryTab === "template"
       ? queryTab
       : "list";
 
   const [activeTab, setActiveTab] = useState<AsanaTab>(initialTab);
+  const [syncMenuOpen, setSyncMenuOpen] = useState(false);
+  const [confirmClearDates, setConfirmClearDates] = useState(false);
+  const hasLoadedOnceRef = useRef(false);
+  const [lastQueryTab, setLastQueryTab] = useState(queryTab);
+  if (lastQueryTab !== queryTab) {
+    setLastQueryTab(queryTab);
+    if (
+      queryTab === "kanban" ||
+      queryTab === "timeline" ||
+      queryTab === "ai" ||
+      queryTab === "history" ||
+      queryTab === "template" ||
+      queryTab === "list"
+    ) {
+      setActiveTab(queryTab);
+    }
+  }
   const [projectId, setProjectId] = useState<string | null>(null);
   const [projectLabel, setProjectLabel] = useState("");
   const [retroSheetId, setRetroSheetId] = useState<string | null>(null);
@@ -93,7 +113,9 @@ export function RetroplanningWorkspace() {
 
   const loadAll = useCallback(
     async (syncFromSheet = false) => {
-      setLoading(true);
+      if (!hasLoadedOnceRef.current) {
+        setLoading(true);
+      }
       try {
         const shellRes = await fetch("/api/shell/status", { cache: "no-store" });
         const shell = shellRes.ok
@@ -162,6 +184,7 @@ export function RetroplanningWorkspace() {
         setTasks(json.tasks ?? []);
         setProposals(json.proposals ?? []);
         setSnapshots(json.snapshots ?? []);
+        hasLoadedOnceRef.current = true;
         if (syncFromSheet) {
           showToast("Planning synchronisé depuis Google Sheets.");
         }
@@ -524,16 +547,16 @@ export function RetroplanningWorkspace() {
   const doneCount = tasks.filter((t) => t.status === "TERMINE").length;
 
   return (
-    <div className="mx-auto max-w-6xl space-y-5">
+    <div className="mx-auto max-w-6xl space-y-6">
       {/* Header */}
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <div className="flex flex-wrap items-center gap-2.5">
             <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-white">
-              Tâches & Planning
+              Tâches &amp; Planning
             </h1>
             {tasks.length > 0 && (
-              <span className="rounded-full bg-indigo-50 px-2.5 py-0.5 text-xs font-semibold text-indigo-700 dark:bg-indigo-500/15 dark:text-indigo-300">
+              <span className="rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-semibold tabular-nums text-slate-700 dark:bg-slate-800 dark:text-slate-200">
                 {doneCount} / {tasks.length} terminées
               </span>
             )}
@@ -541,10 +564,10 @@ export function RetroplanningWorkspace() {
               href="/drive"
               data-testid="retroplanning-lock-banner"
               title="Planning interne uniquement — jamais synchronisé en continu au client (export PDF manuel dans Drive)"
-              className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2.5 py-0.5 text-[11px] font-medium text-slate-600 hover:bg-slate-200/70 dark:bg-slate-800 dark:text-slate-300"
+              className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2.5 py-0.5 text-[11px] font-medium text-slate-600 hover:bg-slate-200/70 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"
             >
-              <Lock className="h-3 w-3 text-indigo-600 dark:text-indigo-400" />
-              Privé agence · Export PDF
+              <Lock className="h-3 w-3 text-slate-500 dark:text-slate-400" />
+              Privé agence
             </Link>
           </div>
           <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
@@ -553,141 +576,210 @@ export function RetroplanningWorkspace() {
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          {projectId && (
-            <a
-              href={`/api/projects/${projectId}/retroplanning/export-xlsx`}
-              data-testid="export-retro-xlsx-btn"
-              className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 shadow-2xs transition-colors hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
-            >
-              <Download className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" />
-              Excel (.xlsx)
-            </a>
-          )}
-
-          <button
-            type="button"
-            disabled={!projectId || exportingSheet}
-            onClick={() => void handleExportToGoogleSheet()}
-            data-testid="export-retro-gsheet-btn"
-            className="inline-flex items-center gap-1.5 rounded-xl bg-emerald-600 px-3 py-2 text-xs font-semibold text-white shadow-2xs transition-colors hover:bg-emerald-700 disabled:opacity-50"
-          >
-            <FileSpreadsheet className="h-3.5 w-3.5" />
-            {exportingSheet
-              ? "Mise à jour Drive..."
-              : retroSheetId
-                ? "Actualiser Google Sheets (Drive)"
-                : "Exporter vers Google Sheets (Drive)"}
-          </button>
-
-          {retroSheetId && (
-            <a
-              href={`https://docs.google.com/spreadsheets/d/${retroSheetId}/edit`}
-              target="_blank"
-              rel="noreferrer"
-              className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-600 shadow-2xs hover:bg-slate-50 hover:text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:text-white"
-            >
-              <span>Ouvrir le Sheet</span>
-              <ExternalLink className="h-3.5 w-3.5 text-slate-400" />
-            </a>
-          )}
-
-          <button
-            type="button"
-            disabled={!projectId || syncingSheet}
-            onClick={() => void handleSyncFromSheet()}
-            className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 shadow-2xs transition-colors hover:bg-slate-50 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
-          >
-            <RefreshCw
-              className={`h-3.5 w-3.5 text-indigo-600 dark:text-indigo-400 ${syncingSheet ? "animate-spin" : ""}`}
-            />
-            {syncingSheet ? "Sync..." : "Importer Sheets"}
-          </button>
-
           <button
             type="button"
             disabled={!projectId}
             onClick={() => setDateToolsOpen((v) => !v)}
-            className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 shadow-2xs hover:bg-slate-50 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+            className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-semibold shadow-2xs transition-colors disabled:opacity-50 ${
+              dateToolsOpen
+                ? "border-rose-300 bg-rose-50 text-rose-700 dark:border-rose-500/40 dark:bg-rose-500/15 dark:text-rose-300"
+                : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
+            }`}
           >
             <CalendarClock className="h-3.5 w-3.5 text-rose-500" />
             Dates rapides
           </button>
+
+          {/* Unified Import / Export dropdown (mirrors Budget UX) */}
+          <div className="relative">
+            <button
+              type="button"
+              disabled={!projectId}
+              onClick={() => setSyncMenuOpen((v) => !v)}
+              className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 shadow-2xs transition-colors hover:bg-slate-50 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
+            >
+              <FileSpreadsheet className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" />
+              Importer / Exporter
+              <ChevronDown className="h-3.5 w-3.5 text-slate-400" />
+            </button>
+
+            {syncMenuOpen && projectId && (
+              <>
+                <div
+                  className="fixed inset-0 z-20"
+                  onClick={() => setSyncMenuOpen(false)}
+                />
+                <div className="absolute right-0 z-30 mt-1.5 w-64 rounded-xl border border-slate-200 bg-white p-1.5 shadow-xl dark:border-slate-700 dark:bg-[#172033]">
+                  <a
+                    href={`/api/projects/${projectId}/retroplanning/export-xlsx`}
+                    data-testid="export-retro-xlsx-btn"
+                    onClick={() => setSyncMenuOpen(false)}
+                    className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-xs font-medium text-slate-700 hover:bg-slate-50 dark:text-slate-200 dark:hover:bg-slate-800"
+                  >
+                    <Download className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" />
+                    Télécharger en Excel (.xlsx)
+                  </a>
+
+                  <button
+                    type="button"
+                    disabled={exportingSheet}
+                    onClick={() => {
+                      setSyncMenuOpen(false);
+                      void handleExportToGoogleSheet();
+                    }}
+                    data-testid="export-retro-gsheet-btn"
+                    className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 dark:text-slate-200 dark:hover:bg-slate-800"
+                  >
+                    <FileSpreadsheet className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" />
+                    {exportingSheet
+                      ? "Mise à jour Drive..."
+                      : retroSheetId
+                        ? "Envoyer vers Google Sheets (Drive)"
+                        : "Créer Google Sheets dans Drive"}
+                  </button>
+
+                  {retroSheetId && (
+                    <a
+                      href={`https://docs.google.com/spreadsheets/d/${retroSheetId}/edit`}
+                      target="_blank"
+                      rel="noreferrer"
+                      onClick={() => setSyncMenuOpen(false)}
+                      className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-xs font-medium text-slate-700 hover:bg-slate-50 dark:text-slate-200 dark:hover:bg-slate-800"
+                    >
+                      <ExternalLink className="h-3.5 w-3.5 text-slate-400" />
+                      Ouvrir le Google Sheet
+                    </a>
+                  )}
+
+                  <div className="my-1 border-t border-slate-100 dark:border-slate-700/80" />
+
+                  <button
+                    type="button"
+                    disabled={syncingSheet}
+                    onClick={() => {
+                      setSyncMenuOpen(false);
+                      void handleSyncFromSheet();
+                    }}
+                    className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 dark:text-slate-200 dark:hover:bg-slate-800"
+                  >
+                    <RefreshCw
+                      className={`h-3.5 w-3.5 text-indigo-600 dark:text-indigo-400 ${syncingSheet ? "animate-spin" : ""}`}
+                    />
+                    {syncingSheet
+                      ? "Synchronisation..."
+                      : "Importer depuis Google Sheets"}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSyncMenuOpen(false);
+                      setActiveTab("template");
+                    }}
+                    className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-xs font-medium text-rose-700 hover:bg-rose-50 dark:text-rose-300 dark:hover:bg-rose-500/15"
+                  >
+                    <Sparkles className="h-3.5 w-3.5" />
+                    Modèle vierge rétroplanning
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
         </div>
       </div>
 
-      {/* Quick Date Tools & Blank Template Bar */}
+      {/* Quick Date Tools Bar */}
       {dateToolsOpen && (
-        <section className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-indigo-200/80 bg-indigo-50/50 p-4 text-xs dark:border-indigo-500/30 dark:bg-indigo-500/10">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="font-semibold text-slate-800 dark:text-slate-100">
-              Dater depuis un Kick-off :
-            </span>
-            <input
-              type="date"
-              value={anchorDate}
-              onChange={(e) => setAnchorDate(e.target.value)}
-              className="rounded-xl border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white"
-            />
-            <button
-              type="button"
-              disabled={shiftingDates || tasks.length === 0}
-              onClick={() =>
-                void handleDateToolAction({ anchorStartDate: anchorDate })
-              }
-              className="rounded-xl bg-indigo-600 px-3 py-1.5 font-semibold text-white hover:bg-indigo-700 disabled:opacity-50"
-            >
-              Auto-planifier les phases
-            </button>
+        <section className="space-y-3 rounded-2xl border border-slate-200/80 bg-slate-50/80 p-4 text-xs dark:border-slate-800 dark:bg-slate-900/60">
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="font-semibold text-slate-800 dark:text-slate-100">
+                Dater depuis un Kick-off :
+              </span>
+              <input
+                type="date"
+                value={anchorDate}
+                onChange={(e) => setAnchorDate(e.target.value)}
+                className="rounded-xl border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white"
+              />
+              <button
+                type="button"
+                disabled={shiftingDates || tasks.length === 0}
+                onClick={() =>
+                  void handleDateToolAction({ anchorStartDate: anchorDate })
+                }
+                className="rounded-xl bg-rose-600 px-3 py-1.5 font-semibold text-white hover:bg-rose-700 disabled:opacity-50"
+              >
+                Auto-planifier les phases
+              </button>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="font-semibold text-slate-800 dark:text-slate-100">
+                Décaler tout :
+              </span>
+              <input
+                type="number"
+                value={shiftDays}
+                onChange={(e) => setShiftDays(e.target.value)}
+                className="w-16 rounded-xl border border-slate-200 bg-white px-2 py-1.5 font-mono text-xs tabular-nums text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white"
+              />
+              <span className="text-slate-500 dark:text-slate-400">jours</span>
+              <button
+                type="button"
+                disabled={shiftingDates || tasks.length === 0}
+                onClick={() =>
+                  void handleDateToolAction({
+                    deltaDays: Number.parseInt(shiftDays, 10) || 0,
+                  })
+                }
+                className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
+              >
+                Décaler
+              </button>
+              <button
+                type="button"
+                disabled={shiftingDates || tasks.length === 0}
+                onClick={() => setConfirmClearDates(true)}
+                className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-1.5 font-semibold text-rose-700 hover:bg-rose-100 dark:border-rose-500/30 dark:bg-rose-500/15 dark:text-rose-300 dark:hover:bg-rose-500/25"
+              >
+                Effacer les dates
+              </button>
+            </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="font-semibold text-slate-800 dark:text-slate-100">
-              Décaler tout :
-            </span>
-            <input
-              type="number"
-              value={shiftDays}
-              onChange={(e) => setShiftDays(e.target.value)}
-              className="w-16 rounded-xl border border-slate-200 bg-white px-2 py-1.5 font-mono text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white"
-            />
-            <span className="text-slate-500">jours</span>
-            <button
-              type="button"
-              disabled={shiftingDates || tasks.length === 0}
-              onClick={() =>
-                void handleDateToolAction({
-                  deltaDays: Number.parseInt(shiftDays, 10) || 0,
-                })
-              }
-              className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
-            >
-              Décaler
-            </button>
-            <button
-              type="button"
-              disabled={shiftingDates || tasks.length === 0}
-              onClick={() => void handleDateToolAction({ clearDates: true })}
-              className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-1.5 font-semibold text-rose-700 hover:bg-rose-100 dark:border-rose-500/30 dark:bg-rose-500/15 dark:text-rose-300"
-            >
-              Effacer les dates
-            </button>
-            <button
-              type="button"
-              disabled={applyingTemplate}
-              onClick={() =>
-                void handleApplyBlankRetroTemplate(tasks.length > 0)
-              }
-              className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
-            >
-              {applyingTemplate
-                ? "Application..."
-                : "Charger le template vierge"}
-            </button>
-          </div>
+          {confirmClearDates && (
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-rose-200 bg-rose-50 px-3.5 py-2.5 text-xs text-rose-900 dark:border-rose-500/30 dark:bg-rose-500/15 dark:text-rose-200">
+              <span>
+                Confirmer l&apos;effacement de toutes les dates du rétroplanning
+                ({tasks.length} tâche(s)) ?
+              </span>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setConfirmClearDates(false)}
+                  className="rounded-lg border border-rose-200 bg-white px-2.5 py-1 font-medium text-rose-800 hover:bg-rose-100 dark:border-rose-500/40 dark:bg-slate-900 dark:text-rose-200"
+                >
+                  Annuler
+                </button>
+                <button
+                  type="button"
+                  disabled={shiftingDates}
+                  onClick={() => {
+                    setConfirmClearDates(false);
+                    void handleDateToolAction({ clearDates: true });
+                  }}
+                  className="rounded-lg bg-rose-600 px-3 py-1 font-semibold text-white hover:bg-rose-700 disabled:opacity-50"
+                >
+                  Oui, effacer les dates
+                </button>
+              </div>
+            </div>
+          )}
         </section>
       )}
 
-      {/* Clean Split View Tabs: Primary Task Views (Left) vs Secondary Tools (Right) */}
+      {/* Unified Underline Tabs */}
       <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-200/80 dark:border-slate-800">
         <div className="flex flex-wrap items-center gap-5">
           <button
@@ -695,7 +787,7 @@ export function RetroplanningWorkspace() {
             onClick={() => setActiveTab("list")}
             className={`inline-flex items-center gap-2 border-b-2 pb-3 text-[13px] font-semibold transition-colors ${
               activeTab === "list"
-                ? "border-sky-600 text-sky-700 dark:border-sky-400 dark:text-sky-300"
+                ? "border-rose-600 text-slate-900 dark:border-rose-400 dark:text-white"
                 : "border-transparent text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white"
             }`}
           >
@@ -708,7 +800,7 @@ export function RetroplanningWorkspace() {
             onClick={() => setActiveTab("kanban")}
             className={`inline-flex items-center gap-2 border-b-2 pb-3 text-[13px] font-semibold transition-colors ${
               activeTab === "kanban"
-                ? "border-sky-600 text-sky-700 dark:border-sky-400 dark:text-sky-300"
+                ? "border-rose-600 text-slate-900 dark:border-rose-400 dark:text-white"
                 : "border-transparent text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white"
             }`}
           >
@@ -721,7 +813,7 @@ export function RetroplanningWorkspace() {
             onClick={() => setActiveTab("timeline")}
             className={`inline-flex items-center gap-2 border-b-2 pb-3 text-[13px] font-semibold transition-colors ${
               activeTab === "timeline"
-                ? "border-sky-600 text-sky-700 dark:border-sky-400 dark:text-sky-300"
+                ? "border-rose-600 text-slate-900 dark:border-rose-400 dark:text-white"
                 : "border-transparent text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white"
             }`}
           >
@@ -730,17 +822,31 @@ export function RetroplanningWorkspace() {
           </button>
         </div>
 
-        <div className="flex flex-wrap items-center gap-4">
+        <div className="flex flex-wrap items-center gap-5">
+          <button
+            type="button"
+            onClick={() => setActiveTab("template")}
+            data-testid="retro-tab-template"
+            className={`inline-flex items-center gap-1.5 border-b-2 pb-3 text-xs font-semibold transition-colors ${
+              activeTab === "template"
+                ? "border-rose-600 text-rose-700 dark:border-rose-400 dark:text-rose-300"
+                : "border-transparent text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white"
+            }`}
+          >
+            <Sparkles className="h-3.5 w-3.5 text-rose-500" />
+            Modèle vierge
+          </button>
+
           <button
             type="button"
             onClick={() => setActiveTab("ai")}
             className={`inline-flex items-center gap-1.5 border-b-2 pb-3 text-xs font-semibold transition-colors ${
               activeTab === "ai"
-                ? "border-violet-600 text-violet-700 dark:border-violet-400 dark:text-violet-300"
-                : "border-transparent text-slate-500 hover:text-violet-700 dark:text-slate-400 dark:hover:text-violet-300"
+                ? "border-rose-600 text-slate-900 dark:border-rose-400 dark:text-white"
+                : "border-transparent text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white"
             }`}
           >
-            <Sparkles className="h-3.5 w-3.5 text-violet-500 dark:text-violet-400" />
+            <Sparkles className="h-3.5 w-3.5 text-indigo-500 dark:text-indigo-400" />
             Veille IA
             {pendingProposalsCount > 0 && (
               <span className="rounded-full bg-rose-100 px-1.5 py-0.5 text-[10px] font-bold text-rose-700 dark:bg-rose-500/20 dark:text-rose-300">
@@ -754,7 +860,7 @@ export function RetroplanningWorkspace() {
             onClick={() => setActiveTab("history")}
             className={`inline-flex items-center gap-1.5 border-b-2 pb-3 text-xs font-semibold transition-colors ${
               activeTab === "history"
-                ? "border-slate-700 text-slate-900 dark:border-slate-300 dark:text-white"
+                ? "border-rose-600 text-slate-900 dark:border-rose-400 dark:text-white"
                 : "border-transparent text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white"
             }`}
           >
@@ -844,6 +950,17 @@ export function RetroplanningWorkspace() {
               comparing={comparing}
               onCreateSnapshot={handleCreateSnapshot}
               onCompareSnapshots={handleCompareSnapshots}
+            />
+          )}
+
+          {activeTab === "template" && (
+            <RetroTemplateEditor
+              projectHasTasks={tasks.length > 0}
+              applying={applyingTemplate}
+              onApply={async ({ replaceExisting }) => {
+                await handleApplyBlankRetroTemplate(replaceExisting);
+                setActiveTab("list");
+              }}
             />
           )}
         </>

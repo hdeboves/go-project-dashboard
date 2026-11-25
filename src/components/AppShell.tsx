@@ -18,7 +18,6 @@ import {
   Moon,
   PanelLeftClose,
   PanelLeftOpen,
-  Plus,
   Presentation,
   Search,
   Settings,
@@ -221,7 +220,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         if (picked) {
           showToast(`Projet actif : ${picked.client} — ${picked.nomJeu}`);
         }
-        await loadStatus();
         router.refresh();
         window.dispatchEvent(new CustomEvent("go:shell-refresh"));
       }
@@ -365,18 +363,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         <div className={`px-3 pb-3 ${sidebarCollapsed ? "lg:hidden" : ""}`}>
           <div className="rounded-xl border border-slate-200/80 bg-slate-50/70 p-2 dark:border-slate-800 dark:bg-slate-800/50">
             <div className="mb-1 flex items-center justify-between px-1">
-              <span className="text-[10px] font-semibold tracking-wider text-slate-400 uppercase">
+              <span className="text-[10px] font-semibold tracking-wider text-slate-500 uppercase dark:text-slate-400">
                 Projet actif
               </span>
-              <Link
-                href="/projects"
-                title="Créer ou gérer les projets"
-                onClick={() => setMobileOpen(false)}
-                className="inline-flex items-center gap-0.5 text-[10px] font-semibold text-indigo-600 hover:text-indigo-700 dark:text-indigo-400"
-              >
-                <Plus className="h-3 w-3" />
-                Gérer
-              </Link>
             </div>
             <div className="relative">
               <select
@@ -437,7 +426,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                     sidebarCollapsed ? "justify-between lg:justify-center lg:px-0" : "justify-between"
                   } ${
                     active
-                      ? "bg-rose-50 font-semibold text-rose-700 dark:bg-rose-500/15 dark:text-rose-300"
+                      ? "bg-slate-100/90 font-semibold text-slate-900 dark:bg-slate-800/90 dark:text-white"
                       : "font-medium text-slate-600 hover:bg-slate-100/80 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800/70 dark:hover:text-slate-100"
                   }`}
                 >
@@ -672,15 +661,18 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 pathname !== "/settings" &&
                 pathname !== "/team" &&
                 pathname !== "/profile" && (
-                <>
-                  <span className="hidden max-w-[260px] truncate font-medium text-slate-400 sm:inline">
-                    {activeProject.client} · {activeProject.nomJeu}
-                  </span>
-                  <span className="hidden text-slate-300 dark:text-slate-700 sm:inline">
-                    /
-                  </span>
-                </>
-              )}
+                  <>
+                    <Link
+                      href="/"
+                      className="hidden max-w-[260px] truncate font-medium text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white sm:inline"
+                    >
+                      {activeProject.client} · {activeProject.nomJeu}
+                    </Link>
+                    <span className="hidden text-slate-300 dark:text-slate-700 sm:inline">
+                      /
+                    </span>
+                  </>
+                )}
               <span className="truncate font-semibold text-slate-800 dark:text-slate-100">
                 {currentPageTitle}
               </span>
@@ -700,13 +692,17 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 )}
 
               {activeProject &&
+                pathname !== "/projects" &&
+                pathname !== "/settings" &&
+                pathname !== "/team" &&
+                pathname !== "/profile" &&
                 status?.activeProjectAccess?.canManageMembers !== false && (
                   <button
                     type="button"
                     onClick={() => setShareOpen(true)}
                     title="Partager ce projet (vue ou gestion)"
                     data-testid="topbar-share-project-btn"
-                    className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200/80 bg-white px-2.5 py-1 text-xs font-medium text-slate-600 transition-colors hover:border-indigo-300 hover:bg-indigo-50/50 hover:text-indigo-700 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300 dark:hover:text-indigo-300"
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200/80 bg-white px-2.5 py-1 text-xs font-medium text-slate-600 transition-colors hover:border-slate-300 hover:bg-slate-50 hover:text-slate-900 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white"
                   >
                     <Share2 className="h-3.5 w-3.5" />
                     <span className="hidden sm:inline">Partager</span>

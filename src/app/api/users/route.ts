@@ -19,8 +19,8 @@ export async function GET() {
         include: {
           _count: {
             select: {
-              ownedProjects: true,
-              memberships: true,
+              ownedProjects: { where: { isArchived: false } },
+              memberships: { where: { project: { isArchived: false } } },
             },
           },
         },

@@ -348,11 +348,16 @@ export function AvatarDisplay({
   const safeId = avatarId || DEFAULT_AVATAR_ID;
   const safeBg = avatarBg || DEFAULT_AVATAR_BG;
 
+  const ringClass =
+    size === "xs" || size === "sm"
+      ? "ring-1 ring-black/10 dark:ring-white/15"
+      : "ring-2 ring-white/85 dark:ring-slate-800";
+
   return (
     <span
       title={title}
       style={{ backgroundColor: safeBg }}
-      className={`inline-flex shrink-0 items-center justify-center overflow-hidden rounded-full ring-2 ring-white/80 shadow-2xs dark:ring-slate-800 ${SIZE_CLASSES[size]} ${className}`}
+      className={`inline-flex shrink-0 items-center justify-center overflow-hidden rounded-full shadow-2xs ${ringClass} ${SIZE_CLASSES[size]} ${className}`}
     >
       {renderCuteSvg(safeId)}
     </span>

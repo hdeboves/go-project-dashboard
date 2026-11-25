@@ -19,6 +19,7 @@ import {
   type QuoteDto,
   formatEur,
 } from "@/components/budget/types";
+import { buildValidatedInvoiceFilename } from "@/lib/shared/filenames";
 import { showToast } from "@/lib/toast";
 
 interface InvoicePipelinePanelProps {
@@ -40,29 +41,6 @@ interface DraftEdits {
   prestationLabel: string;
   budgetLineId: string;
   quoteId: string;
-}
-
-function previewDriveFilename(params: {
-  invoiceNumber: string;
-  codeProjet: string;
-  vendorName: string;
-  invoiceDate: string;
-}): string {
-  const safeNum =
-    params.invoiceNumber
-      .trim()
-      .normalize("NFC")
-      .replace(/[^a-zA-Z0-9À-ÿ-]/g, "") || "SANS-NUM";
-  const safeCp = params.codeProjet.replace(/[^0-9A-Za-z-]/g, "") || "000000";
-  const safePresta =
-    params.vendorName
-      .trim()
-      .normalize("NFC")
-      .replace(/[^a-zA-Z0-9À-ÿ-]/g, "") || "Prestataire";
-  const safeDate = /^\d{4}-\d{2}-\d{2}$/.test(params.invoiceDate.trim())
-    ? params.invoiceDate.trim()
-    : new Date().toISOString().slice(0, 10);
-  return `${safeNum}_${safeCp}_${safePresta}_${safeDate}.pdf`;
 }
 
 export function InvoicePipelinePanel({
@@ -465,12 +443,22 @@ export function InvoicePipelinePanel({
         <div className="space-y-4">
           {invoices
             .filter((inv) => {
-              const hasPendingOrBlocked = invoices.some(
-                (i) => i.status !== "VALIDATED"
-              );
+              const pendingCount = invoices.filter(
+                (i) => i.status === "PENDING_VALIDATION" && !i.cpConflict
+              ).length;
+              const blockedCount = invoices.filter(
+                (i) => i.cpConflict || i.status === "CONFLICT_BLOCKED"
+              ).length;
+              const validatedCount = invoices.filter(
+                (i) => i.status === "VALIDATED"
+              ).length;
               const active =
-                statusFilter === "PENDING" && !hasPendingOrBlocked
-                  ? "ALL"
+                statusFilter === "PENDING" && pendingCount === 0
+                  ? blockedCount > 0
+                    ? "BLOCKED"
+                    : validatedCount > 0
+                      ? "ALL"
+                      : "PENDING"
                   : statusFilter;
               if (active === "ALL") return true;
               const blocked =
@@ -736,7 +724,7 @@ export function InvoicePipelinePanel({
                             </label>
                             <input
                               id={`inv-date-${inv.id}`}
-                              type="text"
+                              type="date"
                               value={edits.invoiceDate}
                               disabled={isBlocked}
                               onChange={(e) =>
@@ -850,9 +838,23 @@ export function InvoicePipelinePanel({
                               id={`inv-quote-${inv.id}`}
                               value={edits.quoteId}
                               disabled={isBlocked}
-                              onChange={(e) =>
-                                updateEdit(inv, "quoteId", e.target.value)
-                              }
+                              onChange={(e) => {
+                                const qId = e.target.value;
+                                updateEdit(inv, "quoteId", qId);
+                                const pickedQuote = quotes.find(
+                                  (q) => q.id === qId
+                                );
+                                if (
+                                  pickedQuote?.budgetLineId &&
+                                  !edits.budgetLineId
+                                ) {
+                                  updateEdit(
+                                    inv,
+                                    "budgetLineId",
+                                    pickedQuote.budgetLineId
+                                  );
+                                }
+                              }}
                               className="w-full rounded-xl border border-slate-200 bg-slate-50/70 px-3 py-1.5 text-xs text-slate-900 focus:border-indigo-500 focus:bg-white focus:outline-none disabled:opacity-50 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
                             >
                               <option value="">— Aucun devis relié —</option>
@@ -870,7 +872,7 @@ export function InvoicePipelinePanel({
                               Nomenclature Drive :{" "}
                             </span>
                             <code className="break-all font-mono text-[11px]">
-                              {previewDriveFilename({
+                              {buildValidatedInvoiceFilename({
                                 invoiceNumber: edits.invoiceNumber,
                                 codeProjet: projectCode,
                                 vendorName: edits.vendorName,

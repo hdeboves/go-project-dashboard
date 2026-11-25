@@ -3,7 +3,6 @@
 import {
   AlertTriangle,
   Check,
-  ExternalLink,
   Eye,
   FileText,
   Link2,
@@ -19,6 +18,7 @@ import {
   type QuoteDto,
   formatEur,
 } from "@/components/budget/types";
+import { PdfPreviewModal } from "@/components/ui/PdfPreviewModal";
 import { showToast } from "@/lib/toast";
 
 interface QuotesPanelProps {
@@ -42,22 +42,22 @@ const QUOTE_STATUS_META: Record<
   EN_ATTENTE: {
     label: "En attente",
     badge:
-      "bg-amber-50 text-amber-800 ring-1 ring-amber-200 dark:bg-amber-500/15 dark:text-amber-300",
+      "bg-amber-50 text-amber-800 ring-1 ring-amber-200 dark:bg-amber-500/15 dark:text-amber-300 dark:ring-amber-500/30",
   },
   ACCEPTE: {
     label: "Accepté",
     badge:
-      "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200 dark:bg-emerald-500/15 dark:text-emerald-300",
+      "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200 dark:bg-emerald-500/15 dark:text-emerald-300 dark:ring-emerald-500/30",
   },
   FACTURE: {
     label: "Facturé",
     badge:
-      "bg-indigo-50 text-indigo-700 ring-1 ring-indigo-200 dark:bg-indigo-500/15 dark:text-indigo-300",
+      "bg-indigo-50 text-indigo-700 ring-1 ring-indigo-200 dark:bg-indigo-500/15 dark:text-indigo-300 dark:ring-indigo-500/30",
   },
   REFUSE: {
     label: "Refusé",
     badge:
-      "bg-rose-50 text-rose-700 ring-1 ring-rose-200 dark:bg-rose-500/15 dark:text-rose-300",
+      "bg-rose-50 text-rose-700 ring-1 ring-rose-200 dark:bg-rose-500/15 dark:text-rose-300 dark:ring-rose-500/30",
   },
 };
 
@@ -417,11 +417,6 @@ export function QuotesPanel({
                       <span className="text-sm font-bold text-slate-900 dark:text-white">
                         {q.vendorName}
                       </span>
-                      <span
-                        className={`rounded-full px-2.5 py-0.5 text-[11px] font-semibold ${meta.badge}`}
-                      >
-                        {meta.label}
-                      </span>
                       {q.overQuote && (
                         <span className="inline-flex items-center gap-1 rounded-full bg-rose-100 px-2 py-0.5 text-[11px] font-semibold text-rose-700 dark:bg-rose-500/20 dark:text-rose-300">
                           <AlertTriangle className="h-3 w-3" />
@@ -434,7 +429,7 @@ export function QuotesPanel({
                         {q.description}
                       </p>
                     )}
-                    <p className="mt-1 text-[11px] text-slate-400">
+                    <p className="mt-1 text-[11px] text-slate-500 dark:text-slate-400">
                       {q.issueDate ? `Émis le ${q.issueDate}` : "Date non renseignée"}
                       {q.budgetLine
                         ? ` · Poste : ${q.budgetLine.category} — ${q.budgetLine.objet}`
@@ -452,9 +447,9 @@ export function QuotesPanel({
                             url: `/api/projects/${projectId}/quotes/${q.id}/preview`,
                           })
                         }
-                        className="inline-flex items-center gap-1 rounded-xl border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+                        className="inline-flex items-center gap-1 rounded-xl border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
                       >
-                        <Eye className="h-3.5 w-3.5 text-indigo-600" />
+                        <Eye className="h-3.5 w-3.5 text-indigo-600 dark:text-indigo-400" />
                         PDF Devis
                       </button>
                     )}
@@ -463,7 +458,7 @@ export function QuotesPanel({
                       aria-label={`Statut du devis ${q.quoteNumber}`}
                       value={q.status}
                       onChange={(e) => void handleStatusChange(q, e.target.value)}
-                      className="rounded-xl border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+                      className={`rounded-xl px-2.5 py-1.5 text-xs font-semibold focus:outline-none ${meta.badge}`}
                     >
                       <option value="BROUILLON">Brouillon</option>
                       <option value="EN_ATTENTE">En attente</option>
@@ -479,7 +474,7 @@ export function QuotesPanel({
                         setLinkingIds(q.invoices.map((i) => i.id));
                       }}
                       data-testid={`link-invoices-btn-${q.id}`}
-                      className="inline-flex items-center gap-1.5 rounded-xl bg-indigo-50 px-3 py-1.5 text-xs font-semibold text-indigo-700 hover:bg-indigo-100 dark:bg-indigo-500/15 dark:text-indigo-300"
+                      className="inline-flex items-center gap-1.5 rounded-xl bg-indigo-50 px-3 py-1.5 text-xs font-semibold text-indigo-700 hover:bg-indigo-100 dark:bg-indigo-500/15 dark:text-indigo-300 dark:hover:bg-indigo-500/25"
                     >
                       <Link2 className="h-3.5 w-3.5" />
                       Relier factures ({q.invoices.length})
@@ -487,9 +482,17 @@ export function QuotesPanel({
 
                     <button
                       type="button"
-                      onClick={() => void handleDeleteQuote(q)}
+                      onClick={() => {
+                        if (
+                          window.confirm(
+                            `Supprimer le devis ${q.quoteNumber} (${q.vendorName}) ? Les factures associées seront simplement déliées.`
+                          )
+                        ) {
+                          void handleDeleteQuote(q);
+                        }
+                      }}
                       title="Supprimer le devis"
-                      className="rounded-xl p-1.5 text-slate-400 hover:bg-rose-50 hover:text-rose-600"
+                      className="rounded-xl p-1.5 text-slate-400 hover:bg-rose-50 hover:text-rose-600 dark:hover:bg-rose-500/15 dark:hover:text-rose-400"
                     >
                       <Trash2 className="h-4 w-4" />
                     </button>
@@ -707,52 +710,14 @@ export function QuotesPanel({
         </div>
       )}
 
-      {/* PDF Preview Modal */}
-      {previewModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/55 p-4 backdrop-blur-xs">
-          <div className="flex h-[85vh] w-full max-w-4xl flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl dark:border-slate-700 dark:bg-[#111827]">
-            <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3 dark:border-slate-800">
-              <p className="text-sm font-bold text-slate-900 dark:text-white">
-                {previewModal.title}
-              </p>
-              <div className="flex items-center gap-2">
-                {previewModal.driveUrl && (
-                  <a
-                    href={previewModal.driveUrl}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="inline-flex items-center gap-1 rounded-lg bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700 hover:bg-emerald-100"
-                  >
-                    Drive
-                    <ExternalLink className="h-3 w-3" />
-                  </a>
-                )}
-                <a
-                  href={previewModal.url}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
-                >
-                  Ouvrir
-                  <ExternalLink className="h-3 w-3" />
-                </a>
-                <button
-                  type="button"
-                  onClick={() => setPreviewModal(null)}
-                  className="rounded-lg p-1 text-slate-400 hover:bg-slate-100"
-                >
-                  <X className="h-4 w-4" />
-                </button>
-              </div>
-            </div>
-            <iframe
-              src={previewModal.url}
-              title={previewModal.title}
-              className="flex-1 bg-slate-100"
-            />
-          </div>
-        </div>
-      )}
+      {/* Accessible PDF Preview Modal */}
+      <PdfPreviewModal
+        open={Boolean(previewModal)}
+        title={previewModal?.title ?? "Aperçu PDF"}
+        previewUrl={previewModal?.url ?? ""}
+        driveUrl={previewModal?.driveUrl ?? null}
+        onClose={() => setPreviewModal(null)}
+      />
     </section>
   );
 }

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { toErrorResponse } from "@/lib/api-error";
+import { assertProjectAccess, getCurrentUser } from "@/lib/auth/session";
 import { getGoogleGateway } from "@/lib/container";
 import { AppHttpError } from "@/lib/errors";
 import { readStagedInvoicePdf } from "@/lib/invoices/ingest";
@@ -11,6 +12,9 @@ export async function GET(
 ) {
   try {
     const { id, invoiceId } = await context.params;
+    const currentUser = await getCurrentUser(prisma);
+    await assertProjectAccess(prisma, id, currentUser, "VIEW");
+
     const invoice = await prisma.invoice.findUnique({
       where: { id: invoiceId },
     });

@@ -287,8 +287,8 @@ export function ReportingDashboard() {
           const shellJson = (await shellRes.json()) as ShellStatus;
           setShell(shellJson);
           if (!resolvedId) resolvedId = shellJson.activeProjectId;
-          if (shellJson.activeProject?.reportingSheetId && !reportingSheetId) {
-            setReportingSheetId(shellJson.activeProject.reportingSheetId);
+          if (shellJson.activeProject?.reportingSheetId) {
+            setReportingSheetId((prev) => prev || shellJson.activeProject?.reportingSheetId || "");
           }
         }
         setProjectId(resolvedId);
@@ -333,8 +333,8 @@ export function ReportingDashboard() {
           const list = infJson.metrics ?? [];
           setInfluenceMetrics(list);
           setTalents(infJson.talents ?? []);
-          if ((infJson.talents ?? []).length > 0 && !infTalent) {
-            setInfTalent(infJson.talents[0]);
+          if ((infJson.talents ?? []).length > 0) {
+            setInfTalent((prev) => prev || infJson.talents[0]);
           }
           const drafts: Record<string, EditableMetricDraft> = {};
           for (const m of list) drafts[m.id] = metricToDraft(m);
@@ -378,7 +378,7 @@ export function ReportingDashboard() {
         setLoading(false);
       }
     },
-    [infTalent, queryProjectId, reportingSheetId]
+    [queryProjectId]
   );
 
   useEffect(() => {

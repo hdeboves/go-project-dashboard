@@ -7,6 +7,9 @@ import { assertProjectAccess, getCurrentUser } from "@/lib/auth/session";
 import { round2 } from "@/lib/budget/calculator";
 import { AppHttpError } from "@/lib/errors";
 import { prisma } from "@/lib/prisma";
+import { parseFrenchAmount } from "@/lib/shared/format";
+
+const MAX_QUOTE_PDF_BYTES = 15 * 1024 * 1024;
 
 const CreateQuoteSchema = z.object({
   quoteNumber: z.string().trim().min(1, "Le numéro de devis est requis."),
@@ -58,7 +61,11 @@ export async function formatQuotesForProject(projectId: string) {
     );
     const remainingHt = round2(q.amountHt - invoicedTotalHt);
     const invoicedPct =
-      q.amountHt > 0 ? Math.round((invoicedTotalHt / q.amountHt) * 100) : 0;
+      q.amountHt > 0
+        ? Math.round((invoicedTotalHt / q.amountHt) * 100)
+        : invoicedTotalHt > 0
+          ? 100
+          : 0;
 
     return {
       ...q,
@@ -66,7 +73,7 @@ export async function formatQuotesForProject(projectId: string) {
       invoicedTotalHt,
       remainingHt,
       invoicedPct,
-      overQuote: q.amountHt > 0 && invoicedTotalHt > q.amountHt,
+      overQuote: invoicedTotalHt > 0 && invoicedTotalHt > q.amountHt,
     };
   });
 }
@@ -81,10 +88,14 @@ export async function GET(
     await assertProjectAccess(prisma, id, currentUser, "VIEW");
 
     const quotes = await formatQuotesForProject(id);
+    const activeQuotes = quotes.filter(
+      (q) => q.status === "ACCEPTE" || q.status === "FACTURE"
+    );
     const acceptedTotalHt = round2(
-      quotes
-        .filter((q) => q.status === "ACCEPTE" || q.status === "FACTURE")
-        .reduce((s, q) => s + q.amountHt, 0)
+      activeQuotes.reduce((s, q) => s + q.amountHt, 0)
+    );
+    const invoicedOnAcceptedHt = round2(
+      activeQuotes.reduce((s, q) => s + q.invoicedTotalHt, 0)
     );
     const totalInvoicedOnQuotesHt = round2(
       quotes.reduce((s, q) => s + q.invoicedTotalHt, 0)
@@ -97,7 +108,7 @@ export async function GET(
         acceptedTotalHt,
         totalInvoicedOnQuotesHt,
         remainingToInvoiceHt: round2(
-          Math.max(0, acceptedTotalHt - totalInvoicedOnQuotesHt)
+          Math.max(0, acceptedTotalHt - invoicedOnAcceptedHt)
         ),
       },
     });
@@ -146,14 +157,14 @@ export async function POST(
         description: String(formData.get("description") ?? "") || null,
         issueDate: String(formData.get("issueDate") ?? "") || null,
         validUntil: String(formData.get("validUntil") ?? "") || null,
-        amountHt: Number(formData.get("amountHt") ?? 0),
+        amountHt: parseFrenchAmount(String(formData.get("amountHt") ?? "0")),
         tvaAmount:
           formData.get("tvaAmount") !== null && formData.get("tvaAmount") !== ""
-            ? Number(formData.get("tvaAmount"))
+            ? parseFrenchAmount(String(formData.get("tvaAmount")))
             : undefined,
         amountTtc:
           formData.get("amountTtc") !== null && formData.get("amountTtc") !== ""
-            ? Number(formData.get("amountTtc"))
+            ? parseFrenchAmount(String(formData.get("amountTtc")))
             : undefined,
         status: String(formData.get("status") ?? "EN_ATTENTE"),
         budgetLineId: String(formData.get("budgetLineId") ?? "") || null,
@@ -206,7 +217,21 @@ export async function POST(
     });
 
     if (uploadedFile) {
+      if (uploadedFile.size > MAX_QUOTE_PDF_BYTES) {
+        throw new AppHttpError(
+          413,
+          "PDF_TOO_LARGE",
+          "Le fichier devis dépasse la taille maximale autorisée (15 Mo)."
+        );
+      }
       const pdfBuf = Buffer.from(await uploadedFile.arrayBuffer());
+      if (pdfBuf.length < 5 || pdfBuf.subarray(0, 5).toString("ascii") !== "%PDF-") {
+        throw new AppHttpError(
+          400,
+          "INVALID_PDF",
+          "Le fichier envoyé n'est pas un PDF valide."
+        );
+      }
       const filePath = path.join(
         process.cwd(),
         ".data",

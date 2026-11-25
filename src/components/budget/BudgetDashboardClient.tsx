@@ -24,6 +24,7 @@ import { BudgetTable } from "@/components/budget/BudgetTable";
 import { CategoryChart } from "@/components/budget/CategoryChart";
 import { InvoicePipelinePanel } from "@/components/budget/InvoicePipelinePanel";
 import { QuotesPanel } from "@/components/budget/QuotesPanel";
+import { BudgetTemplateEditor } from "@/components/templates/BudgetTemplateEditor";
 import {
   type BudgetDataDto,
   type InvoiceDto,
@@ -52,7 +53,7 @@ interface ShellStatusResponse {
   } | null;
 }
 
-type BudgetTab = "overview" | "table" | "quotes" | "invoices";
+type BudgetTab = "overview" | "table" | "quotes" | "invoices" | "template";
 
 export function BudgetDashboardClient() {
   const searchParams = useSearchParams();
@@ -82,13 +83,16 @@ export function BudgetDashboardClient() {
       ? "invoices"
       : queryTab === "quotes"
         ? "quotes"
-        : queryTab === "table" || queryOverruns
-          ? "table"
-          : "overview"
+        : queryTab === "template"
+          ? "template"
+          : queryTab === "table" || queryOverruns
+            ? "table"
+            : "overview"
   );
   const [importMenuOpen, setImportMenuOpen] = useState(false);
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [overrunsOnly, setOverrunsOnly] = useState(queryOverruns);
+  const autoOpenedBlankTableRef = useRef<string | null>(null);
 
   const prevTargetIdRef = useRef<string | null>(queryProjectId);
   const querySyncKey = `${queryTab ?? ""}|${queryOverruns ? "1" : "0"}`;
@@ -99,6 +103,8 @@ export function BudgetDashboardClient() {
       setActiveTab("invoices");
     } else if (queryTab === "quotes") {
       setActiveTab("quotes");
+    } else if (queryTab === "template") {
+      setActiveTab("template");
     } else if (queryTab === "table" || queryOverruns) {
       setActiveTab("table");
       if (queryOverruns) setOverrunsOnly(true);
@@ -156,6 +162,19 @@ export function BudgetDashboardClient() {
         if (bData.warnings && bData.warnings.length > 0) {
           setWarnings(bData.warnings);
         }
+        // Smart UX: if a project has blank budget lines (all 0 €) and no tab was forced, open Table directly
+        if (
+          !queryTab &&
+          !queryOverruns &&
+          autoOpenedBlankTableRef.current !== targetId &&
+          bData.lines.length > 0 &&
+          bData.summary.soldTotalHt === 0 &&
+          bData.summary.preOpTotalHt === 0 &&
+          bData.summary.postOpTotalHt === 0
+        ) {
+          autoOpenedBlankTableRef.current = targetId;
+          setActiveTab("table");
+        }
       }
 
       if (invoicesRes.ok) {
@@ -170,7 +189,7 @@ export function BudgetDashboardClient() {
     } finally {
       setLoading(false);
     }
-  }, [queryProjectId]);
+  }, [queryProjectId, queryTab, queryOverruns]);
 
   useEffect(() => {
     void loadData();
@@ -246,7 +265,6 @@ export function BudgetDashboardClient() {
       }
       setWarnings(json.warnings ?? []);
       setBudget(json);
-      await loadData();
       showToast("Budget modèle copié et prêt à l'emploi.");
       window.dispatchEvent(new CustomEvent("go:shell-refresh"));
     } finally {
@@ -254,7 +272,10 @@ export function BudgetDashboardClient() {
     }
   }
 
-  async function handleApplyBlankCategoryTemplate(cat: ProjectCategory) {
+  async function handleApplyBlankCategoryTemplate(
+    cat: ProjectCategory,
+    replaceExisting = true
+  ) {
     if (!projectId) return;
     setImporting(true);
     setImportMenuOpen(false);
@@ -267,7 +288,7 @@ export function BudgetDashboardClient() {
         body: JSON.stringify({
           mode: "apply_blank_template",
           category: cat,
-          replaceExisting: true,
+          replaceExisting,
         }),
       });
       const json = (await res.json()) as BudgetDataDto & {
@@ -281,7 +302,6 @@ export function BudgetDashboardClient() {
       setProjectCategory(cat);
       setBudget(json);
       setActiveTab("table");
-      await loadData();
       showToast(
         `Modèle budget vierge « ${PROJECT_CATEGORY_META[cat].label} » appliqué (montants à 0 €).`
       );
@@ -700,64 +720,80 @@ export function BudgetDashboardClient() {
         </section>
       )}
 
-      {/* Lightweight Stripe / Pennylane Underline Tabs */}
-      <div className="flex flex-wrap items-center gap-6 border-b border-slate-200/80 dark:border-slate-800">
-        <button
-          type="button"
-          onClick={() => setActiveTab("overview")}
-          className={`inline-flex items-center gap-2 border-b-2 pb-3 text-xs font-semibold transition-colors ${
-            activeTab === "overview"
-              ? "border-indigo-600 text-indigo-600 dark:border-indigo-400 dark:text-indigo-400"
-              : "border-transparent text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white"
-          }`}
-        >
-          <PieChart className="h-3.5 w-3.5" />
-          Synthèse
-        </button>
+      {/* Unified Underline Tabs */}
+      <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-200/80 dark:border-slate-800">
+        <div className="flex flex-wrap items-center gap-6">
+          <button
+            type="button"
+            onClick={() => setActiveTab("overview")}
+            className={`inline-flex items-center gap-2 border-b-2 pb-3 text-xs font-semibold transition-colors ${
+              activeTab === "overview"
+                ? "border-rose-600 text-slate-900 dark:border-rose-400 dark:text-white"
+                : "border-transparent text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white"
+            }`}
+          >
+            <PieChart className="h-3.5 w-3.5" />
+            Synthèse
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab("table")}
+            className={`inline-flex items-center gap-2 border-b-2 pb-3 text-xs font-semibold transition-colors ${
+              activeTab === "table"
+                ? "border-rose-600 text-slate-900 dark:border-rose-400 dark:text-white"
+                : "border-transparent text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white"
+            }`}
+          >
+            <Table2 className="h-3.5 w-3.5" />
+            Tableau ({budget?.lines.length ?? 0})
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab("quotes")}
+            data-testid="budget-tab-quotes"
+            className={`inline-flex items-center gap-2 border-b-2 pb-3 text-xs font-semibold transition-colors ${
+              activeTab === "quotes"
+                ? "border-rose-600 text-slate-900 dark:border-rose-400 dark:text-white"
+                : "border-transparent text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white"
+            }`}
+          >
+            <FileText className="h-3.5 w-3.5" />
+            Devis ({quotes.length})
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab("invoices")}
+            className={`inline-flex items-center gap-2 border-b-2 pb-3 text-xs font-semibold transition-colors ${
+              activeTab === "invoices"
+                ? "border-rose-600 text-slate-900 dark:border-rose-400 dark:text-white"
+                : "border-transparent text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white"
+            }`}
+          >
+            <Receipt className="h-3.5 w-3.5" />
+            Factures ({invoices.length})
+            {pendingInvoicesCount > 0 && (
+              <span className="rounded-full bg-rose-100 px-1.5 py-0.5 text-[10px] font-bold text-rose-700 dark:bg-rose-500/20 dark:text-rose-300">
+                {pendingInvoicesCount}
+              </span>
+            )}
+          </button>
+        </div>
 
         <button
           type="button"
-          onClick={() => setActiveTab("table")}
-          className={`inline-flex items-center gap-2 border-b-2 pb-3 text-xs font-semibold transition-colors ${
-            activeTab === "table"
-              ? "border-indigo-600 text-indigo-600 dark:border-indigo-400 dark:text-indigo-400"
+          onClick={() => setActiveTab("template")}
+          data-testid="budget-tab-template"
+          className={`inline-flex items-center gap-1.5 border-b-2 pb-3 text-xs font-semibold transition-colors ${
+            activeTab === "template"
+              ? "border-rose-600 text-rose-700 dark:border-rose-400 dark:text-rose-300"
               : "border-transparent text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white"
           }`}
         >
-          <Table2 className="h-3.5 w-3.5" />
-          Tableau ({budget?.lines.length ?? 0})
-        </button>
-
-        <button
-          type="button"
-          onClick={() => setActiveTab("quotes")}
-          data-testid="budget-tab-quotes"
-          className={`inline-flex items-center gap-2 border-b-2 pb-3 text-xs font-semibold transition-colors ${
-            activeTab === "quotes"
-              ? "border-indigo-600 text-indigo-600 dark:border-indigo-400 dark:text-indigo-400"
-              : "border-transparent text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white"
-          }`}
-        >
-          <FileText className="h-3.5 w-3.5" />
-          Devis ({quotes.length})
-        </button>
-
-        <button
-          type="button"
-          onClick={() => setActiveTab("invoices")}
-          className={`inline-flex items-center gap-2 border-b-2 pb-3 text-xs font-semibold transition-colors ${
-            activeTab === "invoices"
-              ? "border-indigo-600 text-indigo-600 dark:border-indigo-400 dark:text-indigo-400"
-              : "border-transparent text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white"
-          }`}
-        >
-          <Receipt className="h-3.5 w-3.5" />
-          Factures ({invoices.length})
-          {pendingInvoicesCount > 0 && (
-            <span className="rounded-full bg-rose-100 px-1.5 py-0.5 text-[10px] font-bold text-rose-700 dark:bg-rose-500/20 dark:text-rose-300">
-              {pendingInvoicesCount}
-            </span>
-          )}
+          <Sparkles className="h-3.5 w-3.5 text-rose-500" />
+          Modèle vierge
         </button>
       </div>
 
@@ -977,6 +1013,18 @@ export function BudgetDashboardClient() {
             setCpConflictAlert(
               cps && cps.length > 0 ? `${msg} (CP: ${cps.join(", ")})` : msg
             );
+          }}
+        />
+      )}
+
+      {/* TAB 5: Blank Budget Template Editor */}
+      {activeTab === "template" && (
+        <BudgetTemplateEditor
+          initialCategory={projectCategory}
+          projectHasLines={(budget?.lines.length ?? 0) > 0}
+          applying={importing}
+          onApply={async (cat, { replaceExisting }) => {
+            await handleApplyBlankCategoryTemplate(cat, replaceExisting);
           }}
         />
       )}

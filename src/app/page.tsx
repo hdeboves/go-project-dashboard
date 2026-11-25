@@ -6,6 +6,7 @@ import {
   BarChart3,
   CheckCircle2,
   Clock,
+  FileSpreadsheet,
   FolderGit2,
   FolderKanban,
   Mic,
@@ -20,6 +21,7 @@ import { UpcomingTasksCard } from "@/components/cockpit/UpcomingTasksCard";
 import { buildVisibleProjectsWhere, getCurrentUser } from "@/lib/auth/session";
 import { decryptSecret } from "@/lib/crypto";
 import { prisma } from "@/lib/prisma";
+import { formatAuditActionFr } from "@/lib/shared/audit-labels";
 import {
   PROJECT_CATEGORY_META,
   normalizeProjectCategory,
@@ -43,29 +45,6 @@ function formatShortDate(date: Date | null): string {
   }).format(date);
 }
 
-const HUMAN_ACTION_LABELS: Record<string, string> = {
-  SETTINGS_UPDATED: "Paramètres mis à jour",
-  OAUTH_CONNECTED: "Compte Google connecté",
-  PROJECT_CREATED: "Nouveau projet créé",
-  SANDBOX_BOOTSTRAPPED: "Projet pilote initialisé",
-  DRIVE_TREE_PROVISIONED: "Dossiers Drive créés",
-  DRIVE_EXT_SYNCED: "Fichiers publiés au client",
-  BUDGET_IMPORTED: "Budget importé",
-  BUDGET_LINE_UPSERTED: "Poste budgétaire modifié",
-  INVOICE_INGESTED: "Facture PDF ajoutée",
-  INVOICE_GMAIL_SCAN: "Scan factures Gmail",
-  INVOICE_VALIDATED: "Facture validée (Pennylane)",
-  CP_CONFLICT_BLOCKED: "Document bloqué (autre CP)",
-  KRISP_MEETING_INGESTED: "CR Krisp classé dans Drive",
-  KRISP_ACTIONS_TO_TASKS: "Actions Krisp ajoutées au planning",
-  RETRO_TASK_UPDATED: "Planning mis à jour",
-  RETRO_SNAPSHOT_CREATED: "Archive planning créée",
-  CALENDAR_SYNCED: "Rappels Agenda mis à jour",
-  WEEKLY_GENERATED: "Weekly Client généré",
-  REPORTING_SLIDES_GENERATED: "Slides Reporting générés",
-  REPORTING_PUBLISHED_EXT: "Reporting publié au client",
-};
-
 export default async function CommandCenterPage({
   searchParams,
 }: {
@@ -79,7 +58,10 @@ export default async function CommandCenterPage({
   const cookieProjectId = cookieStore.get(ACTIVE_PROJECT_COOKIE)?.value ?? null;
 
   const projects = await prisma.project.findMany({
-    where: buildVisibleProjectsWhere(currentUser),
+    where: {
+      ...buildVisibleProjectsWhere(currentUser),
+      isArchived: false,
+    },
     orderBy: [{ isSandbox: "desc" }, { createdAt: "asc" }],
   });
 
@@ -550,6 +532,7 @@ export default async function CommandCenterPage({
 
             {/* Next Tasks (Interactive 1-click Asana-style completion!) */}
             <UpcomingTasksCard
+              key={activeProject.id}
               projectId={activeProject.id}
               initialTasks={upcomingTasks.map((t) => ({
                 id: t.id,
@@ -566,59 +549,59 @@ export default async function CommandCenterPage({
           <div className="min-w-0 space-y-6 lg:col-span-4">
             <section className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-[0_1px_2px_rgba(15,23,42,0.04)] dark:border-slate-800 dark:bg-[#111827]">
               <h2 className="mb-3.5 text-sm font-bold text-slate-900 dark:text-white">
-                Actions rapides
+                Accès rapides
               </h2>
               <div className="grid grid-cols-2 gap-2.5">
                 <Link
                   href="/retroplanning"
-                  className="group flex flex-col gap-2 rounded-xl border border-slate-200/80 bg-slate-50/40 p-3 text-xs font-semibold text-slate-800 transition-all hover:border-sky-300 hover:bg-sky-50/40 dark:border-slate-800 dark:bg-slate-800/30 dark:text-slate-100 dark:hover:border-sky-500/40 dark:hover:bg-sky-500/10"
+                  className="group flex flex-col gap-2 rounded-xl border border-slate-200/80 bg-slate-50/40 p-3 text-xs font-semibold text-slate-800 transition-all hover:border-rose-300 hover:bg-rose-50/40 dark:border-slate-800 dark:bg-slate-800/30 dark:text-slate-100 dark:hover:border-rose-500/40 dark:hover:bg-rose-500/10"
                 >
-                  <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-sky-100 text-sky-700 dark:bg-sky-500/20 dark:text-sky-300">
+                  <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-slate-100 text-slate-600 transition-colors group-hover:bg-rose-100 group-hover:text-rose-600 dark:bg-slate-800 dark:text-slate-300 dark:group-hover:bg-rose-500/20 dark:group-hover:text-rose-300">
                     <Plus className="h-4 w-4" />
                   </span>
                   <span>Nouvelle tâche</span>
                 </Link>
                 <Link
+                  href="/budget?tab=quotes"
+                  className="group flex flex-col gap-2 rounded-xl border border-slate-200/80 bg-slate-50/40 p-3 text-xs font-semibold text-slate-800 transition-all hover:border-rose-300 hover:bg-rose-50/40 dark:border-slate-800 dark:bg-slate-800/30 dark:text-slate-100 dark:hover:border-rose-500/40 dark:hover:bg-rose-500/10"
+                >
+                  <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-slate-100 text-slate-600 transition-colors group-hover:bg-rose-100 group-hover:text-rose-600 dark:bg-slate-800 dark:text-slate-300 dark:group-hover:bg-rose-500/20 dark:group-hover:text-rose-300">
+                    <FileSpreadsheet className="h-4 w-4" />
+                  </span>
+                  <span>Devis &amp; Budget</span>
+                </Link>
+                <Link
                   href="/budget?tab=invoices"
                   className="group flex flex-col gap-2 rounded-xl border border-slate-200/80 bg-slate-50/40 p-3 text-xs font-semibold text-slate-800 transition-all hover:border-rose-300 hover:bg-rose-50/40 dark:border-slate-800 dark:bg-slate-800/30 dark:text-slate-100 dark:hover:border-rose-500/40 dark:hover:bg-rose-500/10"
                 >
-                  <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-rose-100 text-rose-700 dark:bg-rose-500/20 dark:text-rose-300">
+                  <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-slate-100 text-slate-600 transition-colors group-hover:bg-rose-100 group-hover:text-rose-600 dark:bg-slate-800 dark:text-slate-300 dark:group-hover:bg-rose-500/20 dark:group-hover:text-rose-300">
                     <Receipt className="h-4 w-4" />
                   </span>
                   <span>Déposer facture</span>
                 </Link>
                 <Link
                   href="/meetings"
-                  className="group flex flex-col gap-2 rounded-xl border border-slate-200/80 bg-slate-50/40 p-3 text-xs font-semibold text-slate-800 transition-all hover:border-violet-300 hover:bg-violet-50/40 dark:border-slate-800 dark:bg-slate-800/30 dark:text-slate-100 dark:hover:border-violet-500/40 dark:hover:bg-violet-500/10"
+                  className="group flex flex-col gap-2 rounded-xl border border-slate-200/80 bg-slate-50/40 p-3 text-xs font-semibold text-slate-800 transition-all hover:border-rose-300 hover:bg-rose-50/40 dark:border-slate-800 dark:bg-slate-800/30 dark:text-slate-100 dark:hover:border-rose-500/40 dark:hover:bg-rose-500/10"
                 >
-                  <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-violet-100 text-violet-700 dark:bg-violet-500/20 dark:text-violet-300">
+                  <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-slate-100 text-slate-600 transition-colors group-hover:bg-rose-100 group-hover:text-rose-600 dark:bg-slate-800 dark:text-slate-300 dark:group-hover:bg-rose-500/20 dark:group-hover:text-rose-300">
                     <Mic className="h-4 w-4" />
                   </span>
                   <span>CR Krisp</span>
                 </Link>
                 <Link
-                  href="/weeklys"
-                  className="group flex flex-col gap-2 rounded-xl border border-slate-200/80 bg-slate-50/40 p-3 text-xs font-semibold text-slate-800 transition-all hover:border-amber-300 hover:bg-amber-50/40 dark:border-slate-800 dark:bg-slate-800/30 dark:text-slate-100 dark:hover:border-amber-500/40 dark:hover:bg-amber-500/10"
-                >
-                  <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-300">
-                    <Presentation className="h-4 w-4" />
-                  </span>
-                  <span>Weekly client</span>
-                </Link>
-                <Link
                   href="/drive"
-                  className="group flex flex-col gap-2 rounded-xl border border-slate-200/80 bg-slate-50/40 p-3 text-xs font-semibold text-slate-800 transition-all hover:border-emerald-300 hover:bg-emerald-50/40 dark:border-slate-800 dark:bg-slate-800/30 dark:text-slate-100 dark:hover:border-emerald-500/40 dark:hover:bg-emerald-500/10"
+                  className="group flex flex-col gap-2 rounded-xl border border-slate-200/80 bg-slate-50/40 p-3 text-xs font-semibold text-slate-800 transition-all hover:border-rose-300 hover:bg-rose-50/40 dark:border-slate-800 dark:bg-slate-800/30 dark:text-slate-100 dark:hover:border-rose-500/40 dark:hover:bg-rose-500/10"
                 >
-                  <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-emerald-100 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-300">
+                  <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-slate-100 text-slate-600 transition-colors group-hover:bg-rose-100 group-hover:text-rose-600 dark:bg-slate-800 dark:text-slate-300 dark:group-hover:bg-rose-500/20 dark:group-hover:text-rose-300">
                     <FolderGit2 className="h-4 w-4" />
                   </span>
                   <span>Publier Drive</span>
                 </Link>
                 <Link
                   href="/reporting"
-                  className="group flex flex-col gap-2 rounded-xl border border-slate-200/80 bg-slate-50/40 p-3 text-xs font-semibold text-slate-800 transition-all hover:border-indigo-300 hover:bg-indigo-50/40 dark:border-slate-800 dark:bg-slate-800/30 dark:text-slate-100 dark:hover:border-indigo-500/40 dark:hover:bg-indigo-500/10"
+                  className="group flex flex-col gap-2 rounded-xl border border-slate-200/80 bg-slate-50/40 p-3 text-xs font-semibold text-slate-800 transition-all hover:border-rose-300 hover:bg-rose-50/40 dark:border-slate-800 dark:bg-slate-800/30 dark:text-slate-100 dark:hover:border-rose-500/40 dark:hover:bg-rose-500/10"
                 >
-                  <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-indigo-100 text-indigo-700 dark:bg-indigo-500/20 dark:text-indigo-300">
+                  <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-slate-100 text-slate-600 transition-colors group-hover:bg-rose-100 group-hover:text-rose-600 dark:bg-slate-800 dark:text-slate-300 dark:group-hover:bg-rose-500/20 dark:group-hover:text-rose-300">
                     <BarChart3 className="h-4 w-4" />
                   </span>
                   <span>Bilan Reporting</span>
@@ -641,10 +624,9 @@ export default async function CommandCenterPage({
                       className="flex items-baseline justify-between gap-2 text-xs"
                     >
                       <span className="truncate text-slate-700 dark:text-slate-300">
-                        {HUMAN_ACTION_LABELS[log.action] ??
-                          log.action.replaceAll("_", " ").toLowerCase()}
+                        {formatAuditActionFr(log.action)}
                       </span>
-                      <span className="shrink-0 text-[11px] text-slate-400">
+                      <span className="shrink-0 text-[11px] tabular-nums text-slate-500 dark:text-slate-400">
                         {formatShortDate(log.createdAt)}
                       </span>
                     </div>

@@ -1,5 +1,7 @@
+import { cookies } from "next/headers";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
+import { ACTIVE_PROJECT_COOKIE } from "@/app/api/shell/status/route";
 import { toErrorResponse } from "@/lib/api-error";
 import { assertProjectAccess, getCurrentUser } from "@/lib/auth/session";
 import { AppHttpError } from "@/lib/errors";
@@ -51,10 +53,22 @@ export async function PATCH(
       },
     });
 
-    return NextResponse.json({
+    const res = NextResponse.json({
       ok: true,
       project: updated,
     });
+
+    if (body.archived) {
+      const cookieStore = await cookies();
+      if (cookieStore.get(ACTIVE_PROJECT_COOKIE)?.value === id) {
+        res.cookies.delete(ACTIVE_PROJECT_COOKIE);
+      }
+      await prisma.appSetting
+        .deleteMany({ where: { key: "ACTIVE_PROJECT_ID" } })
+        .catch(() => undefined);
+    }
+
+    return res;
   } catch (err) {
     return toErrorResponse(err);
   }

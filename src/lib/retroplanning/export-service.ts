@@ -342,7 +342,7 @@ export async function exportOrUpdateRetroplanningGoogleSheet(
       t.owner ?? "",
       toIsoDateOnly(t.startDate) ?? "",
       toIsoDateOnly(t.endDate) ?? "",
-      t.status,
+      RETRO_STATUS_LABELS[t.status as RetroStatus] ?? t.status,
       t.isMilestone ? "OUI" : "NON",
       t.milestoneType ?? "",
     ]),

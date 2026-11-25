@@ -324,7 +324,7 @@ export default function ProjectsPage() {
           nomJeu,
           category,
           seedBlankTemplates,
-          isSandbox: true,
+          isSandbox: false,
           provisionDrive,
         }),
       });
@@ -704,25 +704,45 @@ export default function ProjectsPage() {
           <p className="text-[11px] font-medium text-slate-500 dark:text-slate-400">
             CA Vendu · Marge atterrissage
           </p>
-          <div className="mt-1 flex items-baseline gap-2">
-            <span className="font-mono text-2xl font-bold tracking-tight text-slate-900 dark:text-white">
-              {formatEur(summary?.totalSoldHt ?? 0)}
-            </span>
-            <span className="rounded-full bg-emerald-50 px-2 py-0.5 font-mono text-[11px] font-semibold text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300">
-              {summary?.globalForecastMarginPct ?? summary?.globalMarginPct ?? 0}%
-            </span>
-          </div>
-          <p className="mt-1 text-[11px] text-slate-500 dark:text-slate-400">
-            Engagé réel : {formatEur(summary?.totalActualHt ?? 0)}
-          </p>
+          {(() => {
+            const mPct =
+              summary?.globalForecastMarginPct ?? summary?.globalMarginPct ?? 0;
+            const mHt = Math.round(
+              ((summary?.totalSoldHt ?? 0) * mPct) / 100
+            );
+            const pillColor =
+              mPct >= 30
+                ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300"
+                : mPct >= 0
+                  ? "bg-amber-50 text-amber-800 dark:bg-amber-500/15 dark:text-amber-300"
+                  : "bg-rose-50 text-rose-700 dark:bg-rose-500/15 dark:text-rose-300";
+            return (
+              <>
+                <div className="mt-1 flex items-baseline gap-2">
+                  <span className="text-2xl font-bold tracking-tight tabular-nums text-slate-900 dark:text-white">
+                    {formatEur(summary?.totalSoldHt ?? 0)}
+                  </span>
+                  <span
+                    className={`rounded-full px-2 py-0.5 font-mono text-[11px] font-semibold tabular-nums ${pillColor}`}
+                  >
+                    {mPct}%
+                  </span>
+                </div>
+                <p className="mt-1 text-[11px] tabular-nums text-slate-500 dark:text-slate-400">
+                  Marge : {formatEur(mHt)} · Engagé :{" "}
+                  {formatEur(summary?.totalActualHt ?? 0)}
+                </p>
+              </>
+            );
+          })()}
         </div>
 
         <div className="px-5 py-4">
           <p className="text-[11px] font-medium text-slate-500 dark:text-slate-400">
-            Points d&apos;attention & CR
+            Points d&apos;attention actifs
           </p>
           <p
-            className={`mt-1 font-mono text-2xl font-bold tracking-tight ${
+            className={`mt-1 text-2xl font-bold tracking-tight tabular-nums ${
               totalAlerts > 0
                 ? "text-rose-600 dark:text-rose-400"
                 : "text-emerald-600 dark:text-emerald-400"
@@ -730,10 +750,9 @@ export default function ProjectsPage() {
           >
             {totalAlerts}
           </p>
-          <p className="mt-1 text-[11px] text-slate-500 dark:text-slate-400">
-            {summary?.totalPendingInvoices ?? 0} facture(s) ·{" "}
-            {summary?.totalLateTasks ?? 0} retard(s) ·{" "}
-            {summary?.totalMeetings ?? 0} CR Krisp
+          <p className="mt-1 text-[11px] tabular-nums text-slate-500 dark:text-slate-400">
+            {summary?.totalPendingInvoices ?? 0} facture(s) à valider ·{" "}
+            {summary?.totalLateTasks ?? 0} tâche(s) en retard
           </p>
         </div>
       </section>
@@ -1043,13 +1062,28 @@ export default function ProjectsPage() {
           </div>
         ) : filteredProjects.length === 0 ? (
           <div className="p-12 text-center">
-            <FolderKanban className="mx-auto h-9 w-9 text-slate-300" />
+            <FolderKanban className="mx-auto h-9 w-9 text-slate-300 dark:text-slate-600" />
             <h3 className="mt-3 text-sm font-semibold text-slate-800 dark:text-slate-100">
               Aucun projet correspondant
             </h3>
             <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
               Ajustez vos filtres ou créez un nouveau projet.
             </p>
+            {(healthFilter !== "ALL" ||
+              categoryFilter !== "ALL" ||
+              searchQuery.trim().length > 0) && (
+              <button
+                type="button"
+                onClick={() => {
+                  setHealthFilter("ALL");
+                  setCategoryFilter("ALL");
+                  setSearchQuery("");
+                }}
+                className="mt-3 rounded-xl border border-slate-200 bg-white px-3.5 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
+              >
+                Réinitialiser les filtres
+              </button>
+            )}
           </div>
         ) : viewMode === "table" ? (
           <div className="overflow-x-auto">

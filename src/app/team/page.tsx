@@ -18,6 +18,10 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AvatarDisplay } from "@/components/AvatarDisplay";
+import {
+  formatAuditActionFr,
+  formatAuditDetailsFr,
+} from "@/lib/shared/audit-labels";
 import { showToast } from "@/lib/toast";
 
 interface DirectoryUser {
@@ -201,9 +205,11 @@ export default function TeamAndAdminPage() {
       const res = await fetch("/api/admin/backups", { method: "POST" });
       const json = (await res.json()) as {
         error?: string;
-        projectsCount?: number;
-        invoicesCount?: number;
-        quotesCount?: number;
+        backup?: {
+          projectsCount?: number;
+          invoicesCount?: number;
+          quotesCount?: number;
+        };
       };
       if (!res.ok) {
         setFeedback({
@@ -211,7 +217,8 @@ export default function TeamAndAdminPage() {
           text: json.error ?? "Impossible de lancer le backup.",
         });
       } else {
-        const msg = `Backup créé (${json.projectsCount ?? 0} projets, ${json.quotesCount ?? 0} devis, ${json.invoicesCount ?? 0} factures).`;
+        const b = json.backup;
+        const msg = `Backup créé (${b?.projectsCount ?? 0} projets, ${b?.quotesCount ?? 0} devis, ${b?.invoicesCount ?? 0} factures).`;
         setFeedback({ type: "success", text: msg });
         showToast(msg);
         await loadAll();
@@ -503,7 +510,7 @@ export default function TeamAndAdminPage() {
                         </div>
                       </div>
 
-                      <div className="mt-4 flex flex-wrap items-center gap-1.5 text-[11px]">
+                      <div className="mt-4 flex flex-wrap items-center justify-between gap-2 text-[11px]">
                         {userIsAdmin ? (
                           <span className="inline-flex items-center gap-1 rounded-full bg-indigo-50 px-2 py-0.5 font-semibold text-indigo-700 dark:bg-indigo-500/20 dark:text-indigo-300">
                             <Crown className="h-3 w-3" />
@@ -514,11 +521,9 @@ export default function TeamAndAdminPage() {
                             Membre
                           </span>
                         )}
-                        <span className="rounded-full bg-slate-100 px-2 py-0.5 text-slate-600 dark:bg-slate-800 dark:text-slate-300">
-                          {u.ownedProjectsCount} créé
-                          {u.ownedProjectsCount > 1 ? "s" : ""}
-                        </span>
-                        <span className="rounded-full bg-slate-100 px-2 py-0.5 text-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                        <span className="tabular-nums text-slate-500 dark:text-slate-400">
+                          {u.ownedProjectsCount} actif
+                          {u.ownedProjectsCount > 1 ? "s" : ""} ·{" "}
                           {u.sharedProjectsCount} partagé
                           {u.sharedProjectsCount > 1 ? "s" : ""}
                         </span>
@@ -660,12 +665,14 @@ export default function TeamAndAdminPage() {
                         <td className="px-3 py-3">
                           <span
                             className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                              b.trigger === "WEEKLY_SCHEDULE" ||
                               b.trigger === "SCHEDULED_WEEKLY"
                                 ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300"
                                 : "bg-indigo-50 text-indigo-700 dark:bg-indigo-500/15 dark:text-indigo-300"
                             }`}
                           >
-                            {b.trigger === "SCHEDULED_WEEKLY"
+                            {b.trigger === "WEEKLY_SCHEDULE" ||
+                            b.trigger === "SCHEDULED_WEEKLY"
                               ? "Auto hebdo"
                               : `Manuel (${b.createdBy ?? "admin"})`}
                           </span>
@@ -734,12 +741,15 @@ export default function TeamAndAdminPage() {
                         key={log.id}
                         className="hover:bg-slate-50/60 dark:hover:bg-slate-800/30"
                       >
-                        <td className="px-4 py-2.5 whitespace-nowrap text-slate-500 dark:text-slate-400">
+                        <td className="px-4 py-2.5 whitespace-nowrap tabular-nums text-slate-500 dark:text-slate-400">
                           {formatDateTimeFr(log.createdAt)}
                         </td>
                         <td className="px-3 py-2.5">
-                          <span className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-slate-700 dark:bg-slate-800 dark:text-slate-200">
-                            {log.action}
+                          <span
+                            title={log.action}
+                            className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-700 dark:bg-slate-800 dark:text-slate-200"
+                          >
+                            {formatAuditActionFr(log.action)}
                           </span>
                         </td>
                         <td className="px-3 py-2.5 font-medium text-slate-800 dark:text-slate-200">
@@ -750,8 +760,8 @@ export default function TeamAndAdminPage() {
                             ? `CP ${log.project.codeProjet} · ${log.project.client}`
                             : "Global"}
                         </td>
-                        <td className="max-w-xs truncate px-4 py-2.5 font-mono text-[11px] text-slate-500 dark:text-slate-400">
-                          {log.detailsJson}
+                        <td className="max-w-md truncate px-4 py-2.5 text-xs text-slate-600 dark:text-slate-300">
+                          {formatAuditDetailsFr(log.action, log.detailsJson)}
                         </td>
                       </tr>
                     ))}

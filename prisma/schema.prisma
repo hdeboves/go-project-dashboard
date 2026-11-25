@@ -59,11 +59,12 @@ model ProjectMember {
 }
 
 model CategoryTemplate {
-  id              String   @id @default(cuid())
-  category        String   @unique
-  budgetLinesJson String   @default("[]")
-  retroTasksJson  String   @default("[]")
-  updatedAt       DateTime @updatedAt
+  id                 String   @id @default(cuid())
+  category           String   @unique
+  budgetLinesJson    String   @default("[]")
+  retroTasksJson     String   @default("[]")
+  weeklyTemplateJson String   @default("{}")
+  updatedAt          DateTime @updatedAt
 }
 
 model Project {
@@ -143,6 +144,8 @@ model DriveNode {
 
   @@index([projectId, code])
   @@index([projectId, driveFileId])
+  @@index([parentNodeId])
+  @@index([projectId, isFolder])
 }
 
 model SyncStatus {
@@ -160,6 +163,7 @@ model SyncStatus {
   driveNode DriveNode @relation(fields: [driveNodeId], references: [id], onDelete: Cascade)
 
   @@index([projectId, validationStatus])
+  @@index([projectId, driftDetected])
 }
 
 model BudgetLine {
@@ -254,6 +258,8 @@ model Invoice {
   @@index([projectId, status])
   @@index([projectId, cpConflict])
   @@index([quoteId])
+  @@index([budgetLineId])
+  @@index([projectId, createdAt])
 }
 
 model RetroTask {
@@ -277,6 +283,8 @@ model RetroTask {
   calendarEvents CalendarEvent[]
 
   @@index([projectId])
+  @@index([projectId, status, endDate])
+  @@index([projectId, sheetRowIndex])
 }
 
 model RetroProposal {
@@ -347,6 +355,8 @@ model CalendarEvent {
   calendarRule CalendarRule? @relation(fields: [calendarRuleId], references: [id], onDelete: SetNull)
 
   @@index([projectId])
+  @@index([projectId, retroTaskId, status])
+  @@index([projectId, startAt])
 }
 
 model WeeklyReport {
@@ -367,6 +377,7 @@ model WeeklyReport {
   project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
 
   @@index([projectId])
+  @@index([projectId, weekEnd])
 }
 
 model ReportingRawFile {

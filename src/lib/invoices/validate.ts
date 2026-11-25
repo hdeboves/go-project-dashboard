@@ -24,6 +24,9 @@ import {
   readStagedInvoicePdf,
 } from "@/lib/invoices/ingest";
 import { PROCESSED_INVOICE_GMAIL_LABEL } from "@/lib/invoices/scan-job";
+import { buildValidatedInvoiceFilename } from "@/lib/shared/filenames";
+
+export { buildValidatedInvoiceFilename };
 
 export const DEFAULT_PENNYLANE_EMAIL =
   "gamersorigin-8j117x7x@suppliers.pennylane.com";
@@ -46,35 +49,6 @@ export const ValidateInvoiceSchema = z.object({
 });
 
 export type ValidateInvoiceInput = z.infer<typeof ValidateInvoiceSchema>;
-
-/**
- * Drive invoice naming convention:
- * Numéro de la facture_code projet_nom du prestataire_date d'émission.pdf
- */
-export function buildValidatedInvoiceFilename(params: {
-  invoiceNumber?: string | null;
-  invoiceDate: string;
-  codeProjet: string;
-  vendorName: string;
-  amountHt?: number;
-}): string {
-  const safeNum =
-    (params.invoiceNumber ?? "")
-      .trim()
-      .normalize("NFC")
-      .replace(/[^a-zA-Z0-9À-ÿ-]/g, "") || "SANS-NUM";
-  const safeCp =
-    params.codeProjet.replace(/[^0-9A-Za-z-]/g, "") || "000000";
-  const safePresta =
-    params.vendorName
-      .normalize("NFC")
-      .replace(/[^a-zA-Z0-9À-ÿ-]/g, "") || "Prestataire";
-  const safeDate = /^\d{4}-\d{2}-\d{2}$/.test(params.invoiceDate.trim())
-    ? params.invoiceDate.trim()
-    : new Date().toISOString().slice(0, 10);
-
-  return `${safeNum}_${safeCp}_${safePresta}_${safeDate}.pdf`;
-}
 
 export function normalizeCcList(rawCc: string): string[] {
   const tokens = rawCc
@@ -471,6 +445,20 @@ export async function validateInvoicePipeline(params: {
       "INVOICE_PDF_MISSING",
       "Contenu PDF introuvable pour cette facture."
     );
+  }
+
+  if (input.quoteId) {
+    const validQuote = await prisma.quote.findUnique({
+      where: { id: input.quoteId },
+      select: { id: true, projectId: true },
+    });
+    if (!validQuote || validQuote.projectId !== projectId) {
+      throw new AppHttpError(
+        400,
+        "INVALID_QUOTE",
+        "Le devis sélectionné n'appartient pas à ce projet."
+      );
+    }
   }
 
   const renamedFilename = buildValidatedInvoiceFilename({

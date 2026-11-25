@@ -484,11 +484,58 @@ export const DEFAULT_RETRO_TEMPLATE_TASKS: readonly BlankRetroTemplateTask[] = [
   },
 ];
 
-export const BLANK_WEEKLY_DEFAULTS = {
-  nextStepsClient: [] as string[],
-  nextStepsGo: [] as string[],
+export interface BlankWeeklyTemplate {
+  nextStepsClient: string[];
+  nextStepsGo: string[];
+  summaryPlaceholder: string;
+}
+
+export const DEFAULT_WEEKLY_TEMPLATE: BlankWeeklyTemplate = {
+  nextStepsClient: [
+    "Validation des livrables présentés cette semaine",
+    "Retour sur les éléments créatifs / visuels en attente",
+  ],
+  nextStepsGo: [
+    "Poursuite de la production selon le rétroplanning",
+    "Préparation du prochain jalon et partage des assets",
+  ],
   summaryPlaceholder: "Résumé hebdomadaire à compléter.",
 };
+
+export const BLANK_WEEKLY_DEFAULTS = DEFAULT_WEEKLY_TEMPLATE;
+
+export async function getWeeklyTemplate(
+  prisma: PrismaClient
+): Promise<BlankWeeklyTemplate> {
+  try {
+    const custom = await prisma.categoryTemplate.findUnique({
+      where: { category: "WEEKLY_GLOBAL" },
+    });
+    if (custom?.weeklyTemplateJson) {
+      const parsed = JSON.parse(custom.weeklyTemplateJson) as Partial<BlankWeeklyTemplate>;
+      return {
+        nextStepsClient: Array.isArray(parsed.nextStepsClient)
+          ? parsed.nextStepsClient.filter((s): s is string => typeof s === "string")
+          : [...DEFAULT_WEEKLY_TEMPLATE.nextStepsClient],
+        nextStepsGo: Array.isArray(parsed.nextStepsGo)
+          ? parsed.nextStepsGo.filter((s): s is string => typeof s === "string")
+          : [...DEFAULT_WEEKLY_TEMPLATE.nextStepsGo],
+        summaryPlaceholder:
+          typeof parsed.summaryPlaceholder === "string" &&
+          parsed.summaryPlaceholder.trim()
+            ? parsed.summaryPlaceholder.trim()
+            : DEFAULT_WEEKLY_TEMPLATE.summaryPlaceholder,
+      };
+    }
+  } catch {
+    // Fallback to built-in weekly template
+  }
+  return {
+    nextStepsClient: [...DEFAULT_WEEKLY_TEMPLATE.nextStepsClient],
+    nextStepsGo: [...DEFAULT_WEEKLY_TEMPLATE.nextStepsGo],
+    summaryPlaceholder: DEFAULT_WEEKLY_TEMPLATE.summaryPlaceholder,
+  };
+}
 
 export async function getBudgetTemplateForCategory(
   prisma: PrismaClient,
@@ -544,13 +591,13 @@ export async function getRetroTemplateTasks(
 }
 
 /**
- * Seeds blank budget lines (usual expense posts with ZERO amounts) for a project.
+ * Seeds blank budget lines (usual expense posts with ZERO amounts, 1x1 qty/days) for a project.
  */
 export async function seedBlankBudgetForProject(
   prisma: PrismaClient,
   projectId: string,
   categoryRaw: string | null | undefined,
-  options: { replaceExisting?: boolean } = {}
+  options: { replaceExisting?: boolean; append?: boolean } = {}
 ): Promise<{ createdCount: number; category: ProjectCategory }> {
   const category = normalizeProjectCategory(categoryRaw);
   const templateLines = await getBudgetTemplateForCategory(prisma, category);
@@ -558,25 +605,28 @@ export async function seedBlankBudgetForProject(
   const existingCount = await prisma.budgetLine.count({
     where: { projectId },
   });
-  if (existingCount > 0 && !options.replaceExisting) {
+  if (existingCount > 0 && !options.replaceExisting && !options.append) {
     return { createdCount: 0, category };
   }
+
+  const startRowIndex = options.append && !options.replaceExisting
+    ? existingCount + 12
+    : 12;
 
   await prisma.$transaction(async (tx) => {
     if (options.replaceExisting && existingCount > 0) {
       await tx.budgetLine.deleteMany({ where: { projectId } });
     }
-    for (let i = 0; i < templateLines.length; i++) {
-      const item = templateLines[i];
-      await tx.budgetLine.create({
-        data: {
+    if (templateLines.length > 0) {
+      await tx.budgetLine.createMany({
+        data: templateLines.map((item, i) => ({
           projectId,
           category: item.category,
           objet: item.objet,
           realisePar: item.realisePar ?? null,
           expenseType: item.expenseType,
-          saleQty: 0,
-          saleDays: 0,
+          saleQty: 1,
+          saleDays: 1,
           saleUnitPrice: 0,
           saleTotalHt: 0,
           preOpUnitCost: 0,
@@ -585,8 +635,8 @@ export async function seedBlankBudgetForProject(
           postOpDays: 0,
           postOpUnitCost: 0,
           postOpTotalHt: 0,
-          sheetRowIndex: i + 12,
-        },
+          sheetRowIndex: startRowIndex + i,
+        })),
       });
     }
   });
@@ -600,25 +650,32 @@ export async function seedBlankBudgetForProject(
 export async function seedBlankRetroForProject(
   prisma: PrismaClient,
   projectId: string,
-  options: { replaceExisting?: boolean; category?: string | null } = {}
+  options: {
+    replaceExisting?: boolean;
+    append?: boolean;
+    category?: string | null;
+  } = {}
 ): Promise<{ createdCount: number }> {
   const templateTasks = await getRetroTemplateTasks(prisma, options.category);
 
   const existingCount = await prisma.retroTask.count({
     where: { projectId },
   });
-  if (existingCount > 0 && !options.replaceExisting) {
+  if (existingCount > 0 && !options.replaceExisting && !options.append) {
     return { createdCount: 0 };
   }
+
+  const startRowIndex = options.append && !options.replaceExisting
+    ? existingCount + 3
+    : 3;
 
   await prisma.$transaction(async (tx) => {
     if (options.replaceExisting && existingCount > 0) {
       await tx.retroTask.deleteMany({ where: { projectId } });
     }
-    for (let i = 0; i < templateTasks.length; i++) {
-      const t = templateTasks[i];
-      await tx.retroTask.create({
-        data: {
+    if (templateTasks.length > 0) {
+      await tx.retroTask.createMany({
+        data: templateTasks.map((t, i) => ({
           projectId,
           phase: t.phase,
           etape: t.etape,
@@ -627,10 +684,10 @@ export async function seedBlankRetroForProject(
           startDate: null,
           endDate: null,
           status: "A_FAIRE",
-          sheetRowIndex: i + 3,
+          sheetRowIndex: startRowIndex + i,
           isMilestone: Boolean(t.isMilestone),
           milestoneType: t.milestoneType ?? null,
-        },
+        })),
       });
     }
   });

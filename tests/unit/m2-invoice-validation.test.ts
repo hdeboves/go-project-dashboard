@@ -67,7 +67,7 @@ describe("M2 1-Click Invoice Validation Pipeline (Drive 001.3, Sheet Cumulation 
       vendorName: "Studio_Test",
       amountHt: 1000,
     });
-    expect(f2).toBe("F001B_326027_StudioTest_2026-11-24.pdf");
+    expect(f2).toBe("F001-B_326027_StudioTest_2026-11-24.pdf");
     expect(INVOICE_FILENAME_REGEX.test(f2)).toBe(true);
   });
 

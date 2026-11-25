@@ -241,6 +241,15 @@ export async function getProjectAccess(
     throw new AppHttpError(404, "PROJECT_NOT_FOUND", "Projet introuvable.");
   }
 
+  if (user.role === "ADMIN") {
+    return {
+      canView: true,
+      canEdit: true,
+      canManageMembers: true,
+      accessRole: "OWNER",
+    };
+  }
+
   if (project.ownerId === user.id) {
     return {
       canView: true,

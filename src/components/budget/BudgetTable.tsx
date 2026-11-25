@@ -14,7 +14,7 @@ import {
   Search,
   X,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import {
   type BudgetAlertDto,
   type BudgetLineDto,
@@ -22,6 +22,7 @@ import {
   type QuoteDto,
   formatEur,
 } from "@/components/budget/types";
+import { PdfPreviewModal } from "@/components/ui/PdfPreviewModal";
 import { showToast } from "@/lib/toast";
 
 interface BudgetTableProps {
@@ -96,18 +97,22 @@ export function BudgetTable({
     value: string;
   } | null>(null);
   const [savingInline, setSavingInline] = useState(false);
+  const inlineSavingRef = useRef(false);
 
   async function saveInlineCell(
     line: BudgetLineDto,
     field: "saleTotalHt" | "preOpTotalHt",
     rawValue: string
   ) {
+    if (inlineSavingRef.current) return;
     const parsed = Math.round((Number(rawValue) || 0) * 100) / 100;
     if (parsed === line[field]) {
       setInlineEdit(null);
       return;
     }
-    const denom = Math.max(0.01, (line.saleQty || 1) * (line.saleDays || 1));
+    const safeQty = line.saleQty > 0 ? line.saleQty : 1;
+    const safeDays = line.saleDays > 0 ? line.saleDays : 1;
+    const denom = Math.max(0.01, safeQty * safeDays);
     const nextSaleUnitPrice =
       field === "saleTotalHt"
         ? Math.round((parsed / denom) * 100) / 100
@@ -117,6 +122,7 @@ export function BudgetTable({
         ? Math.round((parsed / denom) * 100) / 100
         : line.preOpUnitCost;
 
+    inlineSavingRef.current = true;
     setSavingInline(true);
     try {
       const res = await fetch(`/api/projects/${projectId}/budget`, {
@@ -128,8 +134,8 @@ export function BudgetTable({
           objet: line.objet,
           realisePar: line.realisePar,
           expenseType: line.expenseType,
-          saleQty: line.saleQty,
-          saleDays: line.saleDays,
+          saleQty: safeQty,
+          saleDays: safeDays,
           saleUnitPrice: nextSaleUnitPrice,
           saleTotalHt: field === "saleTotalHt" ? parsed : line.saleTotalHt,
           preOpUnitCost: nextPreOpUnitCost,
@@ -145,6 +151,7 @@ export function BudgetTable({
       showToast(`Montant mis à jour pour « ${line.objet} ».`);
       await onLineSaved();
     } finally {
+      inlineSavingRef.current = false;
       setSavingInline(false);
     }
   }
@@ -790,60 +797,31 @@ export function BudgetTable({
         </table>
       </div>
 
-      {/* Invoice PDF Preview Modal right from any Budget Line */}
-      {previewInvoice && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/55 p-4 backdrop-blur-xs">
-          <div className="flex h-[85vh] w-full max-w-4xl flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl dark:border-slate-700 dark:bg-[#111827]">
-            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 px-4 py-3 dark:border-slate-800">
-              <div>
-                <p className="text-sm font-bold text-slate-900 dark:text-white">
-                  {previewInvoice.renamedFilename ??
-                    previewInvoice.originalFilename}
-                </p>
-                <p className="text-xs text-slate-500 dark:text-slate-400">
-                  {previewInvoice.vendorName || "Prestataire"} · N°{" "}
-                  {previewInvoice.invoiceNumber || "—"} ·{" "}
-                  {formatEur(previewInvoice.amountHt)} HT
-                </p>
-              </div>
-              <div className="flex items-center gap-2">
-                {previewInvoice.driveFileId && (
-                  <a
-                    href={`https://drive.google.com/file/d/${previewInvoice.driveFileId}/view`}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="inline-flex items-center gap-1 rounded-lg bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700 hover:bg-emerald-100"
-                  >
-                    Ouvrir dans Drive
-                    <ExternalLink className="h-3 w-3" />
-                  </a>
-                )}
-                <a
-                  href={`/api/projects/${projectId}/invoices/${previewInvoice.id}/preview`}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
-                >
-                  Plein écran
-                  <ExternalLink className="h-3 w-3" />
-                </a>
-                <button
-                  type="button"
-                  onClick={() => setPreviewInvoice(null)}
-                  className="rounded-lg p-1 text-slate-400 hover:bg-slate-100"
-                >
-                  <X className="h-4 w-4" />
-                </button>
-              </div>
-            </div>
-            <iframe
-              src={`/api/projects/${projectId}/invoices/${previewInvoice.id}/preview`}
-              title={`Facture ${previewInvoice.invoiceNumber ?? previewInvoice.originalFilename}`}
-              className="flex-1 bg-slate-100"
-            />
-          </div>
-        </div>
-      )}
+      {/* Accessible Invoice PDF Preview Modal right from any Budget Line */}
+      <PdfPreviewModal
+        open={Boolean(previewInvoice)}
+        title={
+          previewInvoice?.renamedFilename ??
+          previewInvoice?.originalFilename ??
+          "Facture"
+        }
+        subtitle={
+          previewInvoice
+            ? `${previewInvoice.vendorName || "Prestataire"} · N° ${previewInvoice.invoiceNumber || "—"} · ${formatEur(previewInvoice.amountHt)} HT`
+            : null
+        }
+        previewUrl={
+          previewInvoice
+            ? `/api/projects/${projectId}/invoices/${previewInvoice.id}/preview`
+            : ""
+        }
+        driveUrl={
+          previewInvoice?.driveFileId
+            ? `https://drive.google.com/file/d/${previewInvoice.driveFileId}/view`
+            : null
+        }
+        onClose={() => setPreviewInvoice(null)}
+      />
     </section>
   );
 }
@@ -1348,9 +1326,20 @@ function LineRowWithDetail({
                     <Receipt className="h-3 w-3 text-emerald-500" />
                     Addition Facturé Post-Op
                   </p>
-                  <p className="mt-1 font-mono text-xs text-slate-700 dark:text-slate-200">
+                  <p className="mt-1 font-mono text-xs tabular-nums text-slate-700 dark:text-slate-200">
                     {validatedLineInvoices.length > 0 ? (
                       <>
+                        {Math.abs(line.postOpTotalHt - sumInvoicesHt) > 0.01 && (
+                          <>
+                            Importé{" "}
+                            {formatEur(
+                              Math.round(
+                                (line.postOpTotalHt - sumInvoicesHt) * 100
+                              ) / 100
+                            )}{" "}
+                            +{" "}
+                          </>
+                        )}
                         {validatedLineInvoices
                           .map((i) => formatEur(i.amountHt))
                           .join(" + ")}{" "}

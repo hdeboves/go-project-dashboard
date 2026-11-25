@@ -15,8 +15,11 @@ import {
   Receipt,
   Search,
   Settings,
+  Sparkles,
   Sun,
   UploadCloud,
+  UserCircle2,
+  Users,
   X,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
@@ -48,10 +51,24 @@ const QUICK_ACTIONS = [
     tone: "text-sky-600 dark:text-sky-400",
   },
   {
+    href: "/budget?tab=quotes",
+    label: "Créer / Gérer les devis",
+    hint: "Devis & liaison multi-factures",
+    icon: FileSpreadsheet,
+    tone: "text-indigo-600 dark:text-indigo-400",
+  },
+  {
     href: "/budget?tab=invoices",
     label: "Déposer une facture PDF",
     hint: "Budget & Pennylane",
     icon: Receipt,
+    tone: "text-rose-600 dark:text-rose-400",
+  },
+  {
+    href: "/retroplanning?tab=template",
+    label: "Modèle vierge Rétroplanning",
+    hint: "Personnaliser les tâches sans dates",
+    icon: Sparkles,
     tone: "text-rose-600 dark:text-rose-400",
   },
   {
@@ -131,6 +148,18 @@ const NAV_COMMANDS = [
     label: "Reporting Bilan",
     hint: "Fortnite, Influence, Excel & Slides",
     icon: BarChart3,
+  },
+  {
+    href: "/team",
+    label: "Équipe & Administration",
+    hint: "Annuaire, rôles admin, backups & journal d'audit",
+    icon: Users,
+  },
+  {
+    href: "/profile",
+    label: "Mon profil & Avatar",
+    hint: "Personnaliser avatar & session utilisateur",
+    icon: UserCircle2,
   },
   {
     href: "/settings",

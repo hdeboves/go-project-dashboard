@@ -264,13 +264,18 @@ export default function SettingsPage() {
             </div>
             <div className="rounded-xl bg-white p-3.5 text-xs text-slate-600 shadow-2xs dark:bg-[#111827] dark:text-slate-300">
               <p className="font-semibold text-slate-900 dark:text-white">
-                2. Adresse de retour locale
+                2. Adresse de retour OAuth
               </p>
               <p className="mt-1">
                 Ajoutez{" "}
+                <code className="break-all rounded bg-slate-100 px-1 py-0.5 font-mono text-[11px] text-slate-800 dark:bg-slate-800 dark:text-slate-100">
+                  https://go-project-dashboard.vercel.app/api/auth/google/callback
+                </code>{" "}
+                (et{" "}
                 <code className="rounded bg-slate-100 px-1 py-0.5 font-mono text-[11px] text-slate-800 dark:bg-slate-800 dark:text-slate-100">
                   http://localhost:3000/api/auth/google/callback
-                </code>
+                </code>{" "}
+                en local)
               </p>
             </div>
             <div className="rounded-xl bg-white p-3.5 text-xs text-slate-600 shadow-2xs dark:bg-[#111827] dark:text-slate-300">

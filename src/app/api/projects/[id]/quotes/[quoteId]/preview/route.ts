@@ -4,6 +4,7 @@ import { toErrorResponse } from "@/lib/api-error";
 import { assertProjectAccess, getCurrentUser } from "@/lib/auth/session";
 import { AppHttpError } from "@/lib/errors";
 import { prisma } from "@/lib/prisma";
+import { sanitizeContentDispositionFilename } from "@/lib/shared/filenames";
 
 export async function GET(
   _req: NextRequest,
@@ -32,7 +33,7 @@ export async function GET(
       status: 200,
       headers: {
         "Content-Type": "application/pdf",
-        "Content-Disposition": `inline; filename="${(quote.originalFilename ?? `${quote.quoteNumber}.pdf`).replace(/"/g, "")}"`,
+        "Content-Disposition": `inline; filename="${sanitizeContentDispositionFilename(quote.originalFilename ?? `${quote.quoteNumber}.pdf`)}"`,
         "Cache-Control": "no-store",
       },
     });

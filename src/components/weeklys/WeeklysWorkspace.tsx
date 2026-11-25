@@ -13,6 +13,7 @@ import {
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { WeeklyTemplateEditor } from "@/components/templates/WeeklyTemplateEditor";
 import {
   VisualPicker,
   type WeeklyVisualView,
@@ -21,6 +22,7 @@ import {
   WeeklyDigestPreview,
   type WeeklyDigestTaskView,
 } from "@/components/weeklys/WeeklyDigestPreview";
+import type { BlankWeeklyTemplate } from "@/lib/templates/project-templates";
 import { showToast } from "@/lib/toast";
 
 interface WeeklyReportView {
@@ -45,24 +47,39 @@ interface ShellStatusResponse {
   googleConnected: boolean;
 }
 
-function defaultWindow(): { weekStart: string; weekEnd: string } {
-  const today = new Date();
-  const end = today.toISOString().slice(0, 10);
-  const start = new Date(today.getTime() - 7 * 86_400_000)
-    .toISOString()
-    .slice(0, 10);
-  return { weekStart: start, weekEnd: end };
+function currentWorkWeekWindow(): { weekStart: string; weekEnd: string } {
+  const now = new Date();
+  const day = (now.getDay() + 6) % 7;
+  const mon = new Date(now.getTime() - day * 86_400_000);
+  const fri = new Date(mon.getTime() + 4 * 86_400_000);
+  return {
+    weekStart: mon.toISOString().slice(0, 10),
+    weekEnd: fri.toISOString().slice(0, 10),
+  };
 }
 
 export function WeeklysWorkspace() {
   const searchParams = useSearchParams();
   const queryProjectId = searchParams.get("projectId");
+  const queryTab = searchParams.get("tab");
   const lastProjectIdRef = useRef<string | null>(null);
 
-  const [projectId, setProjectId] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<"composer" | "template">(
+    queryTab === "template" ? "template" : "composer"
+  );
+  const [lastQueryTab, setLastQueryTab] = useState(queryTab);
+  if (lastQueryTab !== queryTab) {
+    setLastQueryTab(queryTab);
+    if (queryTab === "template") setActiveTab("template");
+    else if (queryTab === "composer") setActiveTab("composer");
+  }
+
+  const [projectId, setProjectId] = useState<string | null>(queryProjectId);
   const [projectLabel, setProjectLabel] = useState("");
-  const [weekStart, setWeekStart] = useState("");
-  const [weekEnd, setWeekEnd] = useState("");
+  const [weekStart, setWeekStart] = useState(
+    () => currentWorkWeekWindow().weekStart
+  );
+  const [weekEnd, setWeekEnd] = useState(() => currentWorkWeekWindow().weekEnd);
   const [tasks, setTasks] = useState<WeeklyDigestTaskView[]>([]);
   const [visuals, setVisuals] = useState<WeeklyVisualView[]>([]);
   const [selectedVisualIds, setSelectedVisualIds] = useState<string[]>([]);
@@ -80,50 +97,62 @@ export function WeeklysWorkspace() {
     text: string;
   } | null>(null);
 
-  const loadWeeklys = useCallback(async () => {
-    if (!weekStart || !weekEnd) return;
-    setLoading(true);
+  // 1. Resolve active project from shell (only on mount / shell refresh, NOT on date change!)
+  const resolveShell = useCallback(async () => {
     try {
       const shellRes = await fetch("/api/shell/status", { cache: "no-store" });
-      const shell = shellRes.ok
-        ? ((await shellRes.json()) as ShellStatusResponse)
-        : null;
-
-      const targetId = queryProjectId || shell?.activeProjectId || null;
-      const isProjectSwitch = lastProjectIdRef.current !== targetId;
-      lastProjectIdRef.current = targetId;
-
-      if (!targetId) {
-        setProjectId(null);
-        setWeeklys([]);
-        setTasks([]);
-        setVisuals([]);
-        setSelectedVisualIds([]);
-        return;
-      }
-
-      if (isProjectSwitch) {
-        setSelectedVisualIds([]);
-      }
-
+      if (!shellRes.ok) return;
+      const shell = (await shellRes.json()) as ShellStatusResponse;
+      const targetId = queryProjectId || shell.activeProjectId || null;
       setProjectId(targetId);
-      const proj = shell?.projects.find((p) => p.id === targetId);
+      const proj = shell.projects.find((p) => p.id === targetId);
       setProjectLabel(
         proj
           ? `${proj.client} — ${proj.nomJeu} (CP ${proj.codeProjet})`
-          : `Projet actif`
+          : "Projet actif"
       );
-
-      if (shell && !shell.googleConnected) {
+      if (!shell.googleConnected) {
         setSetupRequiredMsg(
           "Connectez Google Workspace dans Paramètres pour créer vos Slides et brouillons Gmail."
         );
       } else {
         setSetupRequiredMsg(null);
       }
+    } catch {
+      // ignore transient error
+    }
+  }, [queryProjectId]);
 
+  useEffect(() => {
+    let active = true;
+    const init = async () => {
+      await Promise.resolve();
+      if (active) await resolveShell();
+    };
+    void init();
+    const onRefresh = () => void resolveShell();
+    window.addEventListener("go:shell-refresh", onRefresh);
+    return () => {
+      active = false;
+      window.removeEventListener("go:shell-refresh", onRefresh);
+    };
+  }, [resolveShell]);
+
+  // 2. Load Weekly preview when project or dates change
+  const loadWeeklys = useCallback(async () => {
+    if (!projectId || !weekStart || !weekEnd) {
+      setLoading(false);
+      return;
+    }
+    const isProjectSwitch = lastProjectIdRef.current !== projectId;
+    lastProjectIdRef.current = projectId;
+    if (isProjectSwitch) {
+      setLoading(true);
+      setSelectedVisualIds([]);
+    }
+    try {
       const res = await fetch(
-        `/api/projects/${targetId}/weeklys?preview=1&weekStart=${encodeURIComponent(weekStart)}&weekEnd=${encodeURIComponent(weekEnd)}`,
+        `/api/projects/${projectId}/weeklys?preview=1&weekStart=${encodeURIComponent(weekStart)}&weekEnd=${encodeURIComponent(weekEnd)}`,
         { cache: "no-store" }
       );
       const json = (await res.json().catch(() => ({}))) as {
@@ -158,22 +187,7 @@ export function WeeklysWorkspace() {
     } finally {
       setLoading(false);
     }
-  }, [queryProjectId, weekStart, weekEnd]);
-
-  useEffect(() => {
-    let active = true;
-    const initDates = async () => {
-      await Promise.resolve();
-      if (!active) return;
-      const win = defaultWindow();
-      setWeekStart((prev) => prev || win.weekStart);
-      setWeekEnd((prev) => prev || win.weekEnd);
-    };
-    void initDates();
-    return () => {
-      active = false;
-    };
-  }, []);
+  }, [projectId, weekStart, weekEnd]);
 
   useEffect(() => {
     let active = true;
@@ -182,13 +196,34 @@ export function WeeklysWorkspace() {
       if (active) await loadWeeklys();
     };
     void init();
-    const onRefresh = () => void loadWeeklys();
-    window.addEventListener("go:shell-refresh", onRefresh);
     return () => {
       active = false;
-      window.removeEventListener("go:shell-refresh", onRefresh);
     };
   }, [loadWeeklys]);
+
+  async function handleLoadSavedBlankTemplate() {
+    try {
+      const res = await fetch("/api/templates", { cache: "no-store" });
+      if (res.ok) {
+        const json = (await res.json()) as {
+          weeklyTemplate?: BlankWeeklyTemplate;
+        };
+        if (json.weeklyTemplate) {
+          setNextStepsClient([...json.weeklyTemplate.nextStepsClient]);
+          setNextStepsGo([...json.weeklyTemplate.nextStepsGo]);
+          setSelectedVisualIds([]);
+          showToast("Modèle vierge Weekly chargé !");
+          return;
+        }
+      }
+    } catch {
+      // fallback
+    }
+    setNextStepsClient([]);
+    setNextStepsGo([]);
+    setSelectedVisualIds([]);
+    showToast("Brouillon Weekly réinitialisé.");
+  }
 
   function toggleVisual(id: string) {
     setSelectedVisualIds((prev) =>
@@ -311,7 +346,49 @@ export function WeeklysWorkspace() {
         </div>
       )}
 
-      {/* 2-Column Executive Composer */}
+      {/* Tabs: Composer vs Blank Template */}
+      <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-200/80 dark:border-slate-800">
+        <div className="flex items-center gap-6">
+          <button
+            type="button"
+            onClick={() => setActiveTab("composer")}
+            className={`inline-flex items-center gap-2 border-b-2 pb-3 text-xs font-semibold transition-colors ${
+              activeTab === "composer"
+                ? "border-rose-600 text-slate-900 dark:border-rose-400 dark:text-white"
+                : "border-transparent text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white"
+            }`}
+          >
+            <Presentation className="h-3.5 w-3.5" />
+            Compositeur Weekly
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab("template")}
+            data-testid="weekly-tab-template"
+            className={`inline-flex items-center gap-1.5 border-b-2 pb-3 text-xs font-semibold transition-colors ${
+              activeTab === "template"
+                ? "border-rose-600 text-rose-700 dark:border-rose-400 dark:text-rose-300"
+                : "border-transparent text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white"
+            }`}
+          >
+            <Sparkles className="h-3.5 w-3.5 text-rose-500" />
+            Modèle vierge
+          </button>
+        </div>
+      </div>
+
+      {activeTab === "template" ? (
+        <WeeklyTemplateEditor
+          onApplyToComposer={(tpl) => {
+            setNextStepsClient([...tpl.nextStepsClient]);
+            setNextStepsGo([...tpl.nextStepsGo]);
+            setSelectedVisualIds([]);
+            setActiveTab("composer");
+            showToast("Modèle vierge chargé dans le compositeur Weekly.");
+          }}
+        />
+      ) : (
+      /* 2-Column Executive Composer */
       <div className="grid gap-6 lg:grid-cols-12">
         {/* LEFT (7 cols): Period + Next Steps + Visuals */}
         <div className="space-y-6 lg:col-span-7">
@@ -390,16 +467,11 @@ export function WeeklysWorkspace() {
                 <div className="flex flex-wrap items-center gap-2">
                   <button
                     type="button"
-                    onClick={() => {
-                      setNextStepsClient([]);
-                      setNextStepsGo([]);
-                      setSelectedVisualIds([]);
-                      showToast("Modèle vierge Weekly réinitialisé.");
-                    }}
-                    className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300"
+                    onClick={() => void handleLoadSavedBlankTemplate()}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800"
                   >
                     <RotateCcw className="h-3 w-3" />
-                    Modèle vierge
+                    Charger modèle vierge
                   </button>
                   {tasks.length > 0 && (
                     <button
@@ -666,6 +738,7 @@ export function WeeklysWorkspace() {
           </section>
         </aside>
       </div>
+      )}
     </div>
   );
 }

@@ -15,13 +15,22 @@ export const ACTIVE_PROJECT_COOKIE = "go_active_project_id";
 
 export async function GET() {
   try {
-    const [cookieStore, currentUser, dbActiveSetting] = await Promise.all([
-      cookies(),
-      getCurrentUser(prisma),
-      prisma.appSetting.findUnique({
-        where: { key: "ACTIVE_PROJECT_ID" },
-      }),
-    ]);
+    const [cookieStore, currentUser, settingsRows, googleConn] =
+      await Promise.all([
+        cookies(),
+        getCurrentUser(prisma),
+        prisma.appSetting.findMany({
+          where: { key: { in: ["ACTIVE_PROJECT_ID", "GEMINI_API_KEY"] } },
+        }),
+        prisma.googleConnection.findFirst({
+          orderBy: { updatedAt: "desc" },
+          select: { userEmail: true, scope: true, expiresAt: true },
+        }),
+      ]);
+
+    const settingsMap = new Map(settingsRows.map((s) => [s.key, s]));
+    const dbActiveSetting = settingsMap.get("ACTIVE_PROJECT_ID");
+    const geminiSetting = settingsMap.get("GEMINI_API_KEY");
 
     const cookieProjectId =
       cookieStore.get(ACTIVE_PROJECT_COOKIE)?.value ?? null;
@@ -34,6 +43,17 @@ export async function GET() {
         persistedActiveId = null;
       }
     }
+
+    let hasDbGemini = false;
+    if (geminiSetting?.valueEnc) {
+      try {
+        hasDbGemini = decryptSecret(geminiSetting.valueEnc).trim().length > 0;
+      } catch {
+        hasDbGemini = false;
+      }
+    }
+    const geminiConfigured =
+      hasDbGemini || Boolean(process.env.GEMINI_API_KEY?.trim());
 
     const projects = await prisma.project.findMany({
       where: {
@@ -66,37 +86,16 @@ export async function GET() {
     const activeProject =
       projects.find((p) => p.id === preferredId) ?? projects[0] ?? null;
 
-    const activeProjectAccess = activeProject
-      ? await getProjectAccess(prisma, activeProject.id, currentUser)
-      : null;
-
-    const googleConn = await prisma.googleConnection.findFirst({
-      orderBy: { updatedAt: "desc" },
-      select: { userEmail: true, scope: true, expiresAt: true },
-    });
-
-    const geminiSetting = await prisma.appSetting.findUnique({
-      where: { key: "GEMINI_API_KEY" },
-    });
-    let hasDbGemini = false;
-    if (geminiSetting?.valueEnc) {
-      try {
-        hasDbGemini = decryptSecret(geminiSetting.valueEnc).trim().length > 0;
-      } catch {
-        hasDbGemini = false;
-      }
-    }
-    const geminiConfigured =
-      hasDbGemini || Boolean(process.env.GEMINI_API_KEY?.trim());
-
+    let activeProjectAccess = null;
     let cpConflictCount = 0;
     let extDriftCount = 0;
     let pendingInvoicesCount = 0;
     let lateTasksCount = 0;
 
     if (activeProject) {
-      const [invoiceConflicts, drifts, pendingInvs, lateTasks] =
+      const [access, invoiceConflicts, drifts, pendingInvs, lateTasks] =
         await Promise.all([
+          getProjectAccess(prisma, activeProject.id, currentUser),
           prisma.invoice.count({
             where: {
               projectId: activeProject.id,
@@ -124,7 +123,7 @@ export async function GET() {
             },
           }),
         ]);
-      // Count ONLY active currently-blocked invoices (never stale historical AuditLog entries)
+      activeProjectAccess = access;
       cpConflictCount = invoiceConflicts;
       extDriftCount = drifts;
       pendingInvoicesCount = pendingInvs;

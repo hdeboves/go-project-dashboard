@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { toErrorResponse } from "@/lib/api-error";
@@ -59,7 +60,13 @@ export async function POST(req: NextRequest) {
       req.nextUrl.searchParams.get("secret") ||
       "";
 
-    if (!headerSecret || headerSecret.trim() !== expectedSecret) {
+    const providedBuf = Buffer.from(headerSecret.trim(), "utf8");
+    const expectedBuf = Buffer.from(expectedSecret, "utf8");
+    const secretValid =
+      providedBuf.length === expectedBuf.length &&
+      crypto.timingSafeEqual(providedBuf, expectedBuf);
+
+    if (!headerSecret || !secretValid) {
       return NextResponse.json(
         {
           error:
