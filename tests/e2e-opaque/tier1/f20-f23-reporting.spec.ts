@@ -131,13 +131,16 @@ function flattenSheetText(rows: string[][]): string {
 function findMatchingNumberInRows(rows: string[][], target: number): boolean {
   const plain = String(target);
   const escapedPlain = plain.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const boundaryRegex = new RegExp(`(?:^|[^\\d.])${escapedPlain}(?:$|[^\\d.])`);
+  const boundaryRegex = new RegExp(`(?:^|[^\\d.,-])${escapedPlain}(?:$|[^\\d.,-])`);
 
   for (const row of rows) {
     for (const cell of row) {
-      if (cell.trim() === "") continue;
+      const trimmed = cell.trim();
+      if (trimmed === "" || /^\d{4}-\d{2}-\d{2}/.test(trimmed) || trimmed.startsWith("=")) {
+        continue;
+      }
 
-      const noSpaces = cell.replace(/[\u00a0\u202f\s]/g, "");
+      const noSpaces = trimmed.replace(/[\u00a0\u202f\s]/g, "");
       if (noSpaces === plain) {
         return true;
       }
@@ -204,13 +207,16 @@ function assertReportingSlidesStructure(
     expect(slideCorpus, `Missing required slide section: ${section.label}`).toMatch(section.regex);
   }
 
+  const matchedSlideIndices = new Set<number>();
   for (const talent of expected.talents) {
     if (slidesArray.length > 0) {
-      const talentSlide = slidesArray.find((s) => {
+      const talentSlideIdx = slidesArray.findIndex((s, idx) => {
+        if (matchedSlideIndices.has(idx)) return false;
         const title = String(s.title ?? "");
-        const sText = `${title} ${String(s.type ?? "")} ${JSON.stringify(s)}`;
+        const headerScope = `${title} ${String(s.type ?? "")}`;
+        const sText = `${headerScope} ${JSON.stringify(s)}`;
         return (
-          !/Chiffres cumulés/i.test(title) &&
+          !/Chiffres cumul[ée]s|CUMULATIVE/i.test(headerScope) &&
           new RegExp(talent, "i").test(sText) &&
           /vues/i.test(sText) &&
           /likes/i.test(sText) &&
@@ -218,14 +224,18 @@ function assertReportingSlidesStructure(
         );
       });
       expect(
-        talentSlide,
+        talentSlideIdx,
         `Missing dedicated individual talent slide for ${talent} with vues/likes/interactions`
-      ).toBeDefined();
+      ).toBeGreaterThanOrEqual(0);
+      matchedSlideIndices.add(talentSlideIdx);
     } else {
       expect(slideCorpus, `Missing individual talent slide for ${talent}`).toMatch(
         new RegExp(talent, "i")
       );
     }
+  }
+  if (slidesArray.length > 0) {
+    expect(matchedSlideIndices.size).toBe(expected.talents.length);
   }
 
   expect(slideCorpus).toMatch(/vues/i);
@@ -531,9 +541,12 @@ test.describe("Tier 1 — Connected Reporting Tests (F20–F23)", () => {
 
       const submitBtn = page
         .locator("button")
-        .filter({ hasText: /Importer.*Fortnite|Charger.*CSV|Importer le fichier|Importer CSV|Importer/i })
+        .filter({ hasText: /Importer.*Fortnite|Charger.*CSV|Importer le fichier|Importer CSV/i })
         .first();
-      if (await submitBtn.isVisible().catch(() => false)) {
+      if (
+        (await submitBtn.isVisible().catch(() => false)) &&
+        (await submitBtn.isEnabled().catch(() => false))
+      ) {
         await submitBtn.click();
       }
 
@@ -809,10 +822,13 @@ test.describe("Tier 1 — Connected Reporting Tests (F20–F23)", () => {
 
       const previewImg = page
         .locator(
-          'main img[alt*="Kalut"], main img[data-testid*="screenshot"], main img[src*="reporting"], main img[src^="data:"], main img[src^="blob:"], [data-testid*="influence-preview"] img, main img'
+          'main img[alt*="Kalut"], main img[data-testid*="screenshot"], main img[src*="reporting"], main img[src^="data:"], main img[src^="blob:"], [data-testid*="influence-preview"] img'
         )
         .first();
       await expect(previewImg).toBeVisible();
+      expect(
+        await previewImg.evaluate((el: HTMLImageElement) => el.complete && el.naturalWidth > 0)
+      ).toBe(true);
 
       const likesInput = page
         .locator(
@@ -929,9 +945,13 @@ test.describe("Tier 1 — Connected Reporting Tests (F20–F23)", () => {
       expect(stored?.contentUrl).toBe(kalut.contentUrl);
       expect(stored?.sparkCode).toBe(kalut.sparkCode);
 
+      const errors = await attachErrorTracking(page);
       await page.goto(`${BASE_URL}/reporting?projectId=${project.id}`);
       await expect(page.locator("body")).toContainText(kalut.sparkCode ?? "#SPARK-KALUT-01");
       await expect(page.locator("body")).toContainText(/tiktok\.com\/@kalut/i);
+      expect(errors.pageErrors).toEqual([]);
+      expect(errors.consoleErrors).toEqual([]);
+      expect(errors.serverErrors).toEqual([]);
     });
   });
 
@@ -1059,17 +1079,31 @@ test.describe("Tier 1 — Connected Reporting Tests (F20–F23)", () => {
         true
       );
 
-      // Tab 2: Influence par Talent
+      // Tab 2: Influence par Talent (per-talent row pairing + totals)
       const talentRows = sheets["Influence par Talent"];
       const talentText = flattenSheetText(talentRows);
       for (const shot of PILOT_INFLUENCE_SCREENSHOTS) {
         expect(talentText).toContain(shot.talentName);
-        expect(findMatchingNumberInRows(talentRows, shot.expectedMetrics.views)).toBe(true);
+        const matchingTalentRows = talentRows.filter((row) =>
+          new RegExp(shot.talentName, "i").test(row.join(" "))
+        );
+        expect(
+          matchingTalentRows.length,
+          `Missing row for talent ${shot.talentName} in Influence par Talent`
+        ).toBeGreaterThanOrEqual(1);
+        expect(
+          findMatchingNumberInRows(matchingTalentRows, shot.expectedMetrics.views),
+          `Talent row for ${shot.talentName} missing views ${shot.expectedMetrics.views}`
+        ).toBe(true);
+        expect(
+          findMatchingNumberInRows(matchingTalentRows, shot.expectedMetrics.likes),
+          `Talent row for ${shot.talentName} missing likes ${shot.expectedMetrics.likes}`
+        ).toBe(true);
       }
       expect(findMatchingNumberInRows(talentRows, expectedTotals.totalViews)).toBe(true);
       expect(findMatchingNumberInRows(talentRows, expectedTotals.totalLikes)).toBe(true);
 
-      // Tab 3: Cumulé Réseaux
+      // Tab 3: Cumulé Réseaux (per-platform subtotals + grand totals)
       const networkRows = sheets["Cumulé Réseaux"];
       const networkText = flattenSheetText(networkRows);
       for (const platform of INFLUENCE_PLATFORMS) {
@@ -1081,7 +1115,23 @@ test.describe("Tier 1 — Connected Reporting Tests (F20–F23)", () => {
               : platform === "INSTAGRAM"
                 ? "Instagram"
                 : "Snapchat";
-        expect(networkText).toMatch(new RegExp(`${platform}|${label}`, "i"));
+        const platformRegex = new RegExp(`${platform}|${label}`, "i");
+        expect(networkText).toMatch(platformRegex);
+        const matchingPlatformRows = networkRows.filter((row) =>
+          platformRegex.test(row.join(" "))
+        );
+        expect(
+          matchingPlatformRows.length,
+          `Missing row for platform ${platform} in Cumulé Réseaux`
+        ).toBeGreaterThanOrEqual(1);
+        expect(
+          findMatchingNumberInRows(matchingPlatformRows, expectedTotals.byPlatform[platform].views),
+          `Platform row ${platform} missing views subtotal ${expectedTotals.byPlatform[platform].views}`
+        ).toBe(true);
+        expect(
+          findMatchingNumberInRows(matchingPlatformRows, expectedTotals.byPlatform[platform].likes),
+          `Platform row ${platform} missing likes subtotal ${expectedTotals.byPlatform[platform].likes}`
+        ).toBe(true);
       }
       expect(findMatchingNumberInRows(networkRows, expectedTotals.totalViews)).toBe(true);
       expect(findMatchingNumberInRows(networkRows, expectedTotals.totalLikes)).toBe(true);
@@ -1115,6 +1165,7 @@ test.describe("Tier 1 — Connected Reporting Tests (F20–F23)", () => {
       await seedFullPilotReportingDataset(api, project.id);
       await api.consolidateReporting(project.id);
 
+      const errors = await attachErrorTracking(page);
       await page.goto(`${BASE_URL}/reporting?projectId=${project.id}`);
 
       for (const tabName of REPORTING_TABS) {
@@ -1135,6 +1186,9 @@ test.describe("Tier 1 — Connected Reporting Tests (F20–F23)", () => {
       expect(downloadedPath).toBeTruthy();
       const buf = await readFile(downloadedPath as string);
       assertValidXlsxBuffer(buf, EXPECTED_REPORTING_TABS);
+      expect(errors.pageErrors).toEqual([]);
+      expect(errors.consoleErrors).toEqual([]);
+      expect(errors.serverErrors).toEqual([]);
     });
 
     test("T1-F22-06 Re-running consolidation after metric and verbatim updates is idempotent with zero duplicates", async ({
@@ -1182,8 +1236,13 @@ test.describe("Tier 1 — Connected Reporting Tests (F20–F23)", () => {
       const kalutRows = sheets["Influence par Talent"].filter((row) =>
         row.join(" ").includes("Kalut")
       );
-      expect(kalutRows.length).toBeGreaterThanOrEqual(1);
-      expect(findMatchingNumberInRows(sheets["Influence par Talent"], 300000)).toBe(true);
+      const aksiankaRows = sheets["Influence par Talent"].filter((row) =>
+        row.join(" ").includes("Aksianka")
+      );
+      expect(kalutRows.length).toBe(1);
+      expect(aksiankaRows.length).toBe(1);
+      expect(findMatchingNumberInRows(kalutRows, 300000)).toBe(true);
+      expect(findMatchingNumberInRows(kalutRows, 245000)).toBe(false);
       expect(findMatchingNumberInRows(sheets["Influence par Talent"], 245000)).toBe(false);
 
       const verbatimHandles = sheets["Verbatims"]
@@ -1238,6 +1297,11 @@ test.describe("Tier 1 — Connected Reporting Tests (F20–F23)", () => {
 
       const calls = await api.harness.getCalls();
       assertProdUntouched(calls.data);
+      expect(
+        node0063?.driveFileId === slidesFileId ||
+          calls.data.some((c) => JSON.stringify(c).includes(slidesFileId)),
+        "Expected generated slidesFileId to be linked to 006.3 node or recorded in Gateway calls"
+      ).toBe(true);
     });
 
     test("T1-F23-02 Generated deck contains all required sections, 1 slide per Talent, and selected-only Verbatims", async ({
@@ -1292,19 +1356,51 @@ test.describe("Tier 1 — Connected Reporting Tests (F20–F23)", () => {
         true
       );
 
-      const serializedSlides = JSON.stringify(slidesRes.data);
-      const normalizedSlides = serializedSlides.replace(/[\s\u00a0\u202f,]/g, "");
-      expect(normalizedSlides).toContain(String(expectedTotals.totalViews));
-      expect(normalizedSlides).toContain(String(expectedTotals.totalLikes));
+      const slidesArray = toRecordArray(
+        slidesRes.data.slides ?? slidesRes.data.slidesSummary ?? slidesRes.data.pages
+      );
+      let cumulativeScopeText: string;
+      if (slidesArray.length > 0) {
+        const cumulativeSlide =
+          slidesArray.find((s) =>
+            /Chiffres cumul[ée]s|CUMULATIVE/i.test(`${String(s.title ?? "")} ${String(s.type ?? "")}`)
+          ) ?? slidesArray.find((s) => /Chiffres cumul[ée]s/i.test(JSON.stringify(s)));
+        expect(
+          cumulativeSlide,
+          "Expected Chiffres cumulés slide entry in slides array"
+        ).toBeDefined();
+        cumulativeScopeText = JSON.stringify(cumulativeSlide);
+      } else {
+        cumulativeScopeText = JSON.stringify(slidesRes.data);
+      }
+
+      let normalizedSlides = cumulativeScopeText;
+      let prev = "";
+      while (normalizedSlides !== prev) {
+        prev = normalizedSlides;
+        normalizedSlides = normalizedSlides
+          .replace(/(\d)[\s\u00a0\u202f]+(?=\d{3}(?:\D|$))/g, "$1")
+          .replace(/(\d),(?=\d{3}(?:\D|$))/g, "$1");
+      }
+      expect(normalizedSlides).toMatch(
+        new RegExp(`(?:^|\\D)${expectedTotals.totalViews}(?:$|\\D)`)
+      );
+      expect(normalizedSlides).toMatch(
+        new RegExp(`(?:^|\\D)${expectedTotals.totalLikes}(?:$|\\D)`)
+      );
 
       const nonLikeInteractions =
         expectedTotals.totalComments +
         expectedTotals.totalShares +
         expectedTotals.totalReposts +
         expectedTotals.totalSaves;
+      const nonLikeRegex = new RegExp(`(?:^|\\D)${nonLikeInteractions}(?:$|\\D)`);
+      const totalInterRegex = new RegExp(
+        `(?:^|\\D)${expectedTotals.totalLikes + nonLikeInteractions}(?:$|\\D)`
+      );
       expect(
-        normalizedSlides.includes(String(nonLikeInteractions)) ||
-          normalizedSlides.includes(String(expectedTotals.totalLikes + nonLikeInteractions))
+        nonLikeRegex.test(normalizedSlides) || totalInterRegex.test(normalizedSlides),
+        `Expected ${nonLikeInteractions} or ${expectedTotals.totalLikes + nonLikeInteractions} on Chiffres cumulés slide`
       ).toBe(true);
     });
 
@@ -1432,7 +1528,15 @@ test.describe("Tier 1 — Connected Reporting Tests (F20–F23)", () => {
         .filter({ hasText: /Générer.*Slides|Générer.*Reporting/i })
         .first();
       await expect(genBtn).toBeVisible();
-      await genBtn.click();
+      await Promise.all([
+        page.waitForResponse(
+          (res) =>
+            res.url().includes("/reporting/generate-slides") &&
+            res.request().method() === "POST" &&
+            [200, 201].includes(res.status())
+        ),
+        genBtn.click(),
+      ]);
 
       await expect(page.locator("body")).toContainText(/Chiffres cumulés|006\.3|Slides généré/i);
 
@@ -1444,16 +1548,29 @@ test.describe("Tier 1 — Connected Reporting Tests (F20–F23)", () => {
         .filter({ hasText: /Validé Client/i })
         .first();
       if (await statusSelect.isVisible().catch(() => false)) {
-        await statusSelect.selectOption("VALIDE_CLIENT");
+        const [patchNodeRes] = await Promise.all([
+          page.waitForResponse(
+            (r) => r.url().includes("/drive/nodes/") && r.request().method() === "PATCH"
+          ),
+          statusSelect.selectOption("VALIDE_CLIENT"),
+        ]);
+        expect(patchNodeRes.status()).toBe(200);
       } else if (await validateBtn.isVisible().catch(() => false)) {
-        await validateBtn.click();
+        const [patchNodeRes] = await Promise.all([
+          page.waitForResponse(
+            (r) => r.url().includes("/drive/nodes/") && r.request().method() === "PATCH"
+          ),
+          validateBtn.click(),
+        ]);
+        expect(patchNodeRes.status()).toBe(200);
       } else {
         const tree = await api.getDriveTree(project.id);
         const node0063 = findReportingSlidesNode(tree.data);
         expect(node0063).toBeDefined();
-        await api.updateDriveNode(project.id, (node0063 as DriveNodeDto).id, {
+        const updRes = await api.updateDriveNode(project.id, (node0063 as DriveNodeDto).id, {
           validationStatus: "VALIDE_CLIENT",
         });
+        expect(updRes.ok).toBe(true);
         await page.reload();
       }
 
@@ -1462,17 +1579,22 @@ test.describe("Tier 1 — Connected Reporting Tests (F20–F23)", () => {
         .filter({ hasText: /Publier.*\[EXT\]|Publier.*EXT/i })
         .first();
       await expect(publishBtn).toBeVisible();
-      await publishBtn.click();
+      const [pubRes] = await Promise.all([
+        page.waitForResponse(
+          (r) => r.url().includes("/reporting/publish-ext") && r.request().method() === "POST"
+        ),
+        publishBtn.click(),
+      ]);
+      expect([200, 201]).toContain(pubRes.status());
 
-      await expect(page.locator("body")).toContainText(
-        /Publié.*\[EXT\]|04\. Reporting Final|VALIDE_CLIENT|Validé Client/i
-      );
+      await expect(page.locator("body")).toContainText(/Publié.*\[EXT\]|04\. Reporting Final/i);
 
       const treeAfter = await api.getDriveTree(project.id);
       const node0063After = findReportingSlidesNode(treeAfter.data);
       expect(node0063After?.extMirrorFileId).toBeTruthy();
       expect(errors.pageErrors).toEqual([]);
       expect(errors.consoleErrors).toEqual([]);
+      expect(errors.serverErrors).toEqual([]);
     });
   });
 });

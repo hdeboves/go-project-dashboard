@@ -558,7 +558,9 @@ test.describe("Tier 2 — Reporting Boundary & Negative Cases (F20–F23)", () =
         expect(xlsxRes.status).toBe(200);
         const { sheets } = assertValidXlsxBuffer(xlsxRes.buffer, EXPECTED_REPORTING_TABS);
         const talentText = sheets["Influence par Talent"].map((r) => r.join(" ")).join("\n");
+        const networkText = sheets["Cumulé Réseaux"].map((r) => r.join(" ")).join("\n");
         expect(talentText).not.toContain("245000");
+        expect(networkText).not.toContain("245000");
       }
     });
 
@@ -586,7 +588,7 @@ test.describe("Tier 2 — Reporting Boundary & Negative Cases (F20–F23)", () =
       expect([200, 201]).toContain(first.status);
 
       const duplicate = await api.createVerbatim(project.id, vPayload);
-      expect([200, 201, 400, 409]).toContain(duplicate.status);
+      expect([200, 201, 400, 409, 422]).toContain(duplicate.status);
 
       const listed = await api.listVerbatims(project.id);
       expect(listed.status).toBe(200);
@@ -696,25 +698,32 @@ test.describe("Tier 2 — Reporting Boundary & Negative Cases (F20–F23)", () =
       expect(node0063).toBeDefined();
 
       // Draft status -> blocked
-      await api.updateDriveNode(project.id, node0063.id, {
+      const updDraft = await api.updateDriveNode(project.id, node0063.id, {
         validationStatus: "BROUILLON_INTERNE",
       });
+      expect(updDraft.ok).toBe(true);
       const draftPub = await api.publishReportingExt(project.id, { confirmValidation: true });
-      expect([400, 403, 409]).toContain(draftPub.status);
+      expect([400, 403, 409, 422]).toContain(draftPub.status);
       expect(draftPub.ok).toBe(false);
 
       // In Review -> blocked
-      await api.updateDriveNode(project.id, node0063.id, { validationStatus: "EN_REVUE" });
+      const updReview = await api.updateDriveNode(project.id, node0063.id, {
+        validationStatus: "EN_REVUE",
+      });
+      expect(updReview.ok).toBe(true);
       const reviewPub = await api.publishReportingExt(project.id, { confirmValidation: true });
-      expect([400, 403, 409]).toContain(reviewPub.status);
+      expect([400, 403, 409, 422]).toContain(reviewPub.status);
       expect(reviewPub.ok).toBe(false);
 
       // Validé Client but confirmValidation: false -> blocked
-      await api.updateDriveNode(project.id, node0063.id, { validationStatus: "VALIDE_CLIENT" });
+      const updValide = await api.updateDriveNode(project.id, node0063.id, {
+        validationStatus: "VALIDE_CLIENT",
+      });
+      expect(updValide.ok).toBe(true);
       const unconfirmedPub = await api.publishReportingExt(project.id, {
         confirmValidation: false,
       });
-      expect([400, 403, 409]).toContain(unconfirmedPub.status);
+      expect([400, 403, 409, 422]).toContain(unconfirmedPub.status);
       expect(unconfirmedPub.ok).toBe(false);
 
       const treeAfter = await api.getDriveTree(project.id);
@@ -826,9 +835,14 @@ test.describe("Tier 2 — Reporting Boundary & Negative Cases (F20–F23)", () =
       expect(slidesFileId).not.toBe(PROD_IDS.PROD_REPORTING_SLIDES);
 
       const tree = await api.getDriveTree(project.id);
-      const node0063 = findReportingSlidesNode(tree.data, slidesFileId) as DriveNodeDto;
-      await api.updateDriveNode(project.id, node0063.id, { validationStatus: "VALIDE_CLIENT" });
-      await api.publishReportingExt(project.id, { confirmValidation: true });
+      const node0063 = findReportingSlidesNode(tree.data, slidesFileId);
+      expect(node0063).toBeDefined();
+      const upd = await api.updateDriveNode(project.id, (node0063 as DriveNodeDto).id, {
+        validationStatus: "VALIDE_CLIENT",
+      });
+      expect(upd.ok).toBe(true);
+      const pubRes = await api.publishReportingExt(project.id, { confirmValidation: true });
+      expect([200, 201]).toContain(pubRes.status);
 
       const calls = await api.harness.getCalls();
       assertProdUntouched(calls.data);

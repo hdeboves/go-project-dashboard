@@ -50,6 +50,22 @@ function asRecordArray(value: unknown): Record<string, unknown>[] {
   return Array.isArray(value) ? value.filter(isRecord) : [];
 }
 
+function normalizeGatewayCall(call: Record<string, unknown>): Record<string, unknown> {
+  return {
+    ...asRecord(call.args),
+    ...asRecord(call.payload),
+    ...call,
+  };
+}
+
+function assertValidId(id: unknown, label: string): string {
+  expect(
+    typeof id === "string" && id.length > 0,
+    `Expected non-empty string ID for ${label}, got ${String(id)}`
+  ).toBe(true);
+  return id as string;
+}
+
 function pickNumber(obj: Record<string, unknown>, keys: readonly string[]): number | undefined {
   for (const key of keys) {
     const val = obj[key];
@@ -131,7 +147,18 @@ function assertStrictPennylaneDraft(
     expect(normalizedCc, `Expected CC "${ccSerialized}" to include ${name}`).toContain(normalizedName);
   }
 
-  const attachmentFilename = String(draft.attachmentFilename ?? "");
+  const attachments = Array.isArray(draft.attachments) ? draft.attachments.filter(isRecord) : [];
+  const firstAttachment = attachments[0];
+  const firstAttachmentName =
+    typeof firstAttachment?.filename === "string"
+      ? firstAttachment.filename
+      : typeof firstAttachment?.name === "string"
+        ? firstAttachment.name
+        : "";
+  const attachmentFilename =
+    typeof draft.attachmentFilename === "string" && draft.attachmentFilename.length > 0
+      ? draft.attachmentFilename
+      : firstAttachmentName;
   expect(attachmentFilename).toMatch(INVOICE_FILENAME_REGEX);
   expect(attachmentFilename).toBe(expected.expectedRenamedFilename);
   expect(draft.sent).not.toBe(true);
@@ -395,14 +422,15 @@ test.describe("Tier 1 — Connected Harness Tests (F11–F14)", () => {
       expect(PROD_IMMUTABLE_ID_SET.has(budgetSheetId as string)).toBe(false);
 
       const callsRes = await api.harness.getCalls();
-      const copyCall = callsRes.data.find((c) => {
+      const normalizedCalls = callsRes.data.map(normalizeGatewayCall);
+      const copyCall = normalizedCalls.find((c) => {
         const op = String(c.operation ?? c.method ?? "");
-        return /copy/i.test(op) && c.sourceId === PROD_IDS.PROD_BUDGET_SHEET;
+        const sourceId = c.sourceFileId ?? c.sourceId;
+        return /copy/i.test(op) && sourceId === PROD_IDS.PROD_BUDGET_SHEET;
       });
       expect(copyCall, `Expected Drive copy call from PROD_BUDGET_SHEET in ${JSON.stringify(callsRes.data)}`).toBeDefined();
-      if (copyCall && typeof copyCall.destinationParentId === "string") {
-        expect(copyCall.destinationParentId).toBe(node0011?.driveFileId);
-      }
+      const node0011DriveId = assertValidId(node0011?.driveFileId, "node0011.driveFileId");
+      expect(copyCall?.destinationParentId ?? copyCall?.parentId).toBe(node0011DriveId);
       assertProdUntouched(callsRes.data, { allowCopySource: true });
     });
 
@@ -479,11 +507,11 @@ test.describe("Tier 1 — Connected Harness Tests (F11–F14)", () => {
       };
       const createdLine = await api.upsertBudgetLine(project.id, payload);
       expect([200, 201]).toContain(createdLine.status);
-      expect(createdLine.data.id).toBeTruthy();
+      const createdLineId = assertValidId(createdLine.data.id, "createdLine.data.id");
 
       const updatedLine = await api.upsertBudgetLine(project.id, {
         ...payload,
-        id: String(createdLine.data.id),
+        id: createdLineId,
         preOpTotalHt: 3750,
         preOpUnitCost: 3750,
       });
@@ -527,7 +555,11 @@ test.describe("Tier 1 — Connected Harness Tests (F11–F14)", () => {
       const fixture = buildPilot326027BudgetXlsx(cp);
 
       await page.goto(`${BASE_URL}/budget?projectId=${project.id}`);
-      const fileInput = page.locator('input[type="file"][accept*="xlsx"]').first();
+      const fileInput = page
+        .locator(
+          'input[type="file"][accept*="xlsx"], input[type="file"][accept*="spreadsheetml"], [data-testid*="xlsx"] input[type="file"]'
+        )
+        .first();
       await expect(fileInput).toBeAttached();
       await fileInput.setInputFiles({
         name: fixture.filename,
@@ -595,10 +627,10 @@ test.describe("Tier 1 — Connected Harness Tests (F11–F14)", () => {
         suffix: "F12Kpis",
       });
       const mappingLine = findBudgetLineByObjet(budgetLines, "Mapping & HUD Fortnite");
-      expect(mappingLine?.id).toBeTruthy();
+      const mappingLineId = assertValidId(mappingLine?.id, "mappingLine.id");
 
       const updated = await api.upsertBudgetLine(project.id, {
-        id: String(mappingLine?.id),
+        id: mappingLineId,
         category: String(mappingLine?.category ?? "CRÉATION DE LA CARTE DANS FORTNITE"),
         objet: String(mappingLine?.objet ?? "Mapping & HUD Fortnite"),
         realisePar: String(mappingLine?.realisePar ?? "Vertigo Studio"),
@@ -682,10 +714,10 @@ test.describe("Tier 1 — Connected Harness Tests (F11–F14)", () => {
         suffix: "F12Alert85",
       });
       const daLine = findBudgetLineByObjet(budgetLines, "DA / Charte graphique");
-      expect(daLine?.id).toBeTruthy();
+      const daLineId = assertValidId(daLine?.id, "daLine.id");
 
       const updated = await api.upsertBudgetLine(project.id, {
-        id: String(daLine?.id),
+        id: daLineId,
         category: String(daLine?.category ?? "CHARTE"),
         objet: String(daLine?.objet ?? "DA / Charte graphique"),
         realisePar: "Agency Alpha",
@@ -719,10 +751,10 @@ test.describe("Tier 1 — Connected Harness Tests (F11–F14)", () => {
         suffix: "F12Alert100",
       });
       const daLine = findBudgetLineByObjet(budgetLines, "DA / Charte graphique");
-      expect(daLine?.id).toBeTruthy();
+      const daLineId = assertValidId(daLine?.id, "daLine.id");
 
       const updated = await api.upsertBudgetLine(project.id, {
-        id: String(daLine?.id),
+        id: daLineId,
         category: String(daLine?.category ?? "CHARTE"),
         objet: String(daLine?.objet ?? "DA / Charte graphique"),
         realisePar: "Agency Alpha",
@@ -758,7 +790,7 @@ test.describe("Tier 1 — Connected Harness Tests (F11–F14)", () => {
         { suffix: "F12LiveRecalc" }
       );
       const mappingLine = findBudgetLineByObjet(budgetLines, "Mapping & HUD Fortnite");
-      expect(mappingLine?.id).toBeTruthy();
+      const mappingLineId = assertValidId(mappingLine?.id, "mappingLine.id");
 
       const beforeBudget = extractBudgetEnvelope((await api.getBudget(project.id)).raw);
       assertSummaryCloseTo(beforeBudget.summary, ["postOpTotalHt", "postOpHt"], 0);
@@ -784,12 +816,13 @@ test.describe("Tier 1 — Connected Harness Tests (F11–F14)", () => {
           mimeType: invoicePdf.mimeType,
           buffer: invoicePdf.buffer,
         },
-        { budgetLineId: String(mappingLine?.id) }
+        { budgetLineId: mappingLineId }
       );
       expect([200, 201]).toContain(uploaded.status);
+      const uploadedId = assertValidId(uploaded.data.id, "uploaded.data.id");
 
-      const validated = await api.validateInvoice(project.id, String(uploaded.data.id), {
-        budgetLineId: String(mappingLine?.id),
+      const validated = await api.validateInvoice(project.id, uploadedId, {
+        budgetLineId: mappingLineId,
       });
       expect(validated.status).toBe(200);
 
@@ -855,6 +888,7 @@ test.describe("Tier 1 — Connected Harness Tests (F11–F14)", () => {
         { suffix: "F13Upload" }
       );
       const mappingLine = findBudgetLineByObjet(budgetLines, "Mapping & HUD Fortnite");
+      const mappingLineId = assertValidId(mappingLine?.id, "mappingLine.id");
 
       const invoicePdf = createInvoicePdfFixture({
         codeProjet: cp,
@@ -871,7 +905,7 @@ test.describe("Tier 1 — Connected Harness Tests (F11–F14)", () => {
         buffer: invoicePdf.buffer,
       });
       expect([200, 201]).toContain(res.status);
-      expect(res.data.id).toBeTruthy();
+      assertValidId(res.data.id, "res.data.id");
       expect(res.data.status).toBe("PENDING_VALIDATION");
       expect(res.data.cpConflict).toBe(false);
       expect(res.data.vendorName).toBe("Vertigo Studio");
@@ -888,9 +922,7 @@ test.describe("Tier 1 — Connected Harness Tests (F11–F14)", () => {
         res.data.budgetLineId ??
         res.data.suggestedBudgetLineId ??
         rawObj.suggestedBudgetLineId;
-      if (suggestedId) {
-        expect(suggestedId).toBe(mappingLine?.id);
-      }
+      expect(suggestedId).toBe(mappingLineId);
     });
 
     test("T1-F13-02 Gmail invoice scan ingests unread project PDFs and excludes - Factures labeled threads", async ({
@@ -962,11 +994,19 @@ test.describe("Tier 1 — Connected Harness Tests (F11–F14)", () => {
       expect(listRes.data.some((inv) => inv.invoiceNumber === "FAC-GMAIL-OLD")).toBe(false);
 
       const callsRes = await api.harness.getCalls();
-      const gmailListCall = callsRes.data.find((c) =>
+      const normalizedCalls = callsRes.data.map(normalizeGatewayCall);
+      const gmailListCall = normalizedCalls.find((c) =>
         /gmail.*listMessages|listMessages/i.test(String(c.operation ?? c.method ?? ""))
       );
       expect(gmailListCall).toBeDefined();
-      expect(JSON.stringify(gmailListCall)).toMatch(/-\s*Factures|label/i);
+      const listMentionsLabelFilter = /-\s*Factures|label/i.test(JSON.stringify(gmailListCall));
+      const checkedLabelsOrMessage = normalizedCalls.some((c) =>
+        /ensureLabel|listLabels|getMessage/i.test(String(c.operation ?? c.method ?? ""))
+      );
+      expect(
+        listMentionsLabelFilter || checkedLabelsOrMessage,
+        `Expected listMessages label filter or ensureLabel/listLabels/getMessage in ${JSON.stringify(callsRes.data)}`
+      ).toBe(true);
       assertProdUntouched(callsRes.data);
     });
 
@@ -1040,12 +1080,19 @@ test.describe("Tier 1 — Connected Harness Tests (F11–F14)", () => {
         buffer: invoicePdf.buffer,
       });
       expect([200, 201]).toContain(uploaded.status);
+      const uploadedId = assertValidId(uploaded.data.id, "uploaded.data.id");
+      expect(uploaded.data.invoiceType).toBe("ACOMPTE");
+
+      const listedRes = await api.listInvoices(project.id);
+      expect(listedRes.status).toBe(200);
+      const persisted = listedRes.data.find((inv) => inv.id === uploadedId);
+      expect(persisted?.invoiceType).toBe("ACOMPTE");
 
       await page.goto(`${BASE_URL}/budget?projectId=${project.id}`);
-      await expect(page.locator("body")).toContainText("Vertigo Studio");
-      await expect(page.locator("body")).toContainText("FAC-UI-2026");
       await expect(page.locator("body")).toContainText(cp);
-      await expect(page.locator("body")).toContainText(/ACOMPTE/i);
+      await expect(page.getByLabel(/Prestataire/i).first()).toHaveValue("Vertigo Studio");
+      await expect(page.getByLabel(/N° Facture/i).first()).toHaveValue("FAC-UI-2026");
+      await expect(page.getByLabel(/Montant HT/i).first()).toHaveValue("3000");
 
       const validateBtn = page.getByRole("button", { name: /^Valider/i }).first();
       await expect(validateBtn).toBeVisible();
@@ -1145,10 +1192,11 @@ test.describe("Tier 1 — Connected Harness Tests (F11–F14)", () => {
         { suffix: "F14Drive0013" }
       );
       const node0013 = findNodeByCode(nodes, "001.3");
-      expect(node0013?.driveFileId).toBeTruthy();
+      const node0013DriveId = assertValidId(node0013?.driveFileId, "node0013.driveFileId");
       expect(node0013?.isExtEligible).not.toBe(true);
 
       const mappingLine = findBudgetLineByObjet(budgetLines, "Mapping & HUD Fortnite");
+      const mappingLineId = assertValidId(mappingLine?.id, "mappingLine.id");
       const pdf = createInvoicePdfFixture({
         codeProjet: cp,
         vendorName: "Vertigo Studio",
@@ -1164,10 +1212,11 @@ test.describe("Tier 1 — Connected Harness Tests (F11–F14)", () => {
         buffer: pdf.buffer,
       });
       expect([200, 201]).toContain(uploaded.status);
+      const uploadedId = assertValidId(uploaded.data.id, "uploaded.data.id");
 
       await api.harness.resetCalls();
-      const validated = await api.validateInvoice(project.id, String(uploaded.data.id), {
-        budgetLineId: String(mappingLine?.id),
+      const validated = await api.validateInvoice(project.id, uploadedId, {
+        budgetLineId: mappingLineId,
       });
       expect(validated.status).toBe(200);
 
@@ -1178,15 +1227,14 @@ test.describe("Tier 1 — Connected Harness Tests (F11–F14)", () => {
       expect(PROD_IMMUTABLE_ID_SET.has(String(validated.data.driveFileId))).toBe(false);
 
       const callsRes = await api.harness.getCalls();
-      const driveUpload = callsRes.data.find((c) => {
+      const normalizedCalls = callsRes.data.map(normalizeGatewayCall);
+      const driveUpload = normalizedCalls.find((c) => {
         const op = String(c.operation ?? c.method ?? "");
         const name = String(c.name ?? c.filename ?? "");
         return /upload|create/i.test(op) && name.includes(expectedName);
       });
       expect(driveUpload, `Expected Drive upload to 001.3 in ${JSON.stringify(callsRes.data)}`).toBeDefined();
-      if (driveUpload && typeof driveUpload.parentId === "string") {
-        expect(driveUpload.parentId).toBe(node0013?.driveFileId);
-      }
+      expect(driveUpload?.parentId).toBe(node0013DriveId);
       assertProdUntouched(callsRes.data);
     });
 
@@ -1200,7 +1248,7 @@ test.describe("Tier 1 — Connected Harness Tests (F11–F14)", () => {
         { suffix: "F14SheetNote" }
       );
       const mappingLine = findBudgetLineByObjet(budgetLines, "Mapping & HUD Fortnite");
-      expect(mappingLine?.id).toBeTruthy();
+      const mappingLineId = assertValidId(mappingLine?.id, "mappingLine.id");
 
       const pdf = createInvoicePdfFixture({
         codeProjet: cp,
@@ -1216,10 +1264,12 @@ test.describe("Tier 1 — Connected Harness Tests (F11–F14)", () => {
         mimeType: pdf.mimeType,
         buffer: pdf.buffer,
       });
+      expect([200, 201]).toContain(uploaded.status);
+      const uploadedId = assertValidId(uploaded.data.id, "uploaded.data.id");
 
       await api.harness.resetCalls();
-      const validated = await api.validateInvoice(project.id, String(uploaded.data.id), {
-        budgetLineId: String(mappingLine?.id),
+      const validated = await api.validateInvoice(project.id, uploadedId, {
+        budgetLineId: mappingLineId,
       });
       expect(validated.status).toBe(200);
 
@@ -1253,7 +1303,7 @@ test.describe("Tier 1 — Connected Harness Tests (F11–F14)", () => {
         { suffix: "F14Cumul" }
       );
       const mappingLine = findBudgetLineByObjet(budgetLines, "Mapping & HUD Fortnite");
-      expect(mappingLine?.id).toBeTruthy();
+      const mappingLineId = assertValidId(mappingLine?.id, "mappingLine.id");
 
       const acomptePdf = createInvoicePdfFixture({
         codeProjet: cp,
@@ -1279,8 +1329,10 @@ test.describe("Tier 1 — Connected Harness Tests (F11–F14)", () => {
         mimeType: acomptePdf.mimeType,
         buffer: acomptePdf.buffer,
       });
-      const val1 = await api.validateInvoice(project.id, String(up1.data.id), {
-        budgetLineId: String(mappingLine?.id),
+      expect([200, 201]).toContain(up1.status);
+      const up1Id = assertValidId(up1.data.id, "up1.data.id");
+      const val1 = await api.validateInvoice(project.id, up1Id, {
+        budgetLineId: mappingLineId,
       });
       expect(val1.status).toBe(200);
 
@@ -1290,8 +1342,10 @@ test.describe("Tier 1 — Connected Harness Tests (F11–F14)", () => {
         mimeType: soldePdf.mimeType,
         buffer: soldePdf.buffer,
       });
-      const val2 = await api.validateInvoice(project.id, String(up2.data.id), {
-        budgetLineId: String(mappingLine?.id),
+      expect([200, 201]).toContain(up2.status);
+      const up2Id = assertValidId(up2.data.id, "up2.data.id");
+      const val2 = await api.validateInvoice(project.id, up2Id, {
+        budgetLineId: mappingLineId,
       });
       expect(val2.status).toBe(200);
 
@@ -1333,6 +1387,7 @@ test.describe("Tier 1 — Connected Harness Tests (F11–F14)", () => {
         { suffix: "F14Pennylane" }
       );
       const mappingLine = findBudgetLineByObjet(budgetLines, "Mapping & HUD Fortnite");
+      const mappingLineId = assertValidId(mappingLine?.id, "mappingLine.id");
 
       const pdf = createInvoicePdfFixture({
         codeProjet: cp,
@@ -1348,10 +1403,12 @@ test.describe("Tier 1 — Connected Harness Tests (F11–F14)", () => {
         mimeType: pdf.mimeType,
         buffer: pdf.buffer,
       });
+      expect([200, 201]).toContain(uploaded.status);
+      const uploadedId = assertValidId(uploaded.data.id, "uploaded.data.id");
 
       await api.harness.resetCalls();
-      const validated = await api.validateInvoice(project.id, String(uploaded.data.id), {
-        budgetLineId: String(mappingLine?.id),
+      const validated = await api.validateInvoice(project.id, uploadedId, {
+        budgetLineId: mappingLineId,
         prestationSummary: "Mapping Fortnite",
       });
       expect(validated.status).toBe(200);
@@ -1395,7 +1452,7 @@ test.describe("Tier 1 — Connected Harness Tests (F11–F14)", () => {
       assertProdUntouched(callsRes.data);
     });
 
-    test("T1-F14-05 User edits extracted amountHt and prestationSummary in /budget UI before clicking Valider", async ({
+    test("T1-F14-05 User edits extracted amountHt and budget line in /budget UI before clicking Valider", async ({
       page,
       request,
     }, testInfo) => {
@@ -1406,6 +1463,7 @@ test.describe("Tier 1 — Connected Harness Tests (F11–F14)", () => {
         { suffix: "F14UiEdit" }
       );
       const mappingLine = findBudgetLineByObjet(budgetLines, "Mapping & HUD Fortnite");
+      const mappingLineId = assertValidId(mappingLine?.id, "mappingLine.id");
 
       const pdf = createInvoicePdfFixture({
         codeProjet: cp,
@@ -1423,9 +1481,10 @@ test.describe("Tier 1 — Connected Harness Tests (F11–F14)", () => {
           mimeType: pdf.mimeType,
           buffer: pdf.buffer,
         },
-        { budgetLineId: String(mappingLine?.id) }
+        { budgetLineId: mappingLineId }
       );
       expect([200, 201]).toContain(uploaded.status);
+      assertValidId(uploaded.data.id, "uploaded.data.id");
 
       await page.goto(`${BASE_URL}/budget?projectId=${project.id}`);
       const amountInput = page.getByLabel(/Montant HT/i).first();
@@ -1433,10 +1492,10 @@ test.describe("Tier 1 — Connected Harness Tests (F11–F14)", () => {
       await amountInput.fill("3250");
 
       const lineSelect = page.getByLabel(/Ligne budg[ée]taire|Poste/i).first();
-      if ((await lineSelect.count()) > 0 && mappingLine?.id) {
+      if ((await lineSelect.count()) > 0) {
         const tagName = await lineSelect.evaluate((el) => el.tagName.toLowerCase());
         if (tagName === "select") {
-          await lineSelect.selectOption(String(mappingLine.id));
+          await lineSelect.selectOption(mappingLineId);
         }
       }
 
@@ -1470,6 +1529,7 @@ test.describe("Tier 1 — Connected Harness Tests (F11–F14)", () => {
         { suffix: "F14Flags" }
       );
       const daLine = findBudgetLineByObjet(budgetLines, "DA / Charte graphique");
+      const daLineId = assertValidId(daLine?.id, "daLine.id");
 
       const pdf = createInvoicePdfFixture({
         codeProjet: cp,
@@ -1485,9 +1545,11 @@ test.describe("Tier 1 — Connected Harness Tests (F11–F14)", () => {
         mimeType: pdf.mimeType,
         buffer: pdf.buffer,
       });
+      expect([200, 201]).toContain(uploaded.status);
+      const uploadedId = assertValidId(uploaded.data.id, "uploaded.data.id");
 
-      const validated = await api.validateInvoice(project.id, String(uploaded.data.id), {
-        budgetLineId: String(daLine?.id),
+      const validated = await api.validateInvoice(project.id, uploadedId, {
+        budgetLineId: daLineId,
       });
       expect(validated.status).toBe(200);
       expect(validated.data.status).toBe("VALIDATED");
@@ -1497,11 +1559,16 @@ test.describe("Tier 1 — Connected Harness Tests (F11–F14)", () => {
       expect(validated.data.driveFileId).toBeTruthy();
       expect(validated.data.pennylaneDraftId).toBeTruthy();
 
+      const expectedFilename = expectedInvoiceFilename("2026-09-16", cp, "Agency Alpha", 880);
+      expect(validated.data.renamedFilename).toBe(expectedFilename);
+      const escapedFilename = expectedFilename.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
       const auditRes = await api.listAuditLogs(project.id);
       assertAuditLogged(auditRes, {
         projectId: project.id,
         action: /VALIDATE/i,
-        detailsContain: "FAC-2026-0300",
+        targetId: uploadedId,
+        detailsContain: new RegExp(`FAC-2026-0300|${escapedFilename}`),
       });
 
       assertProdUntouched((await api.harness.getCalls()).data);

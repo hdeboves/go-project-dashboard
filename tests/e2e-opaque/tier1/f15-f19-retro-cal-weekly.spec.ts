@@ -161,7 +161,14 @@ async function createProvisionedProject(
 
   const treeRes = await api.getDriveTree(project.id);
   expect(treeRes.status).toBe(200);
-  return { project, nodes: treeRes.data };
+
+  const listed = await api.listProjects();
+  const refreshedProject =
+    listed.ok && Array.isArray(listed.data)
+      ? listed.data.find((p) => p.id === project.id) ?? project
+      : project;
+
+  return { project: refreshedProject, nodes: treeRes.data };
 }
 
 async function seedTask(
@@ -290,9 +297,16 @@ test.describe("Tier 1 — Connected Harness Tests (E2E-M3: F15–F19)", () => {
         await editTrigger.click();
       }
 
-      const editScope = (await page.locator('[role="dialog"], form').filter({ hasText: "Validation Key Art Fortnite" }).count()) > 0
-        ? page.locator('[role="dialog"], form').filter({ hasText: "Validation Key Art Fortnite" }).first()
-        : taskRow;
+      const editDialog = page.locator('[role="dialog"]').first();
+      const taskForm = page
+        .locator("form")
+        .filter({ hasText: "Validation Key Art Fortnite" })
+        .first();
+      const editScope = (await editDialog.isVisible())
+        ? editDialog
+        : (await taskForm.count()) > 0
+          ? taskForm
+          : taskRow;
 
       const dateInput = editScope.locator('input[type="date"]').last();
       const statusSelect = editScope.locator("select").first();
@@ -543,7 +557,7 @@ test.describe("Tier 1 — Connected Harness Tests (E2E-M3: F15–F19)", () => {
 
       await page.goto(`${BASE_URL}/retroplanning?projectId=${project.id}`);
       await expect(page.locator("body")).toContainText(
-        /Strictement interne|Jamais synchronis|002\.1|Export ponctuel/i
+        /Strictement interne|Jamais synchronis|NO_PERMANENT_EXT_SYNC|non synchronis[ée].*\[EXT\]/i
       );
     });
 
@@ -674,6 +688,9 @@ test.describe("Tier 1 — Connected Harness Tests (E2E-M3: F15–F19)", () => {
       ).toBe(true);
       const audit = await api.listAuditLogs(project.id);
       assertAuditLogged(audit, { action: /VEILLE|RETRO_VEILLE/i });
+      const calls = await api.harness.getCalls();
+      expect(calls.status).toBe(200);
+      assertProdUntouched(calls.data);
       assertProdUntouched(project);
     });
 
@@ -985,14 +1002,30 @@ test.describe("Tier 1 — Connected Harness Tests (E2E-M3: F15–F19)", () => {
       expect(proposalsAfter.some((p) => p.status === "APPLIED")).toBe(true);
 
       await expect(page.locator("body")).toContainText("Charte Graphique Approuvée");
+      const statusRegex =
+        /(?<![\p{L}\p{N}_])Termin[ée]e?(?![\p{L}\p{N}_])|\bTERMINE\b/iu;
       const taskRow = page
-        .locator("tr, [data-testid^='retro-task'], [data-task-id], li")
+        .locator("tr, [role='row'], [data-testid^='retro-task'], [data-task-id], li")
         .filter({ hasText: "Charte Graphique Approuvée" })
         .first();
       if ((await taskRow.count()) > 0) {
-        await expect(taskRow).toContainText(/\bTermin[ée]\b|\bTERMINE\b/i);
+        const leafSelector = "span, [data-testid*='status'], td, [role='cell']";
+        if ((await taskRow.locator(leafSelector).count()) > 0) {
+          const statusBadge = taskRow
+            .locator(leafSelector)
+            .filter({ hasText: statusRegex })
+            .last();
+          await expect(statusBadge).toContainText(statusRegex);
+        } else {
+          await expect(taskRow).toContainText(statusRegex);
+        }
       } else {
-        await expect(page.locator("body")).toContainText(/\bTermin[ée]\b|\bTERMINE\b/i);
+        const fallbackBadge = page
+          .locator("main, body")
+          .locator("span, [data-testid*='status'], td, [role='cell']")
+          .filter({ hasText: statusRegex })
+          .first();
+        await expect(fallbackBadge).toContainText(statusRegex);
       }
       expect(pageErrors).toEqual([]);
       expect(consoleErrors).toEqual([]);
@@ -1303,9 +1336,28 @@ test.describe("Tier 1 — Connected Harness Tests (E2E-M3: F15–F19)", () => {
       await expect(compareBtn).toBeVisible();
       await compareBtn.click();
 
-      await expect(page.locator("body")).toContainText(/\+7\s*j(?:ours)?/i);
-      await expect(page.locator("body")).toContainText(/-3\s*j(?:ours)?/i);
-      await expect(page.locator("body")).toContainText(/(?:^|[\s(>])0\s*j(?:ours)?|[ÀA] l'heure/i);
+      const plus7Regex = /\+7\s*j(?:ours?)?(?![\p{L}])/iu;
+      const minus3Regex = /-3\s*j(?:ours?)?(?![\p{L}])/iu;
+      const zeroDriftRegex =
+        /(?:^|[\s(>])\+?\s*0\s*j(?:ours?)?(?![\p{L}])|^(?:[+-]?\s*0\s*j(?:ours?)?|[ÀA]\s*l['’]heure)$|(?:^|[\s(>])(?<!\d\s+)[ÀA]\s*l['’]heure(?![\p{L}])/iu;
+      const driftLeafSelector = "span, [data-testid*='delta'], td, [role='cell']";
+
+      const assertTaskDriftLeaf = async (taskName: string, driftRegex: RegExp) => {
+        const diffRow = page
+          .locator("tr, [role='row'], li")
+          .filter({ hasText: taskName })
+          .filter({ has: page.locator(driftLeafSelector).filter({ hasText: driftRegex }) })
+          .first();
+        const driftLeaf = diffRow
+          .locator(driftLeafSelector)
+          .filter({ hasText: driftRegex })
+          .last();
+        await expect(driftLeaf).toContainText(driftRegex);
+      };
+
+      await assertTaskDriftLeaf("QA Map UI", plus7Regex);
+      await assertTaskDriftLeaf("Banner UI", minus3Regex);
+      await assertTaskDriftLeaf("Kickoff UI", zeroDriftRegex);
       expect(pageErrors).toEqual([]);
       expect(consoleErrors).toEqual([]);
     });
@@ -1906,6 +1958,7 @@ test.describe("Tier 1 — Connected Harness Tests (E2E-M3: F15–F19)", () => {
       const stillDraft = treeDraft.data.find((n) => n.id === weeklyNode.id);
       expect(stillDraft?.extMirrorFileId ?? null).toBeFalsy();
 
+      await api.harness.resetCalls();
       const validateRes = await api.updateDriveNode(project.id, weeklyNode.id, {
         validationStatus: "VALIDE_CLIENT",
       });
@@ -1918,6 +1971,21 @@ test.describe("Tier 1 — Connected Harness Tests (E2E-M3: F15–F19)", () => {
       const mirrored = treeValidated.data.find((n) => n.id === weeklyNode.id);
       expect(mirrored?.extMirrorFileId).toBeTruthy();
       expect(PROD_IMMUTABLE_ID_SET.has(String(mirrored?.extMirrorFileId ?? ""))).toBe(false);
+
+      const extCalls = await api.harness.getCalls();
+      assertProdUntouched(extCalls.data);
+      const updatedDraftCalls = extCalls.data.filter((c) =>
+        /draft|drafts\.(create|update)|updateDraft/i.test(String(c.operation ?? c.method ?? ""))
+      );
+      if (updatedDraftCalls.length > 0) {
+        const draftText = JSON.stringify(updatedDraftCalls);
+        expect(draftText).toMatch(
+          new RegExp(`${String(mirrored?.extMirrorFileId)}|\\[EXT|drive\\.google\\.com`, "i")
+        );
+        for (const dc of updatedDraftCalls) {
+          expect(dc.sent).not.toBe(true);
+        }
+      }
     });
   });
 });

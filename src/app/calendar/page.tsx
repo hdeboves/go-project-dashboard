@@ -1,16 +1,18 @@
-import { ModulePlaceholder } from "@/components/ModulePlaceholder";
+import { Suspense } from "react";
+import { CalendarWorkspace } from "@/components/calendar/CalendarWorkspace";
+
+export const dynamic = "force-dynamic";
 
 export default function CalendarPage() {
   return (
-    <ModulePlaceholder
-      title="Google Agenda Projet & Tâches en Cascade"
-      milestoneBadge="Jalon 2 · M3"
-      description="Calendrier secondaire dédié par projet et recalcul automatique des échéances."
-      features={[
-        "Création d'un agenda secondaire dédié [<CP>] <Client> - <Jeu> (jamais 'primary')",
-        "Cascades automatiques : Influence (J-10 / J-3 / J / J+7), Map Fortnite (J-14 / J-5 / J-2 / J), Weekly (J-1 / J)",
-        "Décalage automatique de toute la chaîne Google Calendar dès modification d'un jalon",
-      ]}
-    />
+    <Suspense
+      fallback={
+        <div className="mx-auto max-w-7xl rounded-xl border border-[#232b3d] bg-[#11151f] p-8 text-sm text-slate-400">
+          Chargement du module Google Agenda...
+        </div>
+      }
+    >
+      <CalendarWorkspace />
+    </Suspense>
   );
 }

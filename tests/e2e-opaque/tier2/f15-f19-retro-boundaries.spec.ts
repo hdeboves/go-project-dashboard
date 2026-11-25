@@ -107,7 +107,14 @@ async function createProvisionedProject(
   expect([200, 201]).toContain(provisioned.status);
   const tree = await api.getDriveTree(created.data.id);
   expect(tree.status).toBe(200);
-  return { project: created.data, nodes: tree.data };
+
+  const listed = await api.listProjects();
+  const refreshedProject =
+    listed.ok && Array.isArray(listed.data)
+      ? listed.data.find((p) => p.id === created.data.id) ?? created.data
+      : created.data;
+
+  return { project: refreshedProject, nodes: tree.data };
 }
 
 async function seedTask(
@@ -230,6 +237,17 @@ test.describe("Tier 2 — Connected Harness Tests (E2E-M3: F15–F19)", () => {
         status: "INVALID_STATUS",
       });
       expect(badStatus.status).toBe(400);
+
+      const badMilestoneType = await api.createRetroTask(project.id, {
+        phase: "Phase 1",
+        etape: "Map",
+        tache: "Bad Milestone Enum",
+        startDate: "2026-09-01",
+        endDate: "2026-09-02",
+        isMilestone: true,
+        milestoneType: "INVALID_MILESTONE",
+      });
+      expect(badMilestoneType.status).toBe(400);
 
       const retro = await api.getRetroplanning(project.id);
       expect(extractRetroTasks(retro.data)).toEqual([]);

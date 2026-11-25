@@ -59,6 +59,22 @@ function asRecordArray(value: unknown): Record<string, unknown>[] {
   return Array.isArray(value) ? value.filter(isRecord) : [];
 }
 
+function normalizeGatewayCall(call: Record<string, unknown>): Record<string, unknown> {
+  return {
+    ...asRecord(call.args),
+    ...asRecord(call.payload),
+    ...call,
+  };
+}
+
+function assertValidId(id: unknown, label: string): string {
+  expect(
+    typeof id === "string" && id.length > 0,
+    `Expected non-empty string ID for ${label}, got ${String(id)}`
+  ).toBe(true);
+  return id as string;
+}
+
 function pickNumber(obj: Record<string, unknown>, keys: readonly string[]): number | undefined {
   for (const key of keys) {
     const val = obj[key];
@@ -449,13 +465,41 @@ test.describe("Tier 2 — Connected Boundary & Negative Tests (F11–F14)", () =
       expect(pickNumber(summary, ["preOpTotalHt", "preOpHt"])).toBe(0);
       expect(pickNumber(summary, ["postOpTotalHt", "postOpHt"])).toBe(2672);
 
+      const remainingVal = pickNumber(summary, [
+        "remainingToCommitHt",
+        "resteAEngager",
+        "remainingToCommit",
+      ]);
+      expect(typeof remainingVal === "number" && Number.isFinite(remainingVal)).toBe(true);
+
+      const plannedMarginPctVal = pickNumber(summary, ["plannedMarginPct"]);
+      expect(typeof plannedMarginPctVal === "number" && Number.isFinite(plannedMarginPctVal)).toBe(
+        true
+      );
+
+      const realMarginPctVal = pickNumber(summary, ["realMarginPct"]);
+      expect(typeof realMarginPctVal === "number" && Number.isFinite(realMarginPctVal)).toBe(true);
+
       const printAlert = alerts.find((a) => String(a.objet ?? "").includes("Visuels Print"));
       expect(printAlert).toBeDefined();
+      if (printAlert) {
+        for (const key of ["ratioPct", "consumptionPct", "ratio"] as const) {
+          if (key in printAlert && printAlert[key] !== undefined && printAlert[key] !== null) {
+            expect(
+              typeof printAlert[key] === "number" && Number.isFinite(printAlert[key] as number),
+              `Expected finite numeric ${key} in ${JSON.stringify(printAlert)}`
+            ).toBe(true);
+          }
+        }
+      }
+
+      const materielAlerts = alerts.filter((a) => String(a.objet ?? "").includes("Matériel"));
+      expect(materielAlerts).toEqual([]);
 
       await page.goto(`${BASE_URL}/budget?projectId=${project.id}`);
+      await expect(page.locator("body")).toContainText("Visuels Print");
       const bodyText = await page.locator("body").innerText();
       expect(bodyText).not.toMatch(/\bNaN\b|Infinity/i);
-      expect(bodyText).toContain("Visuels Print");
     });
 
     test("T2-F12-02 0 EUR Sold HT guards plannedMarginPct and realMarginPct division-by-zero cleanly", async ({
@@ -506,6 +550,7 @@ test.describe("Tier 2 — Connected Boundary & Negative Tests (F11–F14)", () =
       };
       const below = await api.upsertBudgetLine(project.id, basePayload);
       expect([200, 201]).toContain(below.status);
+      const belowId = assertValidId(below.data.id, "below.data.id");
 
       const budgetBelow = extractBudgetEnvelope((await api.getBudget(project.id)).raw);
       expect(
@@ -514,7 +559,7 @@ test.describe("Tier 2 — Connected Boundary & Negative Tests (F11–F14)", () =
 
       const at85 = await api.upsertBudgetLine(project.id, {
         ...basePayload,
-        id: String(below.data.id),
+        id: belowId,
         postOpTotalHt: 8500,
       });
       expect([200, 201]).toContain(at85.status);
@@ -546,7 +591,7 @@ test.describe("Tier 2 — Connected Boundary & Negative Tests (F11–F14)", () =
         postOpTotalHt: 9999,
       });
       expect([200, 201]).toContain(created.status);
-      const lineId = String(created.data.id);
+      const lineId = assertValidId(created.data.id, "created.data.id");
 
       const at9999 = extractBudgetEnvelope((await api.getBudget(project.id)).raw);
       const alert9999 = at9999.alerts.find((a) => String(a.objet ?? "").includes("BVA 100 Line"));
@@ -554,7 +599,7 @@ test.describe("Tier 2 — Connected Boundary & Negative Tests (F11–F14)", () =
       expect(String(alert9999?.level ?? "")).toMatch(/WARN/i);
       expect(String(alert9999?.level ?? "")).not.toMatch(/CRIT/i);
 
-      await api.upsertBudgetLine(project.id, {
+      const up100 = await api.upsertBudgetLine(project.id, {
         id: lineId,
         category: "MAPPING",
         objet: "BVA 100 Line",
@@ -563,11 +608,12 @@ test.describe("Tier 2 — Connected Boundary & Negative Tests (F11–F14)", () =
         preOpTotalHt: 10000,
         postOpTotalHt: 10000,
       });
+      expect([200, 201]).toContain(up100.status);
       const at100 = extractBudgetEnvelope((await api.getBudget(project.id)).raw);
       const alert100 = at100.alerts.find((a) => String(a.objet ?? "").includes("BVA 100 Line"));
       expect(String(alert100?.level ?? "")).toMatch(/CRIT/i);
 
-      await api.upsertBudgetLine(project.id, {
+      const upOver = await api.upsertBudgetLine(project.id, {
         id: lineId,
         category: "MAPPING",
         objet: "BVA 100 Line",
@@ -576,6 +622,7 @@ test.describe("Tier 2 — Connected Boundary & Negative Tests (F11–F14)", () =
         preOpTotalHt: 10000,
         postOpTotalHt: 10001,
       });
+      expect([200, 201]).toContain(upOver.status);
       const atOver = extractBudgetEnvelope((await api.getBudget(project.id)).raw);
       const alertOver = atOver.alerts.find((a) => String(a.objet ?? "").includes("BVA 100 Line"));
       expect(String(alertOver?.level ?? "")).toMatch(/CRIT/i);
@@ -630,20 +677,22 @@ test.describe("Tier 2 — Connected Boundary & Negative Tests (F11–F14)", () =
         suffix: "FloatRounding",
       });
 
-      await api.upsertBudgetLine(project.id, {
+      const fracA = await api.upsertBudgetLine(project.id, {
         category: "TEST",
         objet: "Fraction A",
         saleTotalHt: 33.33,
         preOpTotalHt: 10.1,
         postOpTotalHt: 0.1,
       });
-      await api.upsertBudgetLine(project.id, {
+      expect([200, 201]).toContain(fracA.status);
+      const fracB = await api.upsertBudgetLine(project.id, {
         category: "TEST",
         objet: "Fraction B",
         saleTotalHt: 66.67,
         preOpTotalHt: 20.2,
         postOpTotalHt: 0.2,
       });
+      expect([200, 201]).toContain(fracB.status);
 
       const budgetRes = await api.getBudget(project.id);
       expect(budgetRes.status).toBe(200);
@@ -695,7 +744,15 @@ test.describe("Tier 2 — Connected Boundary & Negative Tests (F11–F14)", () =
       });
 
       await page.goto(`${BASE_URL}/budget?projectId=${project.id}`);
-      await assertRedAlertBanner(page, /326018/);
+      await assertRedAlertBanner(page);
+      await expect(
+        page
+          .locator(
+            '[data-testid="cp-conflict-banner"], main [role="alert"], main .bg-red-50, main .border-red-500'
+          )
+          .filter({ hasText: /326018/ })
+          .first()
+      ).toBeVisible();
     });
 
     test("T2-F13-02 CP conflict in PDF text ONLY (scan_recu_01.pdf with CP 326018 inside) caught by deterministic guard", async ({
@@ -842,25 +899,32 @@ test.describe("Tier 2 — Connected Boundary & Negative Tests (F11–F14)", () =
         mimeType: CONFLICT_INVOICE_CRISTALINE_326018.mimeType,
         buffer: CONFLICT_INVOICE_CRISTALINE_326018.buffer,
       });
+      assertCpConflictBlocked(conflictUpload, "326018");
 
-      if (conflictUpload.ok && typeof conflictUpload.data.id === "string") {
-        await api.harness.resetCalls();
-        const validateRes = await api.validateInvoice(project.id, conflictUpload.data.id, {
-          budgetLineId: String(mappingLine?.id),
-        });
-        expect(validateRes.ok).toBe(false);
-        expect([403, 409, 422]).toContain(validateRes.status);
+      const listedInvoices = await api.listInvoices(project.id);
+      expect(listedInvoices.status).toBe(200);
+      const rawInvoice = asRecord(asRecord(conflictUpload.raw).invoice);
+      const conflictRecord = listedInvoices.data.find((inv) => inv.cpConflict === true);
+      const quarantinedId = assertValidId(
+        conflictUpload.data.id ?? rawInvoice.id ?? conflictRecord?.id,
+        "quarantinedId"
+      );
 
-        const callsRes = await api.harness.getCalls();
-        const externalMutations = callsRes.data.filter((c) =>
-          /drive.*create|sheets.*update|updateCellNote|createDraft/i.test(
-            String(c.operation ?? c.method ?? "")
-          )
-        );
-        expect(externalMutations).toEqual([]);
-      } else {
-        expect([400, 409, 422]).toContain(conflictUpload.status);
-      }
+      const mappingLineId = assertValidId(mappingLine?.id, "mappingLine.id");
+      await api.harness.resetCalls();
+      const validateRes = await api.validateInvoice(project.id, quarantinedId, {
+        budgetLineId: mappingLineId,
+      });
+      expect(validateRes.ok).toBe(false);
+      expect([403, 409, 422]).toContain(validateRes.status);
+
+      const callsRes = await api.harness.getCalls();
+      const externalMutations = callsRes.data.filter((c) =>
+        /drive.*create|sheets.*update|updateCellNote|createDraft/i.test(
+          String(c.operation ?? c.method ?? "")
+        )
+      );
+      expect(externalMutations).toEqual([]);
 
       const budgetAfter = extractBudgetEnvelope((await api.getBudget(project.id)).raw);
       expect(pickNumber(budgetAfter.summary, ["postOpTotalHt", "postOpHt"])).toBe(0);
@@ -879,6 +943,7 @@ test.describe("Tier 2 — Connected Boundary & Negative Tests (F11–F14)", () =
         }
       );
       const mappingLine = findBudgetLineByObjet(budgetLines, "Mapping & HUD Fortnite");
+      const mappingLineId = assertValidId(mappingLine?.id, "mappingLine.id");
 
       const pdf = createInvoicePdfFixture({
         codeProjet: cp,
@@ -895,25 +960,29 @@ test.describe("Tier 2 — Connected Boundary & Negative Tests (F11–F14)", () =
         buffer: pdf.buffer,
       });
       expect([200, 201]).toContain(uploaded.status);
-      const invoiceId = String(uploaded.data.id);
+      const invoiceId = assertValidId(uploaded.data.id, "uploaded.data.id");
 
       try {
         await api.harness.resetCalls();
-        await api.requestJson("POST", "/api/test-harness/state", {
+        const faultRes = await api.requestJson("POST", "/api/test-harness/state", {
           data: { failSheetsOnCallIndex: 1 },
         });
+        expect(faultRes.ok).toBe(true);
 
         const failedAttempt = await api.validateInvoice(project.id, invoiceId, {
-          budgetLineId: String(mappingLine?.id),
+          budgetLineId: mappingLineId,
         });
         expect(failedAttempt.ok).toBe(false);
         expect(failedAttempt.status).toBeGreaterThanOrEqual(500);
       } finally {
+        await api.requestJson("POST", "/api/test-harness/state", {
+          data: { failSheetsOnCallIndex: null },
+        });
         await api.harness.restoreConfigured();
       }
 
       const retryRes = await api.validateInvoice(project.id, invoiceId, {
-        budgetLineId: String(mappingLine?.id),
+        budgetLineId: mappingLineId,
       });
       expect(retryRes.status).toBe(200);
       expect(retryRes.data.status).toBe("VALIDATED");
@@ -926,11 +995,12 @@ test.describe("Tier 2 — Connected Boundary & Negative Tests (F11–F14)", () =
       expect(updatedLine?.postOpTotalHt).toBe(2500);
 
       const callsRes = await api.harness.getCalls();
-      const driveUploads = callsRes.data.filter((c) => {
+      const normalizedCalls = callsRes.data.map(normalizeGatewayCall);
+      const driveUploads = normalizedCalls.filter((c) => {
         const op = String(c.operation ?? c.method ?? "");
         const name = String(c.name ?? c.filename ?? "");
         return (
-          /drive.*create|upload/i.test(op) &&
+          /drive.*create|createFile|upload/i.test(op) &&
           (name.includes("FAC-RETRY-01") || name.includes("2500EUR.pdf"))
         );
       });
@@ -956,6 +1026,7 @@ test.describe("Tier 2 — Connected Boundary & Negative Tests (F11–F14)", () =
         }
       );
       const mappingLine = findBudgetLineByObjet(budgetLines, "Mapping & HUD Fortnite");
+      const mappingLineId = assertValidId(mappingLine?.id, "mappingLine.id");
 
       const pdf = createInvoicePdfFixture({
         codeProjet: cp,
@@ -970,17 +1041,18 @@ test.describe("Tier 2 — Connected Boundary & Negative Tests (F11–F14)", () =
         mimeType: pdf.mimeType,
         buffer: pdf.buffer,
       });
-      const invoiceId = String(uploaded.data.id);
+      expect([200, 201]).toContain(uploaded.status);
+      const invoiceId = assertValidId(uploaded.data.id, "uploaded.data.id");
 
       const firstVal = await api.validateInvoice(project.id, invoiceId, {
-        budgetLineId: String(mappingLine?.id),
+        budgetLineId: mappingLineId,
       });
       expect(firstVal.status).toBe(200);
       const firstDraftId = firstVal.data.pennylaneDraftId;
 
       await api.harness.resetCalls();
       const secondVal = await api.validateInvoice(project.id, invoiceId, {
-        budgetLineId: String(mappingLine?.id),
+        budgetLineId: mappingLineId,
       });
       expect([200, 409]).toContain(secondVal.status);
 
@@ -1016,6 +1088,7 @@ test.describe("Tier 2 — Connected Boundary & Negative Tests (F11–F14)", () =
         }
       );
       const daLine = findBudgetLineByObjet(budgetLines, "DA / Charte graphique");
+      const daLineId = assertValidId(daLine?.id, "daLine.id");
 
       const specialVendor = "L'Atelier ../Éphémère & Co";
       const pdf = createInvoicePdfFixture({
@@ -1033,9 +1106,10 @@ test.describe("Tier 2 — Connected Boundary & Negative Tests (F11–F14)", () =
         buffer: pdf.buffer,
       });
       expect([200, 201]).toContain(uploaded.status);
+      const uploadedId = assertValidId(uploaded.data.id, "uploaded.data.id");
 
-      const validated = await api.validateInvoice(project.id, String(uploaded.data.id), {
-        budgetLineId: String(daLine?.id),
+      const validated = await api.validateInvoice(project.id, uploadedId, {
+        budgetLineId: daLineId,
         vendorName: specialVendor,
         amountHt: 1250.5,
       });
@@ -1076,13 +1150,15 @@ test.describe("Tier 2 — Connected Boundary & Negative Tests (F11–F14)", () =
         buffer: pdfA.buffer,
       });
       expect([200, 201]).toContain(uploadedA.status);
+      const uploadedAId = assertValidId(uploadedA.data.id, "uploadedA.data.id");
 
       const lineB = findBudgetLineByObjet(projB.budgetLines, "Mapping & HUD Fortnite");
+      const lineBId = assertValidId(lineB?.id, "lineB.id");
       await api.harness.resetCalls();
       const crossAttempt = await api.validateInvoice(
         projB.project.id,
-        String(uploadedA.data.id),
-        { budgetLineId: String(lineB?.id) }
+        uploadedAId,
+        { budgetLineId: lineBId }
       );
       expect(crossAttempt.ok).toBe(false);
       expect([403, 404]).toContain(crossAttempt.status);
@@ -1175,9 +1251,9 @@ test.describe.serial("Tier 2 — Unconfigured Preconditions (412) Isolated Seria
 
       await page.goto(`${BASE_URL}/budget?projectId=${project.id}`);
       const scanBtn = page.getByRole("button", { name: /Scanner Gmail/i }).first();
-      if ((await scanBtn.count()) > 0) {
-        await scanBtn.click();
-      }
+      await expect(scanBtn).toBeVisible();
+      await expect(scanBtn).toBeEnabled();
+      await scanBtn.click();
       await assertSetupPreconditionBanner(page);
     } finally {
       await api.harness.restoreConfigured();
@@ -1197,6 +1273,7 @@ test.describe.serial("Tier 2 — Unconfigured Preconditions (412) Isolated Seria
       }
     );
     const mappingLine = findBudgetLineByObjet(budgetLines, "Mapping & HUD Fortnite");
+    const mappingLineId = assertValidId(mappingLine?.id, "mappingLine.id");
 
     const pdf = createInvoicePdfFixture({
       codeProjet: cp,
@@ -1211,12 +1288,12 @@ test.describe.serial("Tier 2 — Unconfigured Preconditions (412) Isolated Seria
       buffer: pdf.buffer,
     });
     expect([200, 201]).toContain(uploaded.status);
-    const invoiceId = String(uploaded.data.id);
+    const invoiceId = assertValidId(uploaded.data.id, "uploaded.data.id");
 
     await api.harness.setUnconfigured({ google: true });
     try {
       const valRes = await api.validateInvoice(project.id, invoiceId, {
-        budgetLineId: String(mappingLine?.id),
+        budgetLineId: mappingLineId,
       });
       assertPreconditionMissing(valRes, "GOOGLE_NOT_CONNECTED");
 
