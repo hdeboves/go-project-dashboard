@@ -31,6 +31,7 @@ export const DEFAULT_CC_RAW = "Souléimane, Louis, Paul";
 
 export const ValidateInvoiceSchema = z.object({
   budgetLineId: z.string().min(1).optional(),
+  quoteId: z.string().nullable().optional(),
   vendorName: z.string().trim().min(1).optional(),
   invoiceNumber: z.string().trim().min(1).optional(),
   invoiceDate: z.string().trim().min(1).optional(),
@@ -46,27 +47,33 @@ export const ValidateInvoiceSchema = z.object({
 
 export type ValidateInvoiceInput = z.infer<typeof ValidateInvoiceSchema>;
 
+/**
+ * Drive invoice naming convention:
+ * Numéro de la facture_code projet_nom du prestataire_date d'émission.pdf
+ */
 export function buildValidatedInvoiceFilename(params: {
+  invoiceNumber?: string | null;
   invoiceDate: string;
   codeProjet: string;
   vendorName: string;
-  amountHt: number;
+  amountHt?: number;
 }): string {
-  const safeDate = /^\d{4}-\d{2}-\d{2}$/.test(params.invoiceDate.trim())
-    ? params.invoiceDate.trim()
-    : new Date().toISOString().slice(0, 10);
+  const safeNum =
+    (params.invoiceNumber ?? "")
+      .trim()
+      .normalize("NFC")
+      .replace(/[^a-zA-Z0-9À-ÿ-]/g, "") || "SANS-NUM";
   const safeCp =
     params.codeProjet.replace(/[^0-9A-Za-z-]/g, "") || "000000";
   const safePresta =
     params.vendorName
       .normalize("NFC")
       .replace(/[^a-zA-Z0-9À-ÿ-]/g, "") || "Prestataire";
-  const roundedHt = round2(params.amountHt);
-  const formattedHt = Number.isInteger(roundedHt)
-    ? String(roundedHt)
-    : roundedHt.toFixed(2);
+  const safeDate = /^\d{4}-\d{2}-\d{2}$/.test(params.invoiceDate.trim())
+    ? params.invoiceDate.trim()
+    : new Date().toISOString().slice(0, 10);
 
-  return `${safeDate}_${safeCp}_${safePresta}_${formattedHt}EUR.pdf`;
+  return `${safeNum}_${safeCp}_${safePresta}_${safeDate}.pdf`;
 }
 
 export function normalizeCcList(rawCc: string): string[] {
@@ -467,6 +474,7 @@ export async function validateInvoicePipeline(params: {
   }
 
   const renamedFilename = buildValidatedInvoiceFilename({
+    invoiceNumber,
     invoiceDate,
     codeProjet: project.codeProjet,
     vendorName,
@@ -478,6 +486,7 @@ export async function validateInvoicePipeline(params: {
     where: { id: existingInvoice.id },
     data: {
       budgetLineId: targetBudgetLineId,
+      ...(input.quoteId !== undefined ? { quoteId: input.quoteId || null } : {}),
       vendorName,
       invoiceNumber,
       invoiceDate,

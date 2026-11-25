@@ -2,8 +2,11 @@
 
 import {
   AlertTriangle,
+  Archive,
+  ArchiveRestore,
   ArrowRight,
   ArrowUpDown,
+  Building2,
   Calendar,
   ChevronDown,
   ChevronUp,
@@ -58,6 +61,8 @@ interface PortfolioProjectItem {
     user: PortfolioMemberUser;
   }>;
   accessRole?: string;
+  isArchived?: boolean;
+  archivedAt?: string | null;
   isSandbox: boolean;
   driveInternalRootId: string | null;
   driveExternalRootId: string | null;
@@ -107,6 +112,7 @@ interface PortfolioProjectItem {
 
 interface PortfolioSummary {
   totalProjects: number;
+  archivedCount?: number;
   healthyCount: number;
   watchCount: number;
   criticalCount: number;
@@ -172,6 +178,10 @@ export default function ProjectsPage() {
   const [categoryFilter, setCategoryFilter] = useState<"ALL" | ProjectCategory>(
     "ALL"
   );
+  const [archiveTab, setArchiveTab] = useState<"active" | "archived">("active");
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [adminScopeAll, setAdminScopeAll] = useState(false);
+  const [archivingId, setArchivingId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
 
   const [codeProjet, setCodeProjet] = useState("");
@@ -207,8 +217,11 @@ export default function ProjectsPage() {
   const loadProjects = useCallback(async () => {
     setLoading(true);
     try {
+      const projectsUrl = adminScopeAll
+        ? "/api/projects?scope=all"
+        : "/api/projects";
       const [projRes, shellRes] = await Promise.all([
-        fetch("/api/projects", { cache: "no-store" }),
+        fetch(projectsUrl, { cache: "no-store" }),
         fetch("/api/shell/status", { cache: "no-store" }),
       ]);
       if (shellRes.ok) {
@@ -223,9 +236,11 @@ export default function ProjectsPage() {
         const json = (await projRes.json()) as {
           projects: PortfolioProjectItem[];
           portfolioSummary?: PortfolioSummary;
+          isAdmin?: boolean;
         };
         setProjects(json.projects);
         setSummary(json.portfolioSummary ?? null);
+        setIsAdmin(Boolean(json.isAdmin));
         if (json.projects.length > 0) {
           setTalentProjectId((prev) => prev || json.projects[0].id);
           setIsoProjectId((prev) => prev || json.projects[0].id);
@@ -234,7 +249,7 @@ export default function ProjectsPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [adminScopeAll]);
 
   useEffect(() => {
     let active = true;
@@ -411,10 +426,52 @@ export default function ProjectsPage() {
     }
   }
 
+  async function handleToggleArchive(
+    p: PortfolioProjectItem,
+    nextArchived: boolean
+  ) {
+    setArchivingId(p.id);
+    setFeedback(null);
+    try {
+      const res = await fetch(`/api/projects/${p.id}/archive`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ archived: nextArchived }),
+      });
+      const json = (await res.json()) as { error?: string };
+      if (!res.ok) {
+        setFeedback({
+          type: "error",
+          text: json.error ?? "Impossible de modifier l'état d'archive.",
+        });
+      } else {
+        const msg = nextArchived
+          ? `Projet « ${p.client} — ${p.nomJeu} » archivé.`
+          : `Projet « ${p.client} — ${p.nomJeu} » restauré dans les projets actifs.`;
+        setFeedback({ type: "success", text: msg });
+        showToast(msg);
+        await loadProjects();
+        window.dispatchEvent(new CustomEvent("go:shell-refresh"));
+      }
+    } finally {
+      setArchivingId(null);
+    }
+  }
+
+  const activeProjects = useMemo(
+    () => projects.filter((p) => !p.isArchived),
+    [projects]
+  );
+  const archivedProjects = useMemo(
+    () => projects.filter((p) => Boolean(p.isArchived)),
+    [projects]
+  );
+
   const filteredProjects = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     const healthRank = { CRITIQUE: 0, VIGILANCE: 1, SAIN: 2 };
-    const matched = projects.filter((p) => {
+    const pool = archiveTab === "archived" ? archivedProjects : activeProjects;
+    const matched = pool.filter((p) => {
       if (healthFilter !== "ALL" && p.health !== healthFilter) return false;
       if (
         categoryFilter !== "ALL" &&
@@ -451,7 +508,16 @@ export default function ProjectsPage() {
       }
       return (a.budget.totalSoldHt - b.budget.totalSoldHt) * mult;
     });
-  }, [projects, healthFilter, categoryFilter, searchQuery, sortBy, sortDir]);
+  }, [
+    activeProjects,
+    archivedProjects,
+    archiveTab,
+    healthFilter,
+    categoryFilter,
+    searchQuery,
+    sortBy,
+    sortDir,
+  ]);
 
   function toggleSort(col: "health" | "client" | "progress" | "margin" | "sold") {
     if (sortBy === col) {
@@ -529,6 +595,22 @@ export default function ProjectsPage() {
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
+          {isAdmin && (
+            <button
+              type="button"
+              onClick={() => setAdminScopeAll((v) => !v)}
+              data-testid="admin-scope-all-toggle"
+              className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-semibold transition-colors ${
+                adminScopeAll
+                  ? "border-indigo-500 bg-indigo-50 text-indigo-700 dark:border-indigo-400 dark:bg-indigo-500/20 dark:text-indigo-200"
+                  : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50 dark:border-slate-800 dark:bg-[#111827] dark:text-slate-200 dark:hover:bg-slate-800/70"
+              }`}
+            >
+              <Building2 className="h-3.5 w-3.5" />
+              {adminScopeAll ? "Vue agence (Tous)" : "Vue agence (Admin)"}
+            </button>
+          )}
+
           <button
             type="button"
             disabled={filteredProjects.length === 0}
@@ -801,14 +883,74 @@ export default function ProjectsPage() {
 
       {/* Portfolio Filter + View Toggle */}
       <section className="overflow-hidden rounded-2xl border border-slate-200/80 bg-white shadow-[0_1px_2px_rgba(15,23,42,0.04)] dark:border-slate-800 dark:bg-[#111827]">
+        {/* Active vs Archived strip */}
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 bg-slate-50/50 px-5 py-2.5 dark:border-slate-800 dark:bg-slate-900/30">
+          <div className="inline-flex rounded-xl border border-slate-200 bg-white p-0.5 dark:border-slate-800 dark:bg-slate-900">
+            <button
+              type="button"
+              onClick={() => setArchiveTab("active")}
+              data-testid="projects-tab-active"
+              className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1 text-xs font-semibold transition-colors ${
+                archiveTab === "active"
+                  ? "bg-slate-900 text-white dark:bg-indigo-600"
+                  : "text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white"
+              }`}
+            >
+              Projets actifs ({activeProjects.length})
+            </button>
+            <button
+              type="button"
+              onClick={() => setArchiveTab("archived")}
+              data-testid="projects-tab-archived"
+              className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1 text-xs font-semibold transition-colors ${
+                archiveTab === "archived"
+                  ? "bg-slate-900 text-white dark:bg-indigo-600"
+                  : "text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white"
+              }`}
+            >
+              <Archive className="h-3.5 w-3.5" />
+              Archivés ({archivedProjects.length})
+            </button>
+          </div>
+          {archiveTab === "archived" && (
+            <span className="text-[11px] text-slate-500 dark:text-slate-400">
+              Les projets archivés sont exclus des KPIs actifs et du sélecteur latéral.
+            </span>
+          )}
+        </div>
+
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 px-5 py-3 dark:border-slate-800">
           <div className="flex items-center gap-1">
             {(
               [
-                { id: "ALL", label: `Tous (${projects.length})`, dot: null, activeClass: "text-slate-900 dark:text-white", barClass: "bg-slate-800 dark:bg-white" },
-                { id: "SAIN", label: `Sains (${summary?.healthyCount ?? 0})`, dot: "bg-emerald-500", activeClass: "text-emerald-700 dark:text-emerald-300", barClass: "bg-emerald-500" },
-                { id: "VIGILANCE", label: `Vigilance (${summary?.watchCount ?? 0})`, dot: "bg-amber-500", activeClass: "text-amber-700 dark:text-amber-300", barClass: "bg-amber-500" },
-                { id: "CRITIQUE", label: `Critiques (${summary?.criticalCount ?? 0})`, dot: "bg-rose-500", activeClass: "text-rose-700 dark:text-rose-300", barClass: "bg-rose-500" },
+                {
+                  id: "ALL",
+                  label: `Tous (${archiveTab === "archived" ? archivedProjects.length : activeProjects.length})`,
+                  dot: null,
+                  activeClass: "text-slate-900 dark:text-white",
+                  barClass: "bg-slate-800 dark:bg-white",
+                },
+                {
+                  id: "SAIN",
+                  label: `Sains (${(archiveTab === "archived" ? archivedProjects : activeProjects).filter((p) => p.health === "SAIN").length})`,
+                  dot: "bg-emerald-500",
+                  activeClass: "text-emerald-700 dark:text-emerald-300",
+                  barClass: "bg-emerald-500",
+                },
+                {
+                  id: "VIGILANCE",
+                  label: `Vigilance (${(archiveTab === "archived" ? archivedProjects : activeProjects).filter((p) => p.health === "VIGILANCE").length})`,
+                  dot: "bg-amber-500",
+                  activeClass: "text-amber-700 dark:text-amber-300",
+                  barClass: "bg-amber-500",
+                },
+                {
+                  id: "CRITIQUE",
+                  label: `Critiques (${(archiveTab === "archived" ? archivedProjects : activeProjects).filter((p) => p.health === "CRITIQUE").length})`,
+                  dot: "bg-rose-500",
+                  activeClass: "text-rose-700 dark:text-rose-300",
+                  barClass: "bg-rose-500",
+                },
               ] as const
             ).map((tab) => {
               const active = healthFilter === tab.id;
@@ -995,9 +1137,14 @@ export default function ProjectsPage() {
                                 ].shortLabel
                               }
                             </span>
-                            {isActive && (
+                            {isActive && !p.isArchived && (
                               <span className="rounded-full bg-rose-50 px-1.5 py-0.5 text-[10px] font-semibold text-rose-700 dark:bg-rose-500/15 dark:text-rose-300">
                                 Actif
+                              </span>
+                            )}
+                            {p.isArchived && (
+                              <span className="rounded-full bg-slate-200 px-1.5 py-0.5 text-[10px] font-semibold text-slate-700 dark:bg-slate-700 dark:text-slate-200">
+                                Archivé
                               </span>
                             )}
                           </div>
@@ -1150,6 +1297,27 @@ export default function ProjectsPage() {
                           >
                             <Share2 className="h-3.5 w-3.5" />
                           </button>
+                          {p.accessRole !== "VIEWER" && (
+                            <button
+                              type="button"
+                              disabled={archivingId === p.id}
+                              title={
+                                p.isArchived
+                                  ? "Restaurer ce projet (désarchiver)"
+                                  : "Archiver ce projet"
+                              }
+                              onClick={() =>
+                                void handleToggleArchive(p, !p.isArchived)
+                              }
+                              className="rounded-lg border border-slate-200 p-1 text-slate-500 hover:bg-amber-50 hover:text-amber-700 disabled:opacity-50 dark:border-slate-700 dark:text-slate-400 dark:hover:bg-slate-800"
+                            >
+                              {p.isArchived ? (
+                                <ArchiveRestore className="h-3.5 w-3.5" />
+                              ) : (
+                                <Archive className="h-3.5 w-3.5" />
+                              )}
+                            </button>
+                          )}
                           <button
                             type="button"
                             title="Budget"
@@ -1332,6 +1500,27 @@ export default function ProjectsPage() {
                       >
                         <Share2 className="h-3.5 w-3.5" />
                       </button>
+                      {p.accessRole !== "VIEWER" && (
+                        <button
+                          type="button"
+                          disabled={archivingId === p.id}
+                          title={
+                            p.isArchived
+                              ? "Restaurer ce projet"
+                              : "Archiver ce projet"
+                          }
+                          onClick={() =>
+                            void handleToggleArchive(p, !p.isArchived)
+                          }
+                          className="rounded-lg border border-slate-200 p-1.5 text-slate-500 hover:bg-amber-50 hover:text-amber-700 disabled:opacity-50 dark:border-slate-700 dark:text-slate-400 dark:hover:bg-slate-800"
+                        >
+                          {p.isArchived ? (
+                            <ArchiveRestore className="h-3.5 w-3.5" />
+                          ) : (
+                            <Archive className="h-3.5 w-3.5" />
+                          )}
+                        </button>
+                      )}
                       <button
                         type="button"
                         title="Budget"

@@ -7,6 +7,7 @@ import {
   Copy,
   ExternalLink,
   FileSpreadsheet,
+  FileText,
   PieChart,
   Receipt,
   RefreshCw,
@@ -22,9 +23,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BudgetTable } from "@/components/budget/BudgetTable";
 import { CategoryChart } from "@/components/budget/CategoryChart";
 import { InvoicePipelinePanel } from "@/components/budget/InvoicePipelinePanel";
+import { QuotesPanel } from "@/components/budget/QuotesPanel";
 import {
   type BudgetDataDto,
   type InvoiceDto,
+  type QuoteDto,
   formatEur,
 } from "@/components/budget/types";
 import {
@@ -49,7 +52,7 @@ interface ShellStatusResponse {
   } | null;
 }
 
-type BudgetTab = "overview" | "table" | "invoices";
+type BudgetTab = "overview" | "table" | "quotes" | "invoices";
 
 export function BudgetDashboardClient() {
   const searchParams = useSearchParams();
@@ -59,9 +62,11 @@ export function BudgetDashboardClient() {
 
   const [projectId, setProjectId] = useState<string | null>(queryProjectId);
   const [projectLabel, setProjectLabel] = useState<string>("");
+  const [projectCode, setProjectCode] = useState<string>("000000");
   const [projectCategory, setProjectCategory] = useState<ProjectCategory>("JEU");
   const [budget, setBudget] = useState<BudgetDataDto | null>(null);
   const [invoices, setInvoices] = useState<InvoiceDto[]>([]);
+  const [quotes, setQuotes] = useState<QuoteDto[]>([]);
   const [warnings, setWarnings] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [importing, setImporting] = useState(false);
@@ -75,9 +80,11 @@ export function BudgetDashboardClient() {
   const [activeTab, setActiveTab] = useState<BudgetTab>(
     queryTab === "invoices"
       ? "invoices"
-      : queryTab === "table" || queryOverruns
-        ? "table"
-        : "overview"
+      : queryTab === "quotes"
+        ? "quotes"
+        : queryTab === "table" || queryOverruns
+          ? "table"
+          : "overview"
   );
   const [importMenuOpen, setImportMenuOpen] = useState(false);
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
@@ -90,6 +97,8 @@ export function BudgetDashboardClient() {
     setLastQuerySyncKey(querySyncKey);
     if (queryTab === "invoices") {
       setActiveTab("invoices");
+    } else if (queryTab === "quotes") {
+      setActiveTab("quotes");
     } else if (queryTab === "table" || queryOverruns) {
       setActiveTab("table");
       if (queryOverruns) setOverrunsOnly(true);
@@ -107,6 +116,7 @@ export function BudgetDashboardClient() {
         if (!targetId) targetId = shell.activeProjectId;
         if (shell.activeProject && shell.activeProject.id === targetId) {
           label = `${shell.activeProject.client} — ${shell.activeProject.nomJeu} (CP ${shell.activeProject.codeProjet})`;
+          setProjectCode(shell.activeProject.codeProjet);
           setProjectCategory(
             normalizeProjectCategory(shell.activeProject.category)
           );
@@ -134,9 +144,10 @@ export function BudgetDashboardClient() {
       setProjectId(targetId);
       setProjectLabel(label);
 
-      const [budgetRes, invoicesRes] = await Promise.all([
+      const [budgetRes, invoicesRes, quotesRes] = await Promise.all([
         fetch(`/api/projects/${targetId}/budget`, { cache: "no-store" }),
         fetch(`/api/projects/${targetId}/invoices`, { cache: "no-store" }),
+        fetch(`/api/projects/${targetId}/quotes`, { cache: "no-store" }),
       ]);
 
       if (budgetRes.ok) {
@@ -150,6 +161,11 @@ export function BudgetDashboardClient() {
       if (invoicesRes.ok) {
         const iData = (await invoicesRes.json()) as { invoices: InvoiceDto[] };
         setInvoices(iData.invoices ?? []);
+      }
+
+      if (quotesRes.ok) {
+        const qData = (await quotesRes.json()) as { quotes: QuoteDto[] };
+        setQuotes(qData.quotes ?? []);
       }
     } finally {
       setLoading(false);
@@ -714,6 +730,20 @@ export function BudgetDashboardClient() {
 
         <button
           type="button"
+          onClick={() => setActiveTab("quotes")}
+          data-testid="budget-tab-quotes"
+          className={`inline-flex items-center gap-2 border-b-2 pb-3 text-xs font-semibold transition-colors ${
+            activeTab === "quotes"
+              ? "border-indigo-600 text-indigo-600 dark:border-indigo-400 dark:text-indigo-400"
+              : "border-transparent text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white"
+          }`}
+        >
+          <FileText className="h-3.5 w-3.5" />
+          Devis ({quotes.length})
+        </button>
+
+        <button
+          type="button"
           onClick={() => setActiveTab("invoices")}
           className={`inline-flex items-center gap-2 border-b-2 pb-3 text-xs font-semibold transition-colors ${
             activeTab === "invoices"
@@ -909,6 +939,8 @@ export function BudgetDashboardClient() {
         <BudgetTable
           projectId={projectId}
           lines={budget?.lines ?? []}
+          invoices={invoices}
+          quotes={quotes}
           alerts={alerts}
           selectedCategory={selectedCategory}
           onSelectCategory={setSelectedCategory}
@@ -919,12 +951,26 @@ export function BudgetDashboardClient() {
         />
       )}
 
-      {/* TAB 3: Invoices */}
+      {/* TAB 3: Quotes (Devis) */}
+      {activeTab === "quotes" && (
+        <QuotesPanel
+          projectId={projectId}
+          quotes={quotes}
+          invoices={invoices}
+          budgetLines={budget?.lines ?? []}
+          onRefresh={loadData}
+          onError={handleApiError}
+        />
+      )}
+
+      {/* TAB 4: Invoices */}
       {activeTab === "invoices" && (
         <InvoicePipelinePanel
           projectId={projectId}
+          projectCode={projectCode}
           budgetLines={budget?.lines ?? []}
           invoices={invoices}
+          quotes={quotes}
           onRefresh={loadData}
           onError={handleApiError}
           onCpConflictDetected={(msg, cps) => {

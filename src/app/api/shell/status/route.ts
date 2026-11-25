@@ -36,7 +36,10 @@ export async function GET() {
     }
 
     const projects = await prisma.project.findMany({
-      where: buildVisibleProjectsWhere(currentUser),
+      where: {
+        ...buildVisibleProjectsWhere(currentUser),
+        isArchived: false,
+      },
       orderBy: [{ isSandbox: "desc" }, { createdAt: "asc" }],
       select: {
         id: true,
@@ -45,6 +48,7 @@ export async function GET() {
         nomJeu: true,
         category: true,
         ownerId: true,
+        isArchived: true,
         isSandbox: true,
         driveInternalRootId: true,
         driveExternalRootId: true,

@@ -15,7 +15,7 @@ import { CpConflictError } from "@/lib/isolation/cp-guard";
 import { createInMemoryGoogleDouble } from "../doubles/in-memory-google";
 
 const INVOICE_FILENAME_REGEX =
-  /^\d{4}-\d{2}-\d{2}_\d+_[^_]+_[\d.]+EUR\.pdf$/;
+  /^[^_]+_\d+_[^_]+_\d{4}-\d{2}-\d{2}\.pdf$/;
 
 function makePdf(): Buffer {
   return Buffer.from(
@@ -49,23 +49,25 @@ describe("M2 1-Click Invoice Validation Pipeline (Drive 001.3, Sheet Cumulation 
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it("sanitizes filenames strictly matching YYYY-MM-DD_CP_Presta_AmountEUR.pdf", () => {
+  it("sanitizes filenames strictly matching InvoiceNumber_CP_Presta_YYYY-MM-DD.pdf", () => {
     const f1 = buildValidatedInvoiceFilename({
+      invoiceNumber: "FAC-2026-042",
       invoiceDate: "2026-09-22",
       codeProjet: "326027",
       vendorName: "L'Atelier ../Éphémère & Co",
       amountHt: 1250.5,
     });
-    expect(f1).toBe("2026-09-22_326027_LAtelierÉphémèreCo_1250.50EUR.pdf");
+    expect(f1).toBe("FAC-2026-042_326027_LAtelierÉphémèreCo_2026-09-22.pdf");
     expect(INVOICE_FILENAME_REGEX.test(f1)).toBe(true);
 
     const f2 = buildValidatedInvoiceFilename({
+      invoiceNumber: "F 001/B",
       invoiceDate: "2026-11-24",
       codeProjet: "326027",
       vendorName: "Studio_Test",
       amountHt: 1000,
     });
-    expect(f2).toBe("2026-11-24_326027_StudioTest_1000EUR.pdf");
+    expect(f2).toBe("F001B_326027_StudioTest_2026-11-24.pdf");
     expect(INVOICE_FILENAME_REGEX.test(f2)).toBe(true);
   });
 
@@ -289,7 +291,7 @@ describe("M2 1-Click Invoice Validation Pipeline (Drive 001.3, Sheet Cumulation 
 
     expect(val1.invoice.status).toBe("VALIDATED");
     expect(val1.invoice.renamedFilename).toBe(
-      "2026-09-10_326077_StudioAlpha_1000EUR.pdf"
+      "F-001_326077_StudioAlpha_2026-09-10.pdf"
     );
     expect(sheetUpdates[0].range).toBe("'Postes de dépenses'!P14:S14");
     expect(sheetUpdates[0].values[0][3]).toBe(1000);
@@ -302,7 +304,7 @@ describe("M2 1-Click Invoice Validation Pipeline (Drive 001.3, Sheet Cumulation 
     expect(drafts[0]).toMatchObject({
       to: "pennylane-test@suppliers.pennylane.com",
       subject: "Facture | Studio Alpha - Acompte Map | CP 326077",
-      attachmentNames: ["2026-09-10_326077_StudioAlpha_1000EUR.pdf"],
+      attachmentNames: ["F-001_326077_StudioAlpha_2026-09-10.pdf"],
     });
     expect(drafts[0].cc?.join(", ")).toContain("Souleimane <souleimane@gamersorigin.com>");
     expect(drafts[0].cc?.join(", ")).toContain("Louis");

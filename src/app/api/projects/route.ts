@@ -227,6 +227,8 @@ export async function GET(req: NextRequest) {
           user: toPublicUser(m.user),
         })),
         accessRole,
+        isArchived: p.isArchived,
+        archivedAt: p.archivedAt ? p.archivedAt.toISOString() : null,
         isSandbox: p.isSandbox,
         driveInternalRootId: p.driveInternalRootId,
         driveExternalRootId: p.driveExternalRootId,
@@ -277,23 +279,27 @@ export async function GET(req: NextRequest) {
       };
     });
 
-    const totalSoldHt = formatted.reduce(
+    const activeOnly = formatted.filter((p) => !p.isArchived);
+    const archivedCount = formatted.length - activeOnly.length;
+
+    const totalSoldHt = activeOnly.reduce(
       (acc, p) => acc + p.budget.totalSoldHt,
       0
     );
-    const totalActualHt = formatted.reduce(
+    const totalActualHt = activeOnly.reduce(
       (acc, p) => acc + p.budget.totalActualHt,
       0
     );
-    const totalForecastCostHt = formatted.reduce(
+    const totalForecastCostHt = activeOnly.reduce(
       (acc, p) => acc + p.budget.forecastCostHt,
       0
     );
     const portfolioSummary = {
-      totalProjects: formatted.length,
-      healthyCount: formatted.filter((p) => p.health === "SAIN").length,
-      watchCount: formatted.filter((p) => p.health === "VIGILANCE").length,
-      criticalCount: formatted.filter((p) => p.health === "CRITIQUE").length,
+      totalProjects: activeOnly.length,
+      archivedCount,
+      healthyCount: activeOnly.filter((p) => p.health === "SAIN").length,
+      watchCount: activeOnly.filter((p) => p.health === "VIGILANCE").length,
+      criticalCount: activeOnly.filter((p) => p.health === "CRITIQUE").length,
       totalSoldHt,
       totalActualHt,
       globalMarginPct:
@@ -307,24 +313,28 @@ export async function GET(req: NextRequest) {
             )
           : 0,
       avgProgressPct:
-        formatted.length > 0
+        activeOnly.length > 0
           ? Math.round(
-              formatted.reduce((acc, p) => acc + p.tasks.progressPct, 0) /
-                formatted.length
+              activeOnly.reduce((acc, p) => acc + p.tasks.progressPct, 0) /
+                activeOnly.length
             )
           : 0,
-      totalPendingInvoices: formatted.reduce(
+      totalPendingInvoices: activeOnly.reduce(
         (acc, p) => acc + p.pendingInvoicesCount,
         0
       ),
-      totalLateTasks: formatted.reduce((acc, p) => acc + p.tasks.late, 0),
-      totalMeetings: formatted.reduce(
+      totalLateTasks: activeOnly.reduce((acc, p) => acc + p.tasks.late, 0),
+      totalMeetings: activeOnly.reduce(
         (acc, p) => acc + p._count.meetingNotes,
         0
       ),
     };
 
-    return NextResponse.json({ projects: formatted, portfolioSummary });
+    return NextResponse.json({
+      projects: formatted,
+      portfolioSummary,
+      isAdmin: currentUser?.role === "ADMIN",
+    });
   } catch (err) {
     return toErrorResponse(err);
   }

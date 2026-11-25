@@ -67,13 +67,16 @@ model CategoryTemplate {
 }
 
 model Project {
-  id                        String   @id @default(cuid())
+  id                        String    @id @default(cuid())
   codeProjet                String
   client                    String
   nomJeu                    String
-  category                  String   @default("JEU")
+  category                  String    @default("JEU")
   ownerId                   String?
-  isSandbox                 Boolean  @default(true)
+  isArchived                Boolean   @default(false)
+  archivedAt                DateTime?
+  archivedById              String?
+  isSandbox                 Boolean   @default(true)
   driveInternalRootId       String?
   driveExternalRootId       String?
   budgetSheetId             String?
@@ -82,18 +85,19 @@ model Project {
   weeklyTemplateSlidesId    String?
   reportingTemplateSlidesId String?
   gmailLabelId              String?
-  gmailMatchRulesJson       String   @default("{}")
+  gmailMatchRulesJson       String    @default("{}")
   calendarId                String?
-  brandKitJson              String   @default("{}")
-  talentsJson               String   @default("[]")
-  createdAt                 DateTime @default(now())
-  updatedAt                 DateTime @updatedAt
+  brandKitJson              String    @default("{}")
+  talentsJson               String    @default("[]")
+  createdAt                 DateTime  @default(now())
+  updatedAt                 DateTime  @updatedAt
 
   owner             User?             @relation("ProjectOwner", fields: [ownerId], references: [id], onDelete: SetNull)
   members           ProjectMember[]
   driveNodes        DriveNode[]
   syncStatuses      SyncStatus[]
   budgetLines       BudgetLine[]
+  quotes            Quote[]
   invoices          Invoice[]
   retroTasks        RetroTask[]
   retroProposals    RetroProposal[]
@@ -112,6 +116,7 @@ model Project {
   @@unique([codeProjet, client, nomJeu])
   @@index([codeProjet])
   @@index([ownerId])
+  @@index([isArchived])
 }
 
 model DriveNode {
@@ -180,15 +185,45 @@ model BudgetLine {
   updatedAt          DateTime @updatedAt
 
   project  Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  quotes   Quote[]
   invoices Invoice[]
 
   @@index([projectId])
+}
+
+model Quote {
+  id               String   @id @default(cuid())
+  projectId        String
+  budgetLineId     String?
+  quoteNumber      String
+  vendorName       String
+  description      String?
+  issueDate        String?
+  validUntil       String?
+  amountHt         Float    @default(0)
+  tvaAmount        Float    @default(0)
+  amountTtc        Float    @default(0)
+  status           String   @default("EN_ATTENTE")
+  originalFilename String?
+  localPdfPath     String?
+  driveFileId      String?
+  notes            String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  project    Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  budgetLine BudgetLine? @relation(fields: [budgetLineId], references: [id], onDelete: SetNull)
+  invoices   Invoice[]
+
+  @@index([projectId, status])
+  @@index([budgetLineId])
 }
 
 model Invoice {
   id                 String   @id @default(cuid())
   projectId          String
   budgetLineId       String?
+  quoteId            String?
   gmailMessageId     String?
   originalFilename   String
   renamedFilename    String?
@@ -214,9 +249,11 @@ model Invoice {
 
   project    Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
   budgetLine BudgetLine? @relation(fields: [budgetLineId], references: [id], onDelete: SetNull)
+  quote      Quote?      @relation(fields: [quoteId], references: [id], onDelete: SetNull)
 
   @@index([projectId, status])
   @@index([projectId, cpConflict])
+  @@index([quoteId])
 }
 
 model RetroTask {
@@ -469,4 +506,21 @@ model Notification {
 
   @@index([read, createdAt])
   @@index([projectId, createdAt])
+}
+
+model BackupSnapshot {
+  id            String   @id @default(cuid())
+  trigger       String   @default("MANUAL")
+  executionId   String?  @unique
+  status        String   @default("COMPLETED")
+  projectsCount Int      @default(0)
+  usersCount    Int      @default(0)
+  invoicesCount Int      @default(0)
+  quotesCount   Int      @default(0)
+  sizeBytes     Int      @default(0)
+  payloadJson   String
+  createdBy     String   @default("system")
+  createdAt     DateTime @default(now())
+
+  @@index([createdAt])
 }

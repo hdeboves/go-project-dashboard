@@ -2,10 +2,14 @@
 
 import {
   AlertCircle,
+  Calculator,
   ChevronDown,
   ChevronRight,
   Download,
+  ExternalLink,
+  Eye,
   Plus,
+  Receipt,
   Save,
   Search,
   X,
@@ -14,6 +18,8 @@ import { useMemo, useState } from "react";
 import {
   type BudgetAlertDto,
   type BudgetLineDto,
+  type InvoiceDto,
+  type QuoteDto,
   formatEur,
 } from "@/components/budget/types";
 import { showToast } from "@/lib/toast";
@@ -22,6 +28,8 @@ interface BudgetTableProps {
   projectId: string;
   lines: BudgetLineDto[];
   alerts: BudgetAlertDto[];
+  invoices?: InvoiceDto[];
+  quotes?: QuoteDto[];
   selectedCategory?: string | null;
   onSelectCategory?: (category: string | null) => void;
   overrunsOnly?: boolean;
@@ -33,6 +41,8 @@ interface BudgetTableProps {
 export function BudgetTable({
   projectId,
   lines,
+  invoices = [],
+  quotes = [],
   selectedCategory = null,
   onSelectCategory,
   overrunsOnly = false,
@@ -50,6 +60,36 @@ export function BudgetTable({
   const [collapsedCategories, setCollapsedCategories] = useState<Set<string>>(
     () => new Set()
   );
+  const [expandedLineIds, setExpandedLineIds] = useState<Set<string>>(
+    () => new Set()
+  );
+  const [previewInvoice, setPreviewInvoice] = useState<InvoiceDto | null>(null);
+
+  const invoicesByLineId = useMemo(() => {
+    const map = new Map<string, InvoiceDto[]>();
+    for (const inv of invoices) {
+      if (!inv.budgetLineId) continue;
+      const list = map.get(inv.budgetLineId) ?? [];
+      list.push(inv);
+      map.set(inv.budgetLineId, list);
+    }
+    return map;
+  }, [invoices]);
+
+  const quoteById = useMemo(() => {
+    const map = new Map<string, QuoteDto>();
+    for (const q of quotes) map.set(q.id, q);
+    return map;
+  }, [quotes]);
+
+  function toggleExpandLine(lineId: string) {
+    setExpandedLineIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(lineId)) next.delete(lineId);
+      else next.add(lineId);
+      return next;
+    });
+  }
   const [inlineEdit, setInlineEdit] = useState<{
     lineId: string;
     field: "saleTotalHt" | "preOpTotalHt";
@@ -687,6 +727,12 @@ export function BudgetTable({
                     catOverrun={catOverrun}
                     collapsed={isCollapsed}
                     detailedView={detailedView}
+                    colCount={colCount}
+                    expandedLineIds={expandedLineIds}
+                    invoicesByLineId={invoicesByLineId}
+                    quoteById={quoteById}
+                    onToggleExpandLine={toggleExpandLine}
+                    onPreviewInvoice={setPreviewInvoice}
                     inlineEdit={inlineEdit}
                     savingInline={savingInline}
                     onStartInline={(lineId, field, value) =>
@@ -743,6 +789,61 @@ export function BudgetTable({
           )}
         </table>
       </div>
+
+      {/* Invoice PDF Preview Modal right from any Budget Line */}
+      {previewInvoice && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/55 p-4 backdrop-blur-xs">
+          <div className="flex h-[85vh] w-full max-w-4xl flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl dark:border-slate-700 dark:bg-[#111827]">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 px-4 py-3 dark:border-slate-800">
+              <div>
+                <p className="text-sm font-bold text-slate-900 dark:text-white">
+                  {previewInvoice.renamedFilename ??
+                    previewInvoice.originalFilename}
+                </p>
+                <p className="text-xs text-slate-500 dark:text-slate-400">
+                  {previewInvoice.vendorName || "Prestataire"} · N°{" "}
+                  {previewInvoice.invoiceNumber || "—"} ·{" "}
+                  {formatEur(previewInvoice.amountHt)} HT
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                {previewInvoice.driveFileId && (
+                  <a
+                    href={`https://drive.google.com/file/d/${previewInvoice.driveFileId}/view`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center gap-1 rounded-lg bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700 hover:bg-emerald-100"
+                  >
+                    Ouvrir dans Drive
+                    <ExternalLink className="h-3 w-3" />
+                  </a>
+                )}
+                <a
+                  href={`/api/projects/${projectId}/invoices/${previewInvoice.id}/preview`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                >
+                  Plein écran
+                  <ExternalLink className="h-3 w-3" />
+                </a>
+                <button
+                  type="button"
+                  onClick={() => setPreviewInvoice(null)}
+                  className="rounded-lg p-1 text-slate-400 hover:bg-slate-100"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+            </div>
+            <iframe
+              src={`/api/projects/${projectId}/invoices/${previewInvoice.id}/preview`}
+              title={`Facture ${previewInvoice.invoiceNumber ?? previewInvoice.originalFilename}`}
+              className="flex-1 bg-slate-100"
+            />
+          </div>
+        </div>
+      )}
     </section>
   );
 }
@@ -757,6 +858,12 @@ function CategoryRows({
   catOverrun,
   collapsed,
   detailedView,
+  colCount,
+  expandedLineIds,
+  invoicesByLineId,
+  quoteById,
+  onToggleExpandLine,
+  onPreviewInvoice,
   inlineEdit,
   savingInline,
   onStartInline,
@@ -775,6 +882,12 @@ function CategoryRows({
   catOverrun: boolean;
   collapsed: boolean;
   detailedView: boolean;
+  colCount: number;
+  expandedLineIds: Set<string>;
+  invoicesByLineId: Map<string, InvoiceDto[]>;
+  quoteById: Map<string, QuoteDto>;
+  onToggleExpandLine: (lineId: string) => void;
+  onPreviewInvoice: (inv: InvoiceDto) => void;
   inlineEdit: {
     lineId: string;
     field: "saleTotalHt" | "preOpTotalHt";
@@ -848,225 +961,496 @@ function CategoryRows({
             line.preOpTotalHt > 0 ? line.postOpTotalHt / line.preOpTotalHt : 0;
           const isWarning90 = !isOverrun && diff < 0 && ratio >= 0.9;
           const isExactSold = line.preOpTotalHt > 0 && diff === 0;
+          const lineInvoices = invoicesByLineId.get(line.id) ?? [];
+          const isExpanded = expandedLineIds.has(line.id);
+          const validatedLineInvoices = lineInvoices.filter(
+            (i) => i.status === "VALIDATED"
+          );
+          const sumInvoicesHt =
+            Math.round(
+              validatedLineInvoices.reduce((s, i) => s + i.amountHt, 0) * 100
+            ) / 100;
 
           return (
-            <tr
+            <LineRowWithDetail
               key={line.id}
-              className={`border-b border-slate-100 transition-colors dark:border-slate-800/70 ${
-                isOverrun
-                  ? "bg-rose-50/40 hover:bg-rose-50/80 dark:bg-rose-950/20 dark:hover:bg-rose-950/35"
-                  : isWarning90
-                    ? "bg-amber-50/35 hover:bg-amber-50/70 dark:bg-amber-950/15 dark:hover:bg-amber-950/30"
-                    : "bg-white hover:bg-slate-50/70 dark:bg-[#111827] dark:hover:bg-slate-800/40"
-              }`}
-            >
-              <td className="px-3.5 py-3 text-[13px] font-medium text-slate-800 dark:text-slate-100">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span>{line.objet}</span>
-                  {isOverrun && (
-                    <span
-                      data-testid="budget-alert-badge"
-                      className="rounded-full bg-rose-100 px-2 py-0.5 font-mono text-[10px] font-bold text-rose-700 dark:bg-rose-500/20 dark:text-rose-300"
-                    >
-                      +{formatEur(diff)}
-                    </span>
-                  )}
-                  {isWarning90 && (
-                    <span className="rounded-full bg-amber-100 px-2 py-0.5 font-mono text-[10px] font-semibold text-amber-800 dark:bg-amber-500/20 dark:text-amber-300">
-                      {Math.round(ratio * 100)}%
-                    </span>
-                  )}
-                  {isExactSold && (
-                    <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300">
-                      Soldé 100%
-                    </span>
-                  )}
-                </div>
-                {line.invoiceNumbersNote && (
-                  <div className="mt-0.5 font-mono text-[10px] text-indigo-600 dark:text-indigo-400">
-                    {line.invoiceNumbersNote}
-                  </div>
-                )}
-              </td>
-
-              {detailedView && (
-                <td className="px-2 py-2.5 text-slate-500 dark:text-slate-400">
-                  {line.realisePar ?? "—"}
-                </td>
-              )}
-              {detailedView && (
-                <td className="px-2 py-2.5 text-right font-mono text-slate-600 dark:text-slate-300">
-                  {line.saleQty}
-                </td>
-              )}
-              {detailedView && (
-                <td className="px-2 py-2.5 text-right font-mono text-slate-600 dark:text-slate-300">
-                  {line.saleDays}
-                </td>
-              )}
-
-              {!detailedView && (
-                <td className="px-2 py-2.5">
-                  <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-600 dark:bg-slate-800 dark:text-slate-300">
-                    {line.expenseType}
-                  </span>
-                </td>
-              )}
-
-              <td className="px-3 py-2.5 text-right font-mono text-slate-600 dark:text-slate-300">
-                {inlineEdit?.lineId === line.id &&
-                inlineEdit.field === "saleTotalHt" ? (
-                  <input
-                    type="number"
-                    step="0.01"
-                    min="0"
-                    autoFocus
-                    disabled={savingInline}
-                    value={inlineEdit.value}
-                    onChange={(e) => onChangeInline(e.target.value)}
-                    onBlur={() =>
-                      void onCommitInline(line, "saleTotalHt", inlineEdit.value)
-                    }
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") {
-                        void onCommitInline(
-                          line,
-                          "saleTotalHt",
-                          inlineEdit.value
-                        );
-                      } else if (e.key === "Escape") {
-                        onCancelInline();
-                      }
-                    }}
-                    className="w-24 rounded-lg border border-indigo-500 bg-white px-2 py-0.5 text-right font-mono text-xs text-slate-900 focus:outline-none dark:bg-slate-900 dark:text-white"
-                  />
-                ) : (
-                  <button
-                    type="button"
-                    title="Cliquer pour modifier directement"
-                    onClick={() =>
-                      onStartInline(
-                        line.id,
-                        "saleTotalHt",
-                        String(line.saleTotalHt)
-                      )
-                    }
-                    className="rounded px-1.5 py-0.5 transition-colors hover:bg-indigo-50 hover:text-indigo-700 dark:hover:bg-indigo-500/15 dark:hover:text-indigo-300"
-                  >
-                    {formatEur(line.saleTotalHt)}
-                  </button>
-                )}
-              </td>
-
-              {detailedView && (
-                <td className="px-2 py-2.5">
-                  <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-600 dark:bg-slate-800 dark:text-slate-300">
-                    {line.expenseType}
-                  </span>
-                </td>
-              )}
-              {detailedView && (
-                <td className="px-2 py-2.5 text-right font-mono text-slate-500 dark:text-slate-400">
-                  {formatEur(line.preOpUnitCost)}
-                </td>
-              )}
-
-              <td className="px-3 py-2.5 text-right font-mono text-slate-700 dark:text-slate-200">
-                {inlineEdit?.lineId === line.id &&
-                inlineEdit.field === "preOpTotalHt" ? (
-                  <input
-                    type="number"
-                    step="0.01"
-                    min="0"
-                    autoFocus
-                    disabled={savingInline}
-                    value={inlineEdit.value}
-                    onChange={(e) => onChangeInline(e.target.value)}
-                    onBlur={() =>
-                      void onCommitInline(
-                        line,
-                        "preOpTotalHt",
-                        inlineEdit.value
-                      )
-                    }
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") {
-                        void onCommitInline(
-                          line,
-                          "preOpTotalHt",
-                          inlineEdit.value
-                        );
-                      } else if (e.key === "Escape") {
-                        onCancelInline();
-                      }
-                    }}
-                    className="w-24 rounded-lg border border-indigo-500 bg-white px-2 py-0.5 text-right font-mono text-xs text-slate-900 focus:outline-none dark:bg-slate-900 dark:text-white"
-                  />
-                ) : (
-                  <button
-                    type="button"
-                    title="Cliquer pour modifier directement"
-                    onClick={() =>
-                      onStartInline(
-                        line.id,
-                        "preOpTotalHt",
-                        String(line.preOpTotalHt)
-                      )
-                    }
-                    className="rounded px-1.5 py-0.5 transition-colors hover:bg-indigo-50 hover:text-indigo-700 dark:hover:bg-indigo-500/15 dark:hover:text-indigo-300"
-                  >
-                    {formatEur(line.preOpTotalHt)}
-                  </button>
-                )}
-              </td>
-
-              {detailedView && (
-                <td className="px-2 py-2.5 text-right font-mono text-slate-500 dark:text-slate-400">
-                  {line.postOpQty}
-                </td>
-              )}
-              {detailedView && (
-                <td className="px-2 py-2.5 text-right font-mono text-slate-500 dark:text-slate-400">
-                  {formatEur(line.postOpUnitCost)}
-                </td>
-              )}
-
-              <td
-                className={`px-3 py-2.5 text-right font-mono font-semibold ${
-                  isOverrun
-                    ? "text-rose-600 dark:text-rose-400"
-                    : "text-slate-900 dark:text-white"
-                }`}
-              >
-                {formatEur(line.postOpTotalHt)}
-              </td>
-
-              {!detailedView && (
-                <td
-                  className={`px-3 py-2.5 text-right font-mono font-semibold ${
-                    isOverrun
-                      ? "text-rose-600 dark:text-rose-400"
-                      : diff < 0
-                        ? "text-emerald-600 dark:text-emerald-400"
-                        : "text-slate-400"
-                  }`}
-                >
-                  {isOverrun ? `+${formatEur(diff)}` : formatEur(diff)}
-                </td>
-              )}
-
-              <td className="px-2.5 py-2.5 text-center">
-                <button
-                  type="button"
-                  onClick={() => onEdit(line)}
-                  className="rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-medium text-slate-600 hover:bg-slate-50 hover:text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:text-white dark:hover:bg-slate-800/70"
-                >
-                  Modifier
-                </button>
-              </td>
-            </tr>
+              line={line}
+              diff={diff}
+              isOverrun={isOverrun}
+              ratio={ratio}
+              isWarning90={isWarning90}
+              isExactSold={isExactSold}
+              lineInvoices={lineInvoices}
+              validatedLineInvoices={validatedLineInvoices}
+              sumInvoicesHt={sumInvoicesHt}
+              isExpanded={isExpanded}
+              colCount={colCount}
+              detailedView={detailedView}
+              quoteById={quoteById}
+              inlineEdit={inlineEdit}
+              savingInline={savingInline}
+              onToggleExpand={() => onToggleExpandLine(line.id)}
+              onPreviewInvoice={onPreviewInvoice}
+              onStartInline={onStartInline}
+              onChangeInline={onChangeInline}
+              onCommitInline={onCommitInline}
+              onCancelInline={onCancelInline}
+              onEdit={onEdit}
+            />
           );
         })}
+    </>
+  );
+}
+
+function LineRowWithDetail({
+  line,
+  diff,
+  isOverrun,
+  ratio,
+  isWarning90,
+  isExactSold,
+  lineInvoices,
+  validatedLineInvoices,
+  sumInvoicesHt,
+  isExpanded,
+  colCount,
+  detailedView,
+  quoteById,
+  inlineEdit,
+  savingInline,
+  onToggleExpand,
+  onPreviewInvoice,
+  onStartInline,
+  onChangeInline,
+  onCommitInline,
+  onCancelInline,
+  onEdit,
+}: {
+  line: BudgetLineDto;
+  diff: number;
+  isOverrun: boolean;
+  ratio: number;
+  isWarning90: boolean;
+  isExactSold: boolean;
+  lineInvoices: InvoiceDto[];
+  validatedLineInvoices: InvoiceDto[];
+  sumInvoicesHt: number;
+  isExpanded: boolean;
+  colCount: number;
+  detailedView: boolean;
+  quoteById: Map<string, QuoteDto>;
+  inlineEdit: {
+    lineId: string;
+    field: "saleTotalHt" | "preOpTotalHt";
+    value: string;
+  } | null;
+  savingInline: boolean;
+  onToggleExpand: () => void;
+  onPreviewInvoice: (inv: InvoiceDto) => void;
+  onStartInline: (
+    lineId: string,
+    field: "saleTotalHt" | "preOpTotalHt",
+    value: string
+  ) => void;
+  onChangeInline: (value: string) => void;
+  onCommitInline: (
+    line: BudgetLineDto,
+    field: "saleTotalHt" | "preOpTotalHt",
+    value: string
+  ) => Promise<void>;
+  onCancelInline: () => void;
+  onEdit: (line: BudgetLineDto) => void;
+}) {
+  return (
+    <>
+      <tr
+        className={`border-b border-slate-100 transition-colors dark:border-slate-800/70 ${
+          isOverrun
+            ? "bg-rose-50/40 hover:bg-rose-50/80 dark:bg-rose-950/20 dark:hover:bg-rose-950/35"
+            : isWarning90
+              ? "bg-amber-50/35 hover:bg-amber-50/70 dark:bg-amber-950/15 dark:hover:bg-amber-950/30"
+              : "bg-white hover:bg-slate-50/70 dark:bg-[#111827] dark:hover:bg-slate-800/40"
+        }`}
+      >
+        <td className="px-3.5 py-3 text-[13px] font-medium text-slate-800 dark:text-slate-100">
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={onToggleExpand}
+              title="Afficher le détail de l'addition et les factures"
+              className="rounded p-0.5 text-slate-400 hover:bg-slate-200/70 hover:text-slate-700 dark:hover:bg-slate-800"
+            >
+              {isExpanded ? (
+                <ChevronDown className="h-3.5 w-3.5" />
+              ) : (
+                <ChevronRight className="h-3.5 w-3.5" />
+              )}
+            </button>
+            <span>{line.objet}</span>
+            {lineInvoices.length > 0 && (
+              <button
+                type="button"
+                onClick={onToggleExpand}
+                data-testid={`line-invoices-toggle-${line.id}`}
+                className="inline-flex items-center gap-1 rounded-full bg-indigo-50 px-2 py-0.5 text-[10px] font-semibold text-indigo-700 hover:bg-indigo-100 dark:bg-indigo-500/15 dark:text-indigo-300"
+              >
+                <Receipt className="h-2.5 w-2.5" />
+                {lineInvoices.length} facture{lineInvoices.length > 1 ? "s" : ""}
+              </button>
+            )}
+            {isOverrun && (
+              <span
+                data-testid="budget-alert-badge"
+                className="rounded-full bg-rose-100 px-2 py-0.5 font-mono text-[10px] font-bold text-rose-700 dark:bg-rose-500/20 dark:text-rose-300"
+              >
+                +{formatEur(diff)}
+              </span>
+            )}
+            {isWarning90 && (
+              <span className="rounded-full bg-amber-100 px-2 py-0.5 font-mono text-[10px] font-semibold text-amber-800 dark:bg-amber-500/20 dark:text-amber-300">
+                {Math.round(ratio * 100)}%
+              </span>
+            )}
+            {isExactSold && (
+              <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300">
+                Soldé 100%
+              </span>
+            )}
+          </div>
+          {validatedLineInvoices.length > 0 ? (
+            <div className="mt-1 flex flex-wrap items-center gap-1.5 pl-6 font-mono text-[10px] text-indigo-600 dark:text-indigo-400">
+              <span>
+                {validatedLineInvoices
+                  .map((i) => formatEur(i.amountHt))
+                  .join(" + ")}{" "}
+                = {formatEur(sumInvoicesHt)}
+              </span>
+              {validatedLineInvoices.map((inv) => (
+                <button
+                  key={inv.id}
+                  type="button"
+                  onClick={() => onPreviewInvoice(inv)}
+                  className="inline-flex items-center gap-0.5 rounded bg-indigo-50 px-1.5 py-0.5 font-sans text-[10px] font-semibold text-indigo-700 hover:bg-indigo-100 dark:bg-indigo-500/20 dark:text-indigo-300"
+                >
+                  <Eye className="h-2.5 w-2.5" />
+                  {inv.invoiceNumber || "Facture"}
+                </button>
+              ))}
+            </div>
+          ) : line.invoiceNumbersNote ? (
+            <div className="mt-0.5 pl-6 font-mono text-[10px] text-indigo-600 dark:text-indigo-400">
+              {line.invoiceNumbersNote}
+            </div>
+          ) : null}
+        </td>
+
+        {detailedView && (
+          <td className="px-2 py-2.5 text-slate-500 dark:text-slate-400">
+            {line.realisePar ?? "—"}
+          </td>
+        )}
+        {detailedView && (
+          <td className="px-2 py-2.5 text-right font-mono text-slate-600 dark:text-slate-300">
+            {line.saleQty}
+          </td>
+        )}
+        {detailedView && (
+          <td className="px-2 py-2.5 text-right font-mono text-slate-600 dark:text-slate-300">
+            {line.saleDays}
+          </td>
+        )}
+
+        {!detailedView && (
+          <td className="px-2 py-2.5">
+            <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-600 dark:bg-slate-800 dark:text-slate-300">
+              {line.expenseType}
+            </span>
+          </td>
+        )}
+
+        <td className="px-3 py-2.5 text-right font-mono text-slate-600 dark:text-slate-300">
+          {inlineEdit?.lineId === line.id &&
+          inlineEdit.field === "saleTotalHt" ? (
+            <input
+              type="number"
+              step="0.01"
+              min="0"
+              autoFocus
+              disabled={savingInline}
+              value={inlineEdit.value}
+              onChange={(e) => onChangeInline(e.target.value)}
+              onBlur={() =>
+                void onCommitInline(line, "saleTotalHt", inlineEdit.value)
+              }
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  void onCommitInline(line, "saleTotalHt", inlineEdit.value);
+                } else if (e.key === "Escape") {
+                  onCancelInline();
+                }
+              }}
+              className="w-24 rounded-lg border border-indigo-500 bg-white px-2 py-0.5 text-right font-mono text-xs text-slate-900 focus:outline-none dark:bg-slate-900 dark:text-white"
+            />
+          ) : (
+            <button
+              type="button"
+              title="Cliquer pour modifier directement"
+              onClick={() =>
+                onStartInline(line.id, "saleTotalHt", String(line.saleTotalHt))
+              }
+              className="rounded px-1.5 py-0.5 transition-colors hover:bg-indigo-50 hover:text-indigo-700 dark:hover:bg-indigo-500/15 dark:hover:text-indigo-300"
+            >
+              {formatEur(line.saleTotalHt)}
+            </button>
+          )}
+        </td>
+
+        {detailedView && (
+          <td className="px-2 py-2.5">
+            <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-600 dark:bg-slate-800 dark:text-slate-300">
+              {line.expenseType}
+            </span>
+          </td>
+        )}
+        {detailedView && (
+          <td className="px-2 py-2.5 text-right font-mono text-slate-500 dark:text-slate-400">
+            {formatEur(line.preOpUnitCost)}
+          </td>
+        )}
+
+        <td className="px-3 py-2.5 text-right font-mono text-slate-700 dark:text-slate-200">
+          {inlineEdit?.lineId === line.id &&
+          inlineEdit.field === "preOpTotalHt" ? (
+            <input
+              type="number"
+              step="0.01"
+              min="0"
+              autoFocus
+              disabled={savingInline}
+              value={inlineEdit.value}
+              onChange={(e) => onChangeInline(e.target.value)}
+              onBlur={() =>
+                void onCommitInline(line, "preOpTotalHt", inlineEdit.value)
+              }
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  void onCommitInline(line, "preOpTotalHt", inlineEdit.value);
+                } else if (e.key === "Escape") {
+                  onCancelInline();
+                }
+              }}
+              className="w-24 rounded-lg border border-indigo-500 bg-white px-2 py-0.5 text-right font-mono text-xs text-slate-900 focus:outline-none dark:bg-slate-900 dark:text-white"
+            />
+          ) : (
+            <button
+              type="button"
+              title="Cliquer pour modifier directement"
+              onClick={() =>
+                onStartInline(
+                  line.id,
+                  "preOpTotalHt",
+                  String(line.preOpTotalHt)
+                )
+              }
+              className="rounded px-1.5 py-0.5 transition-colors hover:bg-indigo-50 hover:text-indigo-700 dark:hover:bg-indigo-500/15 dark:hover:text-indigo-300"
+            >
+              {formatEur(line.preOpTotalHt)}
+            </button>
+          )}
+        </td>
+
+        {detailedView && (
+          <td className="px-2 py-2.5 text-right font-mono text-slate-500 dark:text-slate-400">
+            {line.postOpQty}
+          </td>
+        )}
+        {detailedView && (
+          <td className="px-2 py-2.5 text-right font-mono text-slate-500 dark:text-slate-400">
+            {formatEur(line.postOpUnitCost)}
+          </td>
+        )}
+
+        <td
+          className={`px-3 py-2.5 text-right font-mono font-semibold ${
+            isOverrun
+              ? "text-rose-600 dark:text-rose-400"
+              : "text-slate-900 dark:text-white"
+          }`}
+        >
+          <button
+            type="button"
+            onClick={onToggleExpand}
+            title="Voir le détail de l'addition"
+            className="rounded px-1.5 py-0.5 hover:bg-slate-100 dark:hover:bg-slate-800"
+          >
+            {formatEur(line.postOpTotalHt)}
+          </button>
+        </td>
+
+        {!detailedView && (
+          <td
+            className={`px-3 py-2.5 text-right font-mono font-semibold ${
+              isOverrun
+                ? "text-rose-600 dark:text-rose-400"
+                : diff < 0
+                  ? "text-emerald-600 dark:text-emerald-400"
+                  : "text-slate-400"
+            }`}
+          >
+            {isOverrun ? `+${formatEur(diff)}` : formatEur(diff)}
+          </td>
+        )}
+
+        <td className="px-2.5 py-2.5 text-center">
+          <button
+            type="button"
+            onClick={() => onEdit(line)}
+            className="rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-medium text-slate-600 hover:bg-slate-50 hover:text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:text-white dark:hover:bg-slate-800/70"
+          >
+            Modifier
+          </button>
+        </td>
+      </tr>
+
+      {isExpanded && (
+        <tr className="border-b border-slate-200 bg-slate-50/70 dark:border-slate-800 dark:bg-slate-900/50">
+          <td colSpan={colCount} className="px-6 py-4">
+            <div className="space-y-3">
+              {/* Addition & Calculation Breakdown */}
+              <div className="grid gap-3 sm:grid-cols-3">
+                <div className="rounded-xl border border-slate-200/80 bg-white p-3 dark:border-slate-800 dark:bg-[#111827]">
+                  <p className="flex items-center gap-1.5 text-[10px] font-bold tracking-wider text-slate-400 uppercase">
+                    <Calculator className="h-3 w-3 text-indigo-500" />
+                    Détail Vendu HT
+                  </p>
+                  <p className="mt-1 font-mono text-xs text-slate-700 dark:text-slate-200">
+                    {line.saleQty} qté × {line.saleDays} j ×{" "}
+                    {formatEur(line.saleUnitPrice)} ={" "}
+                    <strong>{formatEur(line.saleTotalHt)}</strong>
+                  </p>
+                </div>
+
+                <div className="rounded-xl border border-slate-200/80 bg-white p-3 dark:border-slate-800 dark:bg-[#111827]">
+                  <p className="flex items-center gap-1.5 text-[10px] font-bold tracking-wider text-slate-400 uppercase">
+                    <Calculator className="h-3 w-3 text-amber-500" />
+                    Détail Prévu Pré-Op
+                  </p>
+                  <p className="mt-1 font-mono text-xs text-slate-700 dark:text-slate-200">
+                    {line.saleQty} qté × {line.saleDays} j ×{" "}
+                    {formatEur(line.preOpUnitCost)} ={" "}
+                    <strong>{formatEur(line.preOpTotalHt)}</strong>
+                  </p>
+                </div>
+
+                <div className="rounded-xl border border-slate-200/80 bg-white p-3 dark:border-slate-800 dark:bg-[#111827]">
+                  <p className="flex items-center gap-1.5 text-[10px] font-bold tracking-wider text-slate-400 uppercase">
+                    <Receipt className="h-3 w-3 text-emerald-500" />
+                    Addition Facturé Post-Op
+                  </p>
+                  <p className="mt-1 font-mono text-xs text-slate-700 dark:text-slate-200">
+                    {validatedLineInvoices.length > 0 ? (
+                      <>
+                        {validatedLineInvoices
+                          .map((i) => formatEur(i.amountHt))
+                          .join(" + ")}{" "}
+                        = <strong>{formatEur(line.postOpTotalHt)}</strong>
+                      </>
+                    ) : (
+                      <>
+                        {line.postOpQty} qté × {line.postOpDays} j ×{" "}
+                        {formatEur(line.postOpUnitCost)} ={" "}
+                        <strong>{formatEur(line.postOpTotalHt)}</strong>
+                      </>
+                    )}
+                  </p>
+                </div>
+              </div>
+
+              {/* Invoices Attached to this Budget Line */}
+              <div>
+                <p className="mb-2 text-[11px] font-bold text-slate-600 dark:text-slate-300">
+                  Factures rattachées à ce poste ({lineInvoices.length})
+                </p>
+                {lineInvoices.length === 0 ? (
+                  <p className="text-xs text-slate-400">
+                    Aucune facture rattachée à cette ligne pour le moment.
+                  </p>
+                ) : (
+                  <div className="space-y-1.5">
+                    {lineInvoices.map((inv) => {
+                      const linkedQuote = inv.quoteId
+                        ? quoteById.get(inv.quoteId)
+                        : null;
+                      return (
+                        <div
+                          key={inv.id}
+                          className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-200/80 bg-white px-3.5 py-2 text-xs dark:border-slate-800 dark:bg-[#111827]"
+                        >
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="font-mono font-bold text-slate-900 dark:text-white">
+                              {inv.invoiceNumber || inv.originalFilename}
+                            </span>
+                            <span className="text-slate-500">
+                              {inv.vendorName || "Prestataire"}
+                            </span>
+                            {inv.invoiceDate && (
+                              <span className="font-mono text-[11px] text-slate-400">
+                                {inv.invoiceDate}
+                              </span>
+                            )}
+                            <span
+                              className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                                inv.status === "VALIDATED"
+                                  ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300"
+                                  : "bg-amber-50 text-amber-800 dark:bg-amber-500/15 dark:text-amber-300"
+                              }`}
+                            >
+                              {inv.status === "VALIDATED"
+                                ? "Validée"
+                                : "En attente"}
+                            </span>
+                            {linkedQuote && (
+                              <span className="rounded-full bg-indigo-50 px-2 py-0.5 text-[10px] font-semibold text-indigo-700 dark:bg-indigo-500/15 dark:text-indigo-300">
+                                Devis {linkedQuote.quoteNumber}
+                              </span>
+                            )}
+                          </div>
+
+                          <div className="flex items-center gap-2">
+                            <span className="font-mono font-bold text-slate-900 dark:text-white">
+                              {formatEur(inv.amountHt)} HT
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => onPreviewInvoice(inv)}
+                              className="inline-flex items-center gap-1 rounded-lg bg-indigo-50 px-2.5 py-1 text-[11px] font-semibold text-indigo-700 hover:bg-indigo-100 dark:bg-indigo-500/15 dark:text-indigo-300"
+                            >
+                              <Eye className="h-3 w-3" />
+                              Voir la facture
+                            </button>
+                            {inv.driveFileId && (
+                              <a
+                                href={`https://drive.google.com/file/d/${inv.driveFileId}/view`}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="inline-flex items-center gap-1 rounded-lg border border-slate-200 px-2 py-1 text-[11px] font-medium text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300"
+                              >
+                                Drive
+                                <ExternalLink className="h-3 w-3" />
+                              </a>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </div>
+          </td>
+        </tr>
+      )}
     </>
   );
 }

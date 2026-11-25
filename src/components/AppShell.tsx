@@ -26,6 +26,7 @@ import {
   ShieldCheck,
   Sun,
   UserCircle2,
+  Users,
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
@@ -102,6 +103,7 @@ const PAGE_TITLES: Record<string, string> = {
   "/reporting": "Reporting Bilan",
   "/settings": "Paramètres",
   "/profile": "Mon profil & Modèles",
+  "/team": "Équipe & Administration",
 };
 
 export function AppShell({ children }: { children: React.ReactNode }) {
@@ -546,6 +548,34 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         {/* Quiet Footer */}
         <div className="space-y-1 border-t border-slate-100 p-2.5 dark:border-slate-800">
           <Link
+            href="/team"
+            title="Annuaire équipe, rôles admin & backups hebdomadaires"
+            onClick={() => setMobileOpen(false)}
+            className={`flex items-center rounded-xl px-2.5 py-2 text-[13px] transition-colors ${
+              sidebarCollapsed
+                ? "justify-between lg:justify-center lg:px-0"
+                : "justify-between"
+            } ${
+              pathname === "/team"
+                ? "bg-rose-50 font-semibold text-rose-700 dark:bg-rose-500/15 dark:text-rose-300"
+                : "font-medium text-slate-600 hover:bg-slate-100/80 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800/70"
+            }`}
+          >
+            <span className="flex min-w-0 items-center gap-2.5">
+              <Users
+                className={`h-4 w-4 shrink-0 ${
+                  pathname === "/team"
+                    ? "text-rose-600 dark:text-rose-400"
+                    : "text-slate-400"
+                }`}
+              />
+              <span className={`truncate ${sidebarCollapsed ? "lg:hidden" : ""}`}>
+                Équipe &amp; Admin
+              </span>
+            </span>
+          </Link>
+
+          <Link
             href="/profile"
             title="Mon profil, avatar & modèles vierges"
             onClick={() => setMobileOpen(false)}
@@ -637,7 +667,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 <Menu className="h-4 w-4" />
               </button>
 
-              {activeProject && pathname !== "/projects" && pathname !== "/settings" && (
+              {activeProject &&
+                pathname !== "/projects" &&
+                pathname !== "/settings" &&
+                pathname !== "/team" &&
+                pathname !== "/profile" && (
                 <>
                   <span className="hidden max-w-[260px] truncate font-medium text-slate-400 sm:inline">
                     {activeProject.client} · {activeProject.nomJeu}

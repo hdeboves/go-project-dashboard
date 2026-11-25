@@ -77,6 +77,7 @@ export interface InvoiceDto {
   id: string;
   projectId: string;
   budgetLineId: string | null;
+  quoteId?: string | null;
   gmailMessageId: string | null;
   originalFilename: string;
   renamedFilename: string | null;
@@ -97,6 +98,46 @@ export interface InvoiceDto {
   stepDriveDone: boolean;
   stepSheetDone: boolean;
   stepGmailDone: boolean;
+  createdAt: string;
+}
+
+export interface QuoteLinkedInvoiceDto {
+  id: string;
+  invoiceNumber: string | null;
+  vendorName: string | null;
+  invoiceDate: string | null;
+  amountHt: number;
+  amountTtc: number;
+  status: string;
+  renamedFilename: string | null;
+  originalFilename: string;
+  driveFileId: string | null;
+  budgetLineId: string | null;
+}
+
+export interface QuoteDto {
+  id: string;
+  projectId: string;
+  budgetLineId: string | null;
+  quoteNumber: string;
+  vendorName: string;
+  description: string | null;
+  issueDate: string | null;
+  validUntil: string | null;
+  amountHt: number;
+  tvaAmount: number;
+  amountTtc: number;
+  status: "BROUILLON" | "EN_ATTENTE" | "ACCEPTE" | "REFUSE" | "FACTURE" | string;
+  originalFilename: string | null;
+  driveFileId: string | null;
+  notes: string | null;
+  hasPdf: boolean;
+  budgetLine: { id: string; category: string; objet: string } | null;
+  invoices: QuoteLinkedInvoiceDto[];
+  invoicedTotalHt: number;
+  remainingHt: number;
+  invoicedPct: number;
+  overQuote: boolean;
   createdAt: string;
 }
 

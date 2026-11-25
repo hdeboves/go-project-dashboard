@@ -16,14 +16,17 @@ import { useState } from "react";
 import {
   type BudgetLineDto,
   type InvoiceDto,
+  type QuoteDto,
   formatEur,
 } from "@/components/budget/types";
 import { showToast } from "@/lib/toast";
 
 interface InvoicePipelinePanelProps {
   projectId: string;
+  projectCode?: string;
   budgetLines: BudgetLineDto[];
   invoices: InvoiceDto[];
+  quotes?: QuoteDto[];
   onRefresh: () => Promise<void>;
   onError: (status: number, payload: { error?: string; code?: string }) => void;
   onCpConflictDetected: (message: string, detectedCps?: string[]) => void;
@@ -36,12 +39,38 @@ interface DraftEdits {
   amountHt: string;
   prestationLabel: string;
   budgetLineId: string;
+  quoteId: string;
+}
+
+function previewDriveFilename(params: {
+  invoiceNumber: string;
+  codeProjet: string;
+  vendorName: string;
+  invoiceDate: string;
+}): string {
+  const safeNum =
+    params.invoiceNumber
+      .trim()
+      .normalize("NFC")
+      .replace(/[^a-zA-Z0-9À-ÿ-]/g, "") || "SANS-NUM";
+  const safeCp = params.codeProjet.replace(/[^0-9A-Za-z-]/g, "") || "000000";
+  const safePresta =
+    params.vendorName
+      .trim()
+      .normalize("NFC")
+      .replace(/[^a-zA-Z0-9À-ÿ-]/g, "") || "Prestataire";
+  const safeDate = /^\d{4}-\d{2}-\d{2}$/.test(params.invoiceDate.trim())
+    ? params.invoiceDate.trim()
+    : new Date().toISOString().slice(0, 10);
+  return `${safeNum}_${safeCp}_${safePresta}_${safeDate}.pdf`;
 }
 
 export function InvoicePipelinePanel({
   projectId,
+  projectCode = "000000",
   budgetLines,
   invoices,
+  quotes = [],
   onRefresh,
   onError,
   onCpConflictDetected,
@@ -89,6 +118,7 @@ export function InvoicePipelinePanel({
       amountHt: String(inv.amountHt ?? 0),
       prestationLabel: inv.prestationLabel ?? "",
       budgetLineId: inv.budgetLineId ?? "",
+      quoteId: inv.quoteId ?? "",
     };
   }
 
@@ -246,6 +276,7 @@ export function InvoicePipelinePanel({
             amountHt: Number(edits.amountHt),
             prestationLabel: edits.prestationLabel.trim() || undefined,
             budgetLineId: edits.budgetLineId || undefined,
+            quoteId: edits.quoteId || null,
           }),
         }
       );
@@ -806,6 +837,46 @@ export function InvoicePipelinePanel({
                                 </p>
                               );
                             })()}
+                          </div>
+
+                          <div className="sm:col-span-2">
+                            <label
+                              htmlFor={`inv-quote-${inv.id}`}
+                              className="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-300"
+                            >
+                              Devis associé (optionnel)
+                            </label>
+                            <select
+                              id={`inv-quote-${inv.id}`}
+                              value={edits.quoteId}
+                              disabled={isBlocked}
+                              onChange={(e) =>
+                                updateEdit(inv, "quoteId", e.target.value)
+                              }
+                              className="w-full rounded-xl border border-slate-200 bg-slate-50/70 px-3 py-1.5 text-xs text-slate-900 focus:border-indigo-500 focus:bg-white focus:outline-none disabled:opacity-50 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+                            >
+                              <option value="">— Aucun devis relié —</option>
+                              {quotes.map((q) => (
+                                <option key={q.id} value={q.id}>
+                                  {q.quoteNumber} — {q.vendorName} (
+                                  {formatEur(q.amountHt)} HT)
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+
+                          <div className="sm:col-span-2 rounded-xl border border-indigo-200/70 bg-indigo-50/50 px-3 py-2 text-[11px] text-indigo-900 dark:border-indigo-500/30 dark:bg-indigo-500/10 dark:text-indigo-200">
+                            <span className="font-semibold">
+                              Nomenclature Drive :{" "}
+                            </span>
+                            <code className="break-all font-mono text-[11px]">
+                              {previewDriveFilename({
+                                invoiceNumber: edits.invoiceNumber,
+                                codeProjet: projectCode,
+                                vendorName: edits.vendorName,
+                                invoiceDate: edits.invoiceDate,
+                              })}
+                            </code>
                           </div>
                         </div>
 
