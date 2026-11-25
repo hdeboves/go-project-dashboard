@@ -16,7 +16,9 @@ import {
   Plus,
   Rocket,
   Search,
+  Share2,
   ShieldCheck,
+  Sparkles,
   Table2,
   UserPlus,
   Users,
@@ -24,13 +26,38 @@ import {
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { AvatarDisplay } from "@/components/AvatarDisplay";
+import { ProjectShareModal } from "@/components/ProjectShareModal";
+import {
+  PROJECT_CATEGORIES,
+  PROJECT_CATEGORY_META,
+  normalizeProjectCategory,
+  type ProjectCategory,
+} from "@/lib/templates/project-templates";
 import { showToast } from "@/lib/toast";
+
+interface PortfolioMemberUser {
+  id: string;
+  email: string;
+  name: string;
+  avatarId: string;
+  avatarBg: string;
+}
 
 interface PortfolioProjectItem {
   id: string;
   codeProjet: string;
   client: string;
   nomJeu: string;
+  category?: ProjectCategory;
+  owner?: PortfolioMemberUser | null;
+  members?: Array<{
+    id: string;
+    userId: string;
+    role: string;
+    user: PortfolioMemberUser;
+  }>;
+  accessRole?: string;
   isSandbox: boolean;
   driveInternalRootId: string | null;
   driveExternalRootId: string | null;
@@ -142,12 +169,22 @@ export default function ProjectsPage() {
   const [healthFilter, setHealthFilter] = useState<
     "ALL" | "SAIN" | "VIGILANCE" | "CRITIQUE"
   >("ALL");
+  const [categoryFilter, setCategoryFilter] = useState<"ALL" | ProjectCategory>(
+    "ALL"
+  );
   const [searchQuery, setSearchQuery] = useState("");
 
   const [codeProjet, setCodeProjet] = useState("");
   const [client, setClient] = useState("");
   const [nomJeu, setNomJeu] = useState("");
-  const [provisionDrive, setProvisionDrive] = useState(true);
+  const [category, setCategory] = useState<ProjectCategory>("JEU");
+  const [seedBlankTemplates, setSeedBlankTemplates] = useState(true);
+  const [provisionDrive, setProvisionDrive] = useState(false);
+
+  const [shareTarget, setShareTarget] = useState<{
+    id: string;
+    label: string;
+  } | null>(null);
 
   const [talentToolOpen, setTalentToolOpen] = useState(false);
   const [talentProjectId, setTalentProjectId] = useState("");
@@ -177,8 +214,10 @@ export default function ProjectsPage() {
       if (shellRes.ok) {
         const shellJson = (await shellRes.json()) as {
           activeProjectId?: string | null;
+          googleConnected?: boolean;
         };
         setActiveProjectId(shellJson.activeProjectId ?? null);
+        setProvisionDrive(Boolean(shellJson.googleConnected));
       }
       if (projRes.ok) {
         const json = (await projRes.json()) as {
@@ -268,18 +307,31 @@ export default function ProjectsPage() {
           codeProjet,
           client,
           nomJeu,
+          category,
+          seedBlankTemplates,
           isSandbox: true,
           provisionDrive,
         }),
       });
-      const json = (await res.json()) as { error?: string };
+      const json = (await res.json()) as {
+        error?: string;
+        templatesSeeded?: {
+          budgetLinesCount?: number;
+          retroTasksCount?: number;
+        };
+      };
       if (!res.ok) {
         setFeedback({
           type: "error",
           text: json.error ?? "Impossible de créer le projet.",
         });
       } else {
-        const msg = `Projet « ${client} — ${nomJeu} » créé.`;
+        const catLabel = PROJECT_CATEGORY_META[category].label;
+        const seededMsg =
+          seedBlankTemplates && json.templatesSeeded
+            ? ` (${json.templatesSeeded.budgetLinesCount ?? 0} postes budget vierges + ${json.templatesSeeded.retroTasksCount ?? 0} tâches rétroplanning)`
+            : "";
+        const msg = `Projet « ${client} — ${nomJeu} » (${catLabel}) créé${seededMsg}.`;
         setFeedback({ type: "success", text: msg });
         showToast(msg);
         setCodeProjet("");
@@ -365,6 +417,12 @@ export default function ProjectsPage() {
     const matched = projects.filter((p) => {
       if (healthFilter !== "ALL" && p.health !== healthFilter) return false;
       if (
+        categoryFilter !== "ALL" &&
+        normalizeProjectCategory(p.category) !== categoryFilter
+      ) {
+        return false;
+      }
+      if (
         q &&
         !p.client.toLowerCase().includes(q) &&
         !p.nomJeu.toLowerCase().includes(q) &&
@@ -393,7 +451,7 @@ export default function ProjectsPage() {
       }
       return (a.budget.totalSoldHt - b.budget.totalSoldHt) * mult;
     });
-  }, [projects, healthFilter, searchQuery, sortBy, sortDir]);
+  }, [projects, healthFilter, categoryFilter, searchQuery, sortBy, sortDir]);
 
   function toggleSort(col: "health" | "client" | "progress" | "margin" | "sold") {
     if (sortBy === col) {
@@ -670,16 +728,64 @@ export default function ProjectsPage() {
             </div>
           </div>
 
-          <div className="mt-4 flex flex-wrap items-center justify-between gap-4 border-t border-slate-100 pt-4 dark:border-slate-800/80">
-            <label className="flex cursor-pointer items-center gap-2 text-xs text-slate-600 dark:text-slate-300">
-              <input
-                type="checkbox"
-                checked={provisionDrive}
-                onChange={(e) => setProvisionDrive(e.target.checked)}
-                className="h-4 w-4 accent-rose-600"
-              />
-              Créer automatiquement l&apos;arborescence Google Drive
+          <div className="mt-4">
+            <label className="mb-1.5 block text-xs font-medium text-slate-600 dark:text-slate-300">
+              Catégorie de projet (choisit le modèle de budget vierge)
             </label>
+            <div className="grid gap-2.5 sm:grid-cols-2 lg:grid-cols-4">
+              {PROJECT_CATEGORIES.map((catId) => {
+                const meta = PROJECT_CATEGORY_META[catId];
+                const active = category === catId;
+                return (
+                  <button
+                    key={catId}
+                    type="button"
+                    data-testid={`project-category-${catId}`}
+                    onClick={() => setCategory(catId)}
+                    className={`rounded-xl border p-3 text-left transition-all ${
+                      active
+                        ? "border-rose-500 bg-rose-50/60 ring-2 ring-rose-500/20 dark:border-rose-400 dark:bg-rose-500/15"
+                        : "border-slate-200 bg-slate-50/60 hover:border-indigo-300 dark:border-slate-800 dark:bg-slate-800/40"
+                    }`}
+                  >
+                    <span
+                      className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold ${meta.badgeClass}`}
+                    >
+                      {meta.label}
+                    </span>
+                    <p className="mt-1.5 text-[11px] leading-snug text-slate-500 dark:text-slate-400">
+                      {meta.description}
+                    </p>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="mt-4 flex flex-wrap items-center justify-between gap-4 border-t border-slate-100 pt-4 dark:border-slate-800/80">
+            <div className="flex flex-wrap items-center gap-4">
+              <label className="flex cursor-pointer items-center gap-2 text-xs text-slate-700 dark:text-slate-200">
+                <input
+                  type="checkbox"
+                  checked={seedBlankTemplates}
+                  onChange={(e) => setSeedBlankTemplates(e.target.checked)}
+                  className="h-4 w-4 accent-rose-600"
+                />
+                <Sparkles className="h-3.5 w-3.5 text-indigo-500" />
+                Modèles vierges auto (budget sans montants + rétroplanning sans
+                dates)
+              </label>
+
+              <label className="flex cursor-pointer items-center gap-2 text-xs text-slate-600 dark:text-slate-300">
+                <input
+                  type="checkbox"
+                  checked={provisionDrive}
+                  onChange={(e) => setProvisionDrive(e.target.checked)}
+                  className="h-4 w-4 accent-rose-600"
+                />
+                Créer automatiquement l&apos;arborescence Google Drive
+              </label>
+            </div>
 
             <button
               type="submit"
@@ -729,8 +835,24 @@ export default function ProjectsPage() {
             })}
           </div>
 
-          <div className="flex items-center gap-2">
-            <div className="relative w-44 sm:w-56">
+          <div className="flex flex-wrap items-center gap-2">
+            <select
+              aria-label="Filtrer par catégorie de projet"
+              value={categoryFilter}
+              onChange={(e) =>
+                setCategoryFilter(e.target.value as "ALL" | ProjectCategory)
+              }
+              className="rounded-xl border border-slate-200 bg-slate-50/70 px-2.5 py-1.5 text-xs font-medium text-slate-700 focus:border-indigo-400 focus:bg-white focus:outline-none dark:border-slate-800 dark:bg-slate-800/60 dark:text-slate-200"
+            >
+              <option value="ALL">Toutes catégories</option>
+              {PROJECT_CATEGORIES.map((c) => (
+                <option key={c} value={c}>
+                  {PROJECT_CATEGORY_META[c].label}
+                </option>
+              ))}
+            </select>
+
+            <div className="relative w-44 sm:w-52">
               <Search className="pointer-events-none absolute top-1/2 left-2.5 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
               <input
                 type="text"
@@ -856,9 +978,22 @@ export default function ProjectsPage() {
                           onClick={() => void handleOpenProject(p.id, "/")}
                           className="group block w-full text-left"
                         >
-                          <div className="flex items-center gap-1.5">
+                          <div className="flex flex-wrap items-center gap-1.5">
                             <span className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-slate-600 dark:bg-slate-800 dark:text-slate-300">
                               {p.codeProjet}
+                            </span>
+                            <span
+                              className={`rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${
+                                PROJECT_CATEGORY_META[
+                                  normalizeProjectCategory(p.category)
+                                ].badgeClass
+                              }`}
+                            >
+                              {
+                                PROJECT_CATEGORY_META[
+                                  normalizeProjectCategory(p.category)
+                                ].shortLabel
+                              }
                             </span>
                             {isActive && (
                               <span className="rounded-full bg-rose-50 px-1.5 py-0.5 text-[10px] font-semibold text-rose-700 dark:bg-rose-500/15 dark:text-rose-300">
@@ -869,6 +1004,32 @@ export default function ProjectsPage() {
                           <p className="mt-1 truncate font-semibold text-slate-900 group-hover:text-indigo-600 dark:text-white dark:group-hover:text-indigo-400">
                             {p.client} — {p.nomJeu}
                           </p>
+                          {(p.owner || (p.members && p.members.length > 0)) && (
+                            <div className="mt-1 flex items-center gap-1">
+                              {p.owner && (
+                                <AvatarDisplay
+                                  avatarId={p.owner.avatarId}
+                                  avatarBg={p.owner.avatarBg}
+                                  size="xs"
+                                  title={`Propriétaire : ${p.owner.name}`}
+                                />
+                              )}
+                              {(p.members ?? []).slice(0, 3).map((m) => (
+                                <AvatarDisplay
+                                  key={m.id}
+                                  avatarId={m.user.avatarId}
+                                  avatarBg={m.user.avatarBg}
+                                  size="xs"
+                                  title={`${m.user.name} (${m.role === "EDITOR" ? "Vue & Gestion" : "Vue seule"})`}
+                                />
+                              ))}
+                              {p.accessRole === "VIEWER" && (
+                                <span className="ml-1 rounded-full bg-amber-50 px-1.5 py-0.5 text-[9px] font-semibold text-amber-800 dark:bg-amber-500/15 dark:text-amber-300">
+                                  Vue seule
+                                </span>
+                              )}
+                            </div>
+                          )}
                         </button>
                       </td>
 
@@ -978,6 +1139,19 @@ export default function ProjectsPage() {
                         <div className="flex items-center justify-end gap-1">
                           <button
                             type="button"
+                            title="Partager ce projet"
+                            onClick={() =>
+                              setShareTarget({
+                                id: p.id,
+                                label: `${p.client} — ${p.nomJeu} (CP ${p.codeProjet})`,
+                              })
+                            }
+                            className="rounded-lg border border-slate-200 p-1 text-slate-500 hover:bg-indigo-50 hover:text-indigo-600 dark:border-slate-700 dark:text-slate-400 dark:hover:bg-slate-800"
+                          >
+                            <Share2 className="h-3.5 w-3.5" />
+                          </button>
+                          <button
+                            type="button"
                             title="Budget"
                             onClick={() => void handleOpenProject(p.id, "/budget")}
                             className="rounded-lg border border-slate-200 p-1 text-slate-500 hover:bg-slate-100 hover:text-indigo-600 dark:border-slate-700 dark:text-slate-400 dark:hover:bg-slate-800"
@@ -1046,9 +1220,22 @@ export default function ProjectsPage() {
                 >
                   <div>
                     <div className="flex items-start justify-between gap-2">
-                      <div className="flex items-center gap-2">
+                      <div className="flex flex-wrap items-center gap-2">
                         <span className="rounded bg-slate-100 px-2 py-0.5 font-mono text-[11px] font-semibold text-slate-600 dark:bg-slate-800 dark:text-slate-300">
                           CP {p.codeProjet}
+                        </span>
+                        <span
+                          className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                            PROJECT_CATEGORY_META[
+                              normalizeProjectCategory(p.category)
+                            ].badgeClass
+                          }`}
+                        >
+                          {
+                            PROJECT_CATEGORY_META[
+                              normalizeProjectCategory(p.category)
+                            ].label
+                          }
                         </span>
                         <span
                           className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-[11px] font-semibold ${hs.pill}`}
@@ -1132,6 +1319,19 @@ export default function ProjectsPage() {
 
                   <div className="mt-4 flex items-center justify-between border-t border-slate-100 pt-3.5 dark:border-slate-800/80">
                     <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        title="Partager ce projet"
+                        onClick={() =>
+                          setShareTarget({
+                            id: p.id,
+                            label: `${p.client} — ${p.nomJeu} (CP ${p.codeProjet})`,
+                          })
+                        }
+                        className="rounded-lg border border-slate-200 p-1.5 text-slate-500 hover:bg-indigo-50 hover:text-indigo-600 dark:border-slate-700 dark:text-slate-400 dark:hover:bg-slate-800"
+                      >
+                        <Share2 className="h-3.5 w-3.5" />
+                      </button>
                       <button
                         type="button"
                         title="Budget"
@@ -1307,6 +1507,15 @@ export default function ProjectsPage() {
           )}
         </div>
       </div>
+      {shareTarget && (
+        <ProjectShareModal
+          projectId={shareTarget.id}
+          projectLabel={shareTarget.label}
+          open={Boolean(shareTarget)}
+          onClose={() => setShareTarget(null)}
+          onChanged={() => void loadProjects()}
+        />
+      )}
     </div>
   );
 }

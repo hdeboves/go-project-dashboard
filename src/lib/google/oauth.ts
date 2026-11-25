@@ -157,6 +157,7 @@ export async function completeOAuthCallback(
   }
 ): Promise<{
   userEmail: string;
+  userName?: string | null;
   missingScopes: string[];
 }> {
   verifyOAuthState(params.state, params.cookieState);
@@ -178,6 +179,7 @@ export async function completeOAuthCallback(
   });
   const userInfo = await oauth2Api.userinfo.get();
   const userEmail = userInfo.data.email;
+  const userName = userInfo.data.name ?? null;
   if (!userEmail) {
     throw new OAuthStateError(
       "Impossible de récupérer l'adresse email Google associée."
@@ -240,6 +242,7 @@ export async function completeOAuthCallback(
 
   return {
     userEmail,
+    userName,
     missingScopes: computeMissingScopes(scopeStr),
   };
 }

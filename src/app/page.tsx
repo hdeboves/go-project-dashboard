@@ -17,8 +17,13 @@ import {
 } from "lucide-react";
 import { ACTIVE_PROJECT_COOKIE } from "@/app/api/shell/status/route";
 import { UpcomingTasksCard } from "@/components/cockpit/UpcomingTasksCard";
+import { buildVisibleProjectsWhere, getCurrentUser } from "@/lib/auth/session";
 import { decryptSecret } from "@/lib/crypto";
 import { prisma } from "@/lib/prisma";
+import {
+  PROJECT_CATEGORY_META,
+  normalizeProjectCategory,
+} from "@/lib/templates/project-templates";
 
 export const dynamic = "force-dynamic";
 
@@ -67,10 +72,14 @@ export default async function CommandCenterPage({
   searchParams: Promise<{ projectId?: string }>;
 }) {
   const sp = await searchParams;
-  const cookieStore = await cookies();
+  const [cookieStore, currentUser] = await Promise.all([
+    cookies(),
+    getCurrentUser(prisma),
+  ]);
   const cookieProjectId = cookieStore.get(ACTIVE_PROJECT_COOKIE)?.value ?? null;
 
   const projects = await prisma.project.findMany({
+    where: buildVisibleProjectsWhere(currentUser),
     orderBy: [{ isSandbox: "desc" }, { createdAt: "asc" }],
   });
 
@@ -288,11 +297,28 @@ export default async function CommandCenterPage({
       {/* 1. CLEAN EXECUTIVE HEADER */}
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
-          <p className="text-xs font-semibold text-indigo-600 dark:text-indigo-400">
-            {activeProject
-              ? `CP ${activeProject.codeProjet} · Vue du jour`
-              : "GamersOrigin"}
-          </p>
+          <div className="flex flex-wrap items-center gap-2">
+            <p className="text-xs font-semibold text-indigo-600 dark:text-indigo-400">
+              {activeProject
+                ? `CP ${activeProject.codeProjet} · Vue du jour`
+                : "GamersOrigin"}
+            </p>
+            {activeProject && (
+              <span
+                className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                  PROJECT_CATEGORY_META[
+                    normalizeProjectCategory(activeProject.category)
+                  ].badgeClass
+                }`}
+              >
+                {
+                  PROJECT_CATEGORY_META[
+                    normalizeProjectCategory(activeProject.category)
+                  ].label
+                }
+              </span>
+            )}
+          </div>
           <h1 className="mt-1 text-2xl font-bold tracking-tight text-slate-900 dark:text-white">
             {activeProject
               ? `${activeProject.client} — ${activeProject.nomJeu}`

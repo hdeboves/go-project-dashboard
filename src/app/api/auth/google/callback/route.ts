@@ -1,5 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { toErrorResponse } from "@/lib/api-error";
+import {
+  setUserSessionCookie,
+  upsertUserByEmail,
+} from "@/lib/auth/session";
 import { isTestBoundaryHarnessActive } from "@/lib/container";
 import { AppHttpError } from "@/lib/errors";
 import {
@@ -35,7 +39,7 @@ export async function GET(req: NextRequest) {
       ? process.env.TEST_BOUNDARY_HARNESS_URL?.trim()
       : undefined;
 
-    await completeOAuthCallback(prisma, {
+    const oauthResult = await completeOAuthCallback(prisma, {
       code,
       state,
       cookieState,
@@ -43,9 +47,15 @@ export async function GET(req: NextRequest) {
       harnessRootUrl,
     });
 
+    const user = await upsertUserByEmail(prisma, {
+      email: oauthResult.userEmail,
+      name: oauthResult.userName,
+    });
+
     const redirectUrl = new URL("/settings?oauth_status=connected", req.url);
     const response = NextResponse.redirect(redirectUrl);
     response.cookies.delete(OAUTH_STATE_COOKIE_NAME);
+    setUserSessionCookie(response, user.id);
     return response;
   } catch (err) {
     return toErrorResponse(err);

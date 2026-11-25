@@ -27,11 +27,52 @@ model GoogleConnection {
   updatedAt       DateTime @updatedAt
 }
 
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  name      String
+  jobTitle  String?
+  role      String   @default("MEMBER")
+  avatarId  String   @default("gamer-cat")
+  avatarBg  String   @default("#FDE68A")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  ownedProjects Project[]       @relation("ProjectOwner")
+  memberships   ProjectMember[]
+}
+
+model ProjectMember {
+  id        String   @id @default(cuid())
+  projectId String
+  userId    String
+  role      String   @default("VIEWER")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, userId])
+  @@index([userId])
+  @@index([projectId])
+}
+
+model CategoryTemplate {
+  id              String   @id @default(cuid())
+  category        String   @unique
+  budgetLinesJson String   @default("[]")
+  retroTasksJson  String   @default("[]")
+  updatedAt       DateTime @updatedAt
+}
+
 model Project {
   id                        String   @id @default(cuid())
   codeProjet                String
   client                    String
   nomJeu                    String
+  category                  String   @default("JEU")
+  ownerId                   String?
   isSandbox                 Boolean  @default(true)
   driveInternalRootId       String?
   driveExternalRootId       String?
@@ -48,6 +89,8 @@ model Project {
   createdAt                 DateTime @default(now())
   updatedAt                 DateTime @updatedAt
 
+  owner             User?             @relation("ProjectOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  members           ProjectMember[]
   driveNodes        DriveNode[]
   syncStatuses      SyncStatus[]
   budgetLines       BudgetLine[]
@@ -68,6 +111,7 @@ model Project {
 
   @@unique([codeProjet, client, nomJeu])
   @@index([codeProjet])
+  @@index([ownerId])
 }
 
 model DriveNode {

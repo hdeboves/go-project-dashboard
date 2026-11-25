@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { toErrorResponse } from "@/lib/api-error";
+import { assertProjectAccess, getCurrentUser } from "@/lib/auth/session";
 import { encryptSecret } from "@/lib/crypto";
 import { AppHttpError } from "@/lib/errors";
 import { prisma } from "@/lib/prisma";
@@ -12,7 +13,9 @@ const ActiveProjectSchema = z.object({
 
 export async function POST(req: NextRequest) {
   try {
+    const currentUser = await getCurrentUser(prisma);
     const body = ActiveProjectSchema.parse(await req.json());
+    await assertProjectAccess(prisma, body.projectId, currentUser, "VIEW");
     const project = await prisma.project.findUnique({
       where: { id: body.projectId },
     });

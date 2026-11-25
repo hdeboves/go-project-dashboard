@@ -2,7 +2,10 @@
 
 import {
   AlertTriangle,
+  CalendarClock,
+  Download,
   ExternalLink,
+  FileSpreadsheet,
   GanttChartSquare,
   History,
   Kanban,
@@ -70,6 +73,14 @@ export function RetroplanningWorkspace() {
   );
   const [loading, setLoading] = useState(true);
   const [syncingSheet, setSyncingSheet] = useState(false);
+  const [exportingSheet, setExportingSheet] = useState(false);
+  const [applyingTemplate, setApplyingTemplate] = useState(false);
+  const [dateToolsOpen, setDateToolsOpen] = useState(false);
+  const [anchorDate, setAnchorDate] = useState(() =>
+    new Date().toISOString().slice(0, 10)
+  );
+  const [shiftDays, setShiftDays] = useState("7");
+  const [shiftingDates, setShiftingDates] = useState(false);
   const [runningVeille, setRunningVeille] = useState(false);
   const [creatingSnapshot, setCreatingSnapshot] = useState(false);
   const [comparing, setComparing] = useState(false);
@@ -203,6 +214,105 @@ export function RetroplanningWorkspace() {
     setSyncingSheet(true);
     setFeedback(null);
     await loadAll(true);
+  }
+
+  async function handleExportToGoogleSheet() {
+    if (!projectId) return;
+    setExportingSheet(true);
+    setFeedback(null);
+    try {
+      const res = await fetch(
+        `/api/projects/${projectId}/retroplanning/export-sheet`,
+        { method: "POST" }
+      );
+      const json = (await res.json()) as {
+        spreadsheetId?: string;
+        webViewLink?: string;
+        created?: boolean;
+        tasksCount?: number;
+        error?: string;
+        code?: string;
+      };
+      if (!res.ok) {
+        handleApiError(res.status, json);
+        return;
+      }
+      if (json.spreadsheetId) {
+        setRetroSheetId(json.spreadsheetId);
+      }
+      const msg = json.created
+        ? `Google Sheet créé dans le Drive (${json.tasksCount ?? 0} tâches exportées).`
+        : `Google Sheet actualisé dans le Drive (${json.tasksCount ?? 0} tâches synchronisées).`;
+      setFeedback({ type: "success", text: msg });
+      showToast(msg);
+      await loadAll(false);
+    } finally {
+      setExportingSheet(false);
+    }
+  }
+
+  async function handleApplyBlankRetroTemplate(replaceExisting = false) {
+    if (!projectId) return;
+    setApplyingTemplate(true);
+    setFeedback(null);
+    try {
+      const res = await fetch(`/api/projects/${projectId}/retroplanning`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "APPLY_BLANK_TEMPLATE",
+          replaceExisting,
+        }),
+      });
+      const json = (await res.json()) as {
+        createdCount?: number;
+        error?: string;
+        code?: string;
+      };
+      if (!res.ok) {
+        handleApiError(res.status, json);
+        return;
+      }
+      showToast(
+        `Modèle de rétroplanning vierge appliqué (${json.createdCount ?? 0} tâches sans dates).`
+      );
+      await loadAll(false);
+    } finally {
+      setApplyingTemplate(false);
+    }
+  }
+
+  async function handleDateToolAction(payload: {
+    deltaDays?: number;
+    anchorStartDate?: string;
+    clearDates?: boolean;
+  }) {
+    if (!projectId) return;
+    setShiftingDates(true);
+    setFeedback(null);
+    try {
+      const res = await fetch(`/api/projects/${projectId}/retroplanning`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "SHIFT_DATES", ...payload }),
+      });
+      const json = (await res.json()) as { error?: string; code?: string };
+      if (!res.ok) {
+        handleApiError(res.status, json);
+        return;
+      }
+      showToast(
+        payload.clearDates
+          ? "Toutes les dates ont été effacées."
+          : payload.anchorStartDate
+            ? `Planning daté à partir du ${payload.anchorStartDate}.`
+            : `Toutes les dates décalées de ${payload.deltaDays} jour(s).`
+      );
+      setDateToolsOpen(false);
+      await loadAll(false);
+    } finally {
+      setShiftingDates(false);
+    }
   }
 
   async function handleCreateTask(payload: {
@@ -443,6 +553,32 @@ export function RetroplanningWorkspace() {
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
+          {projectId && (
+            <a
+              href={`/api/projects/${projectId}/retroplanning/export-xlsx`}
+              data-testid="export-retro-xlsx-btn"
+              className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 shadow-2xs transition-colors hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+            >
+              <Download className="h-3.5 w-3.5 text-emerald-600 dark:text-emerald-400" />
+              Excel (.xlsx)
+            </a>
+          )}
+
+          <button
+            type="button"
+            disabled={!projectId || exportingSheet}
+            onClick={() => void handleExportToGoogleSheet()}
+            data-testid="export-retro-gsheet-btn"
+            className="inline-flex items-center gap-1.5 rounded-xl bg-emerald-600 px-3 py-2 text-xs font-semibold text-white shadow-2xs transition-colors hover:bg-emerald-700 disabled:opacity-50"
+          >
+            <FileSpreadsheet className="h-3.5 w-3.5" />
+            {exportingSheet
+              ? "Mise à jour Drive..."
+              : retroSheetId
+                ? "Actualiser Google Sheets (Drive)"
+                : "Exporter vers Google Sheets (Drive)"}
+          </button>
+
           {retroSheetId && (
             <a
               href={`https://docs.google.com/spreadsheets/d/${retroSheetId}/edit`}
@@ -459,15 +595,97 @@ export function RetroplanningWorkspace() {
             type="button"
             disabled={!projectId || syncingSheet}
             onClick={() => void handleSyncFromSheet()}
-            className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs font-semibold text-slate-700 shadow-2xs transition-colors hover:bg-slate-50 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+            className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 shadow-2xs transition-colors hover:bg-slate-50 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
           >
             <RefreshCw
               className={`h-3.5 w-3.5 text-indigo-600 dark:text-indigo-400 ${syncingSheet ? "animate-spin" : ""}`}
             />
-            {syncingSheet ? "Synchronisation..." : "Importer depuis Sheets"}
+            {syncingSheet ? "Sync..." : "Importer Sheets"}
+          </button>
+
+          <button
+            type="button"
+            disabled={!projectId}
+            onClick={() => setDateToolsOpen((v) => !v)}
+            className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 shadow-2xs hover:bg-slate-50 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+          >
+            <CalendarClock className="h-3.5 w-3.5 text-rose-500" />
+            Dates rapides
           </button>
         </div>
       </div>
+
+      {/* Quick Date Tools & Blank Template Bar */}
+      {dateToolsOpen && (
+        <section className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-indigo-200/80 bg-indigo-50/50 p-4 text-xs dark:border-indigo-500/30 dark:bg-indigo-500/10">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="font-semibold text-slate-800 dark:text-slate-100">
+              Dater depuis un Kick-off :
+            </span>
+            <input
+              type="date"
+              value={anchorDate}
+              onChange={(e) => setAnchorDate(e.target.value)}
+              className="rounded-xl border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white"
+            />
+            <button
+              type="button"
+              disabled={shiftingDates || tasks.length === 0}
+              onClick={() =>
+                void handleDateToolAction({ anchorStartDate: anchorDate })
+              }
+              className="rounded-xl bg-indigo-600 px-3 py-1.5 font-semibold text-white hover:bg-indigo-700 disabled:opacity-50"
+            >
+              Auto-planifier les phases
+            </button>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="font-semibold text-slate-800 dark:text-slate-100">
+              Décaler tout :
+            </span>
+            <input
+              type="number"
+              value={shiftDays}
+              onChange={(e) => setShiftDays(e.target.value)}
+              className="w-16 rounded-xl border border-slate-200 bg-white px-2 py-1.5 font-mono text-xs text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white"
+            />
+            <span className="text-slate-500">jours</span>
+            <button
+              type="button"
+              disabled={shiftingDates || tasks.length === 0}
+              onClick={() =>
+                void handleDateToolAction({
+                  deltaDays: Number.parseInt(shiftDays, 10) || 0,
+                })
+              }
+              className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+            >
+              Décaler
+            </button>
+            <button
+              type="button"
+              disabled={shiftingDates || tasks.length === 0}
+              onClick={() => void handleDateToolAction({ clearDates: true })}
+              className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-1.5 font-semibold text-rose-700 hover:bg-rose-100 dark:border-rose-500/30 dark:bg-rose-500/15 dark:text-rose-300"
+            >
+              Effacer les dates
+            </button>
+            <button
+              type="button"
+              disabled={applyingTemplate}
+              onClick={() =>
+                void handleApplyBlankRetroTemplate(tasks.length > 0)
+              }
+              className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 font-semibold text-slate-700 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+            >
+              {applyingTemplate
+                ? "Application..."
+                : "Charger le template vierge"}
+            </button>
+          </div>
+        </section>
+      )}
 
       {/* Clean Split View Tabs: Primary Task Views (Left) vs Secondary Tools (Right) */}
       <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-200/80 dark:border-slate-800">

@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { toErrorResponse } from "@/lib/api-error";
+import { assertProjectAccess, getCurrentUser } from "@/lib/auth/session";
 import {
+  getProjectBudget,
   importBudgetFromSheetCopy,
   importBudgetFromXlsx,
   syncBudgetFromAttachedSheet,
@@ -9,6 +11,10 @@ import {
 import { getServices } from "@/lib/container";
 import { PILOT_SANDBOX_CONFIG } from "@/lib/drive/tree-service";
 import { AppHttpError } from "@/lib/errors";
+import {
+  normalizeProjectCategory,
+  seedBlankBudgetForProject,
+} from "@/lib/templates/project-templates";
 
 const ImportJsonSchema = z.union([
   z.object({
@@ -16,6 +22,11 @@ const ImportJsonSchema = z.union([
   }),
   z.object({
     mode: z.literal("sync_from_sheet"),
+  }),
+  z.object({
+    mode: z.literal("apply_blank_template"),
+    category: z.enum(["JEU", "YOUTUBE", "EVENEMENT", "SPONSOR"]).optional(),
+    replaceExisting: z.boolean().optional(),
   }),
   z.object({
     mode: z.literal("copy_template").optional(),
@@ -30,6 +41,8 @@ export async function POST(
   try {
     const { id } = await context.params;
     const { prisma, getGoogleGateway } = getServices();
+    const currentUser = await getCurrentUser(prisma);
+    await assertProjectAccess(prisma, id, currentUser, "EDIT");
     const contentType = req.headers.get("content-type") ?? "";
 
     if (contentType.includes("multipart/form-data")) {
@@ -85,6 +98,30 @@ export async function POST(
         projectId: id,
       });
       return NextResponse.json(result, { status: 200 });
+    }
+
+    if ("mode" in body && body.mode === "apply_blank_template") {
+      const project = await prisma.project.findUnique({ where: { id } });
+      if (!project) {
+        throw new AppHttpError(404, "PROJECT_NOT_FOUND", "Projet introuvable.");
+      }
+      const targetCategory = normalizeProjectCategory(
+        body.category ?? project.category
+      );
+      if (body.category && body.category !== project.category) {
+        await prisma.project.update({
+          where: { id },
+          data: { category: targetCategory },
+        });
+      }
+      await seedBlankBudgetForProject(prisma, id, targetCategory, {
+        replaceExisting: body.replaceExisting ?? true,
+      });
+      const overview = await getProjectBudget(prisma, id);
+      return NextResponse.json(
+        { ok: true, category: targetCategory, ...overview },
+        { status: 200 }
+      );
     }
 
     const sourceSheetId =

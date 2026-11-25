@@ -199,6 +199,8 @@ export function GanttBoard({
   const [draggingTaskId, setDraggingTaskId] = useState<string | null>(null);
   const [dragOverCol, setDragOverCol] = useState<string | null>(null);
   const [inlineDateTaskId, setInlineDateTaskId] = useState<string | null>(null);
+  const [inlineStartVal, setInlineStartVal] = useState<string>("");
+  const [inlineEndVal, setInlineEndVal] = useState<string>("");
 
   const [collapsedPhases, setCollapsedPhases] = useState<Set<string>>(
     () => new Set()
@@ -922,42 +924,71 @@ export function GanttBoard({
                               </span>
                             )}
 
-                            {/* Inline Due Date Editor */}
+                            {/* Inline Start & End Date Editor */}
                             {inlineDateTaskId === task.id ? (
-                              <input
-                                type="date"
-                                autoFocus
-                                defaultValue={isoPrefix(task.endDate)}
-                                onBlur={(e) => {
-                                  const nextVal = e.target.value;
-                                  setInlineDateTaskId(null);
-                                  if (nextVal !== isoPrefix(task.endDate)) {
+                              <div className="inline-flex flex-wrap items-center gap-1 rounded-xl border border-sky-400 bg-sky-50/60 px-2 py-1 dark:border-sky-500/50 dark:bg-sky-950/40">
+                                <input
+                                  type="date"
+                                  aria-label="Date de début"
+                                  value={inlineStartVal}
+                                  onChange={(e) => setInlineStartVal(e.target.value)}
+                                  className="rounded-lg border border-slate-200 bg-white px-1.5 py-0.5 text-[11px] text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white"
+                                />
+                                <span className="text-[10px] text-slate-400">→</span>
+                                <input
+                                  type="date"
+                                  aria-label="Date de fin"
+                                  value={inlineEndVal}
+                                  onChange={(e) => setInlineEndVal(e.target.value)}
+                                  className="rounded-lg border border-slate-200 bg-white px-1.5 py-0.5 text-[11px] text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white"
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setInlineDateTaskId(null);
                                     void onUpdateTask({
                                       id: task.id,
-                                      endDate: nextVal || null,
+                                      startDate: inlineStartVal || null,
+                                      endDate: inlineEndVal || null,
                                       expectedUpdatedAt: task.updatedAt,
                                     });
-                                  }
-                                }}
-                                onKeyDown={(e) => {
-                                  if (e.key === "Escape") {
-                                    setInlineDateTaskId(null);
-                                  }
-                                }}
-                                className="rounded-lg border border-sky-500 bg-white px-2 py-0.5 text-xs text-slate-900 dark:bg-slate-900 dark:text-white"
-                              />
+                                  }}
+                                  className="rounded-lg bg-sky-600 px-2 py-0.5 text-[10px] font-semibold text-white hover:bg-sky-700"
+                                >
+                                  OK
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setInlineDateTaskId(null)}
+                                  className="rounded p-0.5 text-slate-400 hover:text-slate-700"
+                                  aria-label="Annuler"
+                                >
+                                  <X className="h-3 w-3" />
+                                </button>
+                              </div>
                             ) : (
                               <button
                                 type="button"
-                                title="Cliquer pour changer la date"
-                                onClick={() => setInlineDateTaskId(task.id)}
-                                className={`rounded-lg px-2 py-1 text-xs font-medium transition-colors ${
+                                title="Cliquer pour définir ou modifier les dates (début & fin)"
+                                onClick={() => {
+                                  setInlineStartVal(isoPrefix(task.startDate));
+                                  setInlineEndVal(isoPrefix(task.endDate));
+                                  setInlineDateTaskId(task.id);
+                                }}
+                                className={`inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium transition-colors ${
                                   isLate
                                     ? "bg-rose-50 text-rose-700 hover:bg-rose-100 dark:bg-rose-500/15 dark:text-rose-300"
-                                    : "text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800"
+                                    : !task.startDate && !task.endDate
+                                      ? "border border-dashed border-slate-300 text-slate-400 hover:border-sky-400 hover:text-sky-600 dark:border-slate-700 dark:text-slate-500"
+                                      : "text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800"
                                 }`}
                               >
-                                {formatShortDate(task.endDate ?? task.startDate)}
+                                <Calendar className="h-3 w-3 opacity-70" />
+                                {task.startDate && task.endDate
+                                  ? `${formatShortDate(task.startDate)} → ${formatShortDate(task.endDate)}`
+                                  : task.endDate || task.startDate
+                                    ? formatShortDate(task.endDate ?? task.startDate)
+                                    : "Définir dates"}
                               </button>
                             )}
 

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { toErrorResponse } from "@/lib/api-error";
+import { assertProjectAccess, getCurrentUser } from "@/lib/auth/session";
 import { PreconditionError, getGoogleGateway } from "@/lib/container";
 import { AppHttpError } from "@/lib/errors";
 import type { GoogleWorkspacePort } from "@/lib/ports";
@@ -12,6 +13,11 @@ import {
   syncSheetToDb,
   updateRetroTask,
 } from "@/lib/retroplanning/retro-service";
+import {
+  addUtcDays,
+  parseStrictCalendarDate,
+} from "@/lib/retroplanning/validation";
+import { seedBlankRetroForProject } from "@/lib/templates/project-templates";
 
 const CreateTaskSchema = z.object({
   phase: z.string(),
@@ -27,6 +33,18 @@ const CreateTaskSchema = z.object({
 
 const SyncActionSchema = z.object({
   action: z.literal("SYNC_FROM_SHEET"),
+});
+
+const ApplyBlankTemplateSchema = z.object({
+  action: z.literal("APPLY_BLANK_TEMPLATE"),
+  replaceExisting: z.boolean().optional(),
+});
+
+const ShiftDatesActionSchema = z.object({
+  action: z.literal("SHIFT_DATES"),
+  deltaDays: z.number().int().min(-365).max(365).optional(),
+  anchorStartDate: z.string().optional(),
+  clearDates: z.boolean().optional(),
 });
 
 const UpdateTaskSchema = z.object({
@@ -63,10 +81,13 @@ export async function GET(
 ) {
   try {
     const { id } = await context.params;
+    const currentUser = await getCurrentUser(prisma);
+    await assertProjectAccess(prisma, id, currentUser, "VIEW");
     const syncFromSheet =
       req.nextUrl.searchParams.get("syncFromSheet") === "1";
 
     if (syncFromSheet) {
+      await assertProjectAccess(prisma, id, currentUser, "EDIT");
       const project = await prisma.project.findUnique({ where: { id } });
       if (!project) {
         throw new AppHttpError(404, "PROJECT_NOT_FOUND", "Projet introuvable.");
@@ -88,6 +109,8 @@ export async function POST(
 ) {
   try {
     const { id } = await context.params;
+    const currentUser = await getCurrentUser(prisma);
+    await assertProjectAccess(prisma, id, currentUser, "EDIT");
     const rawBody: unknown = await req.json();
 
     const syncAttempt = SyncActionSchema.safeParse(rawBody);
@@ -104,6 +127,84 @@ export async function POST(
         ...syncRes,
         ...overview,
       });
+    }
+
+    const templateAttempt = ApplyBlankTemplateSchema.safeParse(rawBody);
+    if (templateAttempt.success) {
+      const project = await prisma.project.findUnique({ where: { id } });
+      if (!project) {
+        throw new AppHttpError(404, "PROJECT_NOT_FOUND", "Projet introuvable.");
+      }
+      const seeded = await seedBlankRetroForProject(prisma, id, {
+        replaceExisting: templateAttempt.data.replaceExisting ?? false,
+        category: project.category,
+      });
+      const overview = await getRetroplanningOverview(prisma, id);
+      return NextResponse.json({
+        ok: true,
+        createdCount: seeded.createdCount,
+        ...overview,
+      });
+    }
+
+    const shiftAttempt = ShiftDatesActionSchema.safeParse(rawBody);
+    if (shiftAttempt.success) {
+      const tasks = await prisma.retroTask.findMany({
+        where: { projectId: id },
+        orderBy: [{ sheetRowIndex: "asc" }, { createdAt: "asc" }],
+      });
+
+      if (shiftAttempt.data.clearDates) {
+        await prisma.retroTask.updateMany({
+          where: { projectId: id },
+          data: { startDate: null, endDate: null },
+        });
+      } else if (shiftAttempt.data.anchorStartDate) {
+        const anchor = parseStrictCalendarDate(shiftAttempt.data.anchorStartDate);
+        if (!anchor) {
+          throw new AppHttpError(
+            400,
+            "INVALID_ANCHOR_DATE",
+            "Date de démarrage invalide."
+          );
+        }
+        // Space tasks cleanly week-by-week by phase from anchor date
+        const phaseOrder: string[] = [];
+        for (const t of tasks) {
+          if (!phaseOrder.includes(t.phase)) phaseOrder.push(t.phase);
+        }
+        await prisma.$transaction(
+          tasks.map((t) => {
+            const phaseIdx = Math.max(0, phaseOrder.indexOf(t.phase));
+            const start = addUtcDays(anchor, phaseIdx * 7);
+            const end = addUtcDays(start, 4);
+            return prisma.retroTask.update({
+              where: { id: t.id },
+              data: { startDate: start, endDate: end },
+            });
+          })
+        );
+      } else if (
+        typeof shiftAttempt.data.deltaDays === "number" &&
+        shiftAttempt.data.deltaDays !== 0
+      ) {
+        const delta = shiftAttempt.data.deltaDays;
+        const datedTasks = tasks.filter((t) => t.startDate || t.endDate);
+        await prisma.$transaction(
+          datedTasks.map((t) =>
+            prisma.retroTask.update({
+              where: { id: t.id },
+              data: {
+                startDate: t.startDate ? addUtcDays(t.startDate, delta) : null,
+                endDate: t.endDate ? addUtcDays(t.endDate, delta) : null,
+              },
+            })
+          )
+        );
+      }
+
+      const overview = await getRetroplanningOverview(prisma, id);
+      return NextResponse.json({ ok: true, ...overview });
     }
 
     const parsed = CreateTaskSchema.parse(rawBody);
@@ -129,6 +230,8 @@ export async function PATCH(
 ) {
   try {
     const { id } = await context.params;
+    const currentUser = await getCurrentUser(prisma);
+    await assertProjectAccess(prisma, id, currentUser, "EDIT");
     const rawBody: unknown = await req.json();
     const parsed = UpdateTaskSchema.parse(rawBody);
     const gateway = await tryGetGoogleGateway(id);
@@ -150,6 +253,8 @@ export async function DELETE(
 ) {
   try {
     const { id } = await context.params;
+    const currentUser = await getCurrentUser(prisma);
+    await assertProjectAccess(prisma, id, currentUser, "EDIT");
     let taskId = req.nextUrl.searchParams.get("taskId")?.trim() ?? "";
 
     if (!taskId) {

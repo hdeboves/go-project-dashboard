@@ -12,6 +12,7 @@ import {
   RefreshCw,
   Settings,
   ShieldAlert,
+  Sparkles,
   Table2,
   Upload,
 } from "lucide-react";
@@ -26,6 +27,12 @@ import {
   type InvoiceDto,
   formatEur,
 } from "@/components/budget/types";
+import {
+  PROJECT_CATEGORIES,
+  PROJECT_CATEGORY_META,
+  normalizeProjectCategory,
+  type ProjectCategory,
+} from "@/lib/templates/project-templates";
 import { showToast } from "@/lib/toast";
 
 const PROD_BUDGET_SHEET_ID = "1QUSOShHJmAlch3kP5F0RIf5txwyQ7Y6wf20A0jgCtMw";
@@ -37,6 +44,7 @@ interface ShellStatusResponse {
     codeProjet: string;
     client: string;
     nomJeu: string;
+    category?: string;
     isSandbox: boolean;
   } | null;
 }
@@ -51,6 +59,7 @@ export function BudgetDashboardClient() {
 
   const [projectId, setProjectId] = useState<string | null>(queryProjectId);
   const [projectLabel, setProjectLabel] = useState<string>("");
+  const [projectCategory, setProjectCategory] = useState<ProjectCategory>("JEU");
   const [budget, setBudget] = useState<BudgetDataDto | null>(null);
   const [invoices, setInvoices] = useState<InvoiceDto[]>([]);
   const [warnings, setWarnings] = useState<string[]>([]);
@@ -98,6 +107,9 @@ export function BudgetDashboardClient() {
         if (!targetId) targetId = shell.activeProjectId;
         if (shell.activeProject && shell.activeProject.id === targetId) {
           label = `${shell.activeProject.client} — ${shell.activeProject.nomJeu} (CP ${shell.activeProject.codeProjet})`;
+          setProjectCategory(
+            normalizeProjectCategory(shell.activeProject.category)
+          );
         }
       }
 
@@ -226,6 +238,43 @@ export function BudgetDashboardClient() {
     }
   }
 
+  async function handleApplyBlankCategoryTemplate(cat: ProjectCategory) {
+    if (!projectId) return;
+    setImporting(true);
+    setImportMenuOpen(false);
+    setActionError(null);
+    setSetupRequiredMessage(null);
+    try {
+      const res = await fetch(`/api/projects/${projectId}/budget/import`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          mode: "apply_blank_template",
+          category: cat,
+          replaceExisting: true,
+        }),
+      });
+      const json = (await res.json()) as BudgetDataDto & {
+        error?: string;
+        code?: string;
+      };
+      if (!res.ok) {
+        handleApiError(res.status, json);
+        return;
+      }
+      setProjectCategory(cat);
+      setBudget(json);
+      setActiveTab("table");
+      await loadData();
+      showToast(
+        `Modèle budget vierge « ${PROJECT_CATEGORY_META[cat].label} » appliqué (montants à 0 €).`
+      );
+      window.dispatchEvent(new CustomEvent("go:shell-refresh"));
+    } finally {
+      setImporting(false);
+    }
+  }
+
   async function handleSyncFromSheet() {
     if (!projectId) return;
     setSyncing(true);
@@ -338,6 +387,11 @@ export function BudgetDashboardClient() {
             <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-white">
               Budget & Factures
             </h1>
+            <span
+              className={`rounded-full px-2.5 py-0.5 text-[11px] font-semibold ${PROJECT_CATEGORY_META[projectCategory].badgeClass}`}
+            >
+              {PROJECT_CATEGORY_META[projectCategory].label}
+            </span>
             {overrunAlerts.length === 0 ? (
               <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2.5 py-0.5 text-xs font-semibold text-emerald-700 ring-1 ring-emerald-600/20 dark:bg-emerald-500/15 dark:text-emerald-300">
                 <CheckCircle2 className="h-3.5 w-3.5" />
@@ -435,6 +489,30 @@ export function BudgetDashboardClient() {
                     />
                     <span>Actualiser depuis Google Sheets</span>
                   </button>
+                  <div className="my-1.5 border-t border-slate-100 pt-1.5 dark:border-slate-800">
+                    <p className="px-3 py-1 text-[10px] font-bold tracking-wider text-slate-400 uppercase">
+                      Modèle vierge (0 €) par catégorie
+                    </p>
+                    {PROJECT_CATEGORIES.map((cat) => (
+                      <button
+                        key={cat}
+                        type="button"
+                        disabled={importing}
+                        onClick={() => void handleApplyBlankCategoryTemplate(cat)}
+                        className="flex w-full items-center justify-between rounded-lg px-3 py-1.5 text-left text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 dark:text-slate-200 dark:hover:bg-slate-800"
+                      >
+                        <span className="flex items-center gap-2">
+                          <Sparkles className="h-3.5 w-3.5 text-indigo-500" />
+                          {PROJECT_CATEGORY_META[cat].label}
+                        </span>
+                        {cat === projectCategory && (
+                          <span className="text-[10px] font-semibold text-indigo-600 dark:text-indigo-400">
+                            Actuel
+                          </span>
+                        )}
+                      </button>
+                    ))}
+                  </div>
                 </div>
               </>
             )}
@@ -792,11 +870,22 @@ export function BudgetDashboardClient() {
                 <button
                   type="button"
                   disabled={importing}
+                  onClick={() =>
+                    void handleApplyBlankCategoryTemplate(projectCategory)
+                  }
+                  className="inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-4 py-2.5 text-xs font-semibold text-white hover:bg-indigo-700 disabled:opacity-50"
+                >
+                  <Sparkles className="h-4 w-4" />
+                  Modèle vierge ({PROJECT_CATEGORY_META[projectCategory].label})
+                </button>
+                <button
+                  type="button"
+                  disabled={importing}
                   onClick={() => void handleCopyProdBudget()}
                   className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
                 >
                   <Copy className="h-4 w-4 text-indigo-600 dark:text-indigo-400" />
-                  Utiliser le budget modèle
+                  Utiliser le budget modèle Sheet
                 </button>
               </div>
             </section>

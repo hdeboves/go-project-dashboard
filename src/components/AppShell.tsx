@@ -7,6 +7,7 @@ import {
   BarChart3,
   Calendar,
   ChevronDown,
+  Eye,
   FileSpreadsheet,
   FolderGit2,
   GanttChartSquare,
@@ -21,13 +22,17 @@ import {
   Presentation,
   Search,
   Settings,
+  Share2,
   ShieldCheck,
   Sun,
+  UserCircle2,
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
+import { AvatarDisplay } from "@/components/AvatarDisplay";
 import { CommandPalette } from "@/components/CommandPalette";
 import { NotificationBell } from "@/components/NotificationBell";
+import { ProjectShareModal } from "@/components/ProjectShareModal";
 import { ToastContainer } from "@/components/ToastContainer";
 import { showToast } from "@/lib/toast";
 
@@ -36,13 +41,31 @@ interface ShellProject {
   codeProjet: string;
   client: string;
   nomJeu: string;
+  category?: string;
   isSandbox: boolean;
+}
+
+interface ShellCurrentUser {
+  id: string;
+  email: string;
+  name: string;
+  jobTitle: string | null;
+  role: string;
+  avatarId: string;
+  avatarBg: string;
 }
 
 interface ShellStatus {
   projects: ShellProject[];
   activeProjectId: string | null;
   activeProject: ShellProject | null;
+  activeProjectAccess?: {
+    canView: boolean;
+    canEdit: boolean;
+    canManageMembers: boolean;
+    accessRole: string | null;
+  } | null;
+  currentUser?: ShellCurrentUser | null;
   googleConnected: boolean;
   googleEmail: string | null;
   geminiConfigured: boolean;
@@ -78,6 +101,7 @@ const PAGE_TITLES: Record<string, string> = {
   "/weeklys": "Weeklys Clients",
   "/reporting": "Reporting Bilan",
   "/settings": "Paramètres",
+  "/profile": "Mon profil & Modèles",
 };
 
 export function AppShell({ children }: { children: React.ReactNode }) {
@@ -89,6 +113,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const [switching, setSwitching] = useState(false);
   const [theme, setTheme] = useState<"light" | "dark">("light");
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [shareOpen, setShareOpen] = useState(false);
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -521,6 +546,36 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         {/* Quiet Footer */}
         <div className="space-y-1 border-t border-slate-100 p-2.5 dark:border-slate-800">
           <Link
+            href="/profile"
+            title="Mon profil, avatar & modèles vierges"
+            onClick={() => setMobileOpen(false)}
+            className={`flex items-center rounded-xl px-2.5 py-2 text-[13px] transition-colors ${
+              sidebarCollapsed
+                ? "justify-between lg:justify-center lg:px-0"
+                : "justify-between"
+            } ${
+              pathname === "/profile"
+                ? "bg-rose-50 font-semibold text-rose-700 dark:bg-rose-500/15 dark:text-rose-300"
+                : "font-medium text-slate-600 hover:bg-slate-100/80 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800/70"
+            }`}
+          >
+            <span className="flex min-w-0 items-center gap-2.5">
+              {status?.currentUser ? (
+                <AvatarDisplay
+                  avatarId={status.currentUser.avatarId}
+                  avatarBg={status.currentUser.avatarBg}
+                  size="xs"
+                />
+              ) : (
+                <UserCircle2 className="h-4 w-4 shrink-0 text-slate-400" />
+              )}
+              <span className={`truncate ${sidebarCollapsed ? "lg:hidden" : ""}`}>
+                {status?.currentUser ? status.currentUser.name : "Profil & Avatar"}
+              </span>
+            </span>
+          </Link>
+
+          <Link
             href="/settings"
             title="Paramètres"
             onClick={() => setMobileOpen(false)}
@@ -597,8 +652,33 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               </span>
             </div>
 
-            {/* Right: Minimal Search + Single Theme Toggle + Quiet Account Indicator */}
+            {/* Right: Minimal Search + Share + Theme Toggle + Avatar Profile */}
             <div className="flex items-center gap-2">
+              {activeProject &&
+                status?.activeProjectAccess?.accessRole === "VIEWER" && (
+                  <span
+                    title="Vous disposez d'un accès en lecture seule sur ce projet"
+                    className="hidden items-center gap-1 rounded-full bg-amber-50 px-2.5 py-1 text-[11px] font-semibold text-amber-800 dark:bg-amber-500/15 dark:text-amber-300 sm:inline-flex"
+                  >
+                    <Eye className="h-3 w-3" />
+                    Vue seule
+                  </span>
+                )}
+
+              {activeProject &&
+                status?.activeProjectAccess?.canManageMembers !== false && (
+                  <button
+                    type="button"
+                    onClick={() => setShareOpen(true)}
+                    title="Partager ce projet (vue ou gestion)"
+                    data-testid="topbar-share-project-btn"
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200/80 bg-white px-2.5 py-1 text-xs font-medium text-slate-600 transition-colors hover:border-indigo-300 hover:bg-indigo-50/50 hover:text-indigo-700 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300 dark:hover:text-indigo-300"
+                  >
+                    <Share2 className="h-3.5 w-3.5" />
+                    <span className="hidden sm:inline">Partager</span>
+                  </button>
+                )}
+
               <button
                 type="button"
                 onClick={() => setPaletteOpen(true)}
@@ -647,6 +727,37 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                   Configurer
                 </Link>
               )}
+
+              <Link
+                href="/profile"
+                data-testid="topbar-profile-link"
+                title={
+                  status?.currentUser
+                    ? `${status.currentUser.name} (${status.currentUser.email})`
+                    : "Se connecter & personnaliser mon avatar"
+                }
+                className="inline-flex items-center gap-1.5 rounded-full border border-slate-200/80 bg-white py-0.5 pr-2.5 pl-0.5 text-xs font-medium text-slate-700 transition-colors hover:border-rose-300 hover:bg-rose-50/40 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-200"
+              >
+                {status?.currentUser ? (
+                  <>
+                    <AvatarDisplay
+                      avatarId={status.currentUser.avatarId}
+                      avatarBg={status.currentUser.avatarBg}
+                      size="xs"
+                    />
+                    <span className="hidden max-w-[100px] truncate md:inline">
+                      {status.currentUser.name}
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    <span className="flex h-6 w-6 items-center justify-center rounded-full bg-slate-100 text-slate-500 dark:bg-slate-800">
+                      <UserCircle2 className="h-4 w-4" />
+                    </span>
+                    <span className="hidden md:inline">Connexion</span>
+                  </>
+                )}
+              </Link>
             </div>
           </div>
         </header>
@@ -689,6 +800,15 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         theme={theme}
         onToggleTheme={toggleTheme}
       />
+      {activeProject && (
+        <ProjectShareModal
+          projectId={activeProject.id}
+          projectLabel={`${activeProject.client} — ${activeProject.nomJeu} (CP ${activeProject.codeProjet})`}
+          open={shareOpen}
+          onClose={() => setShareOpen(false)}
+          onChanged={() => window.dispatchEvent(new CustomEvent("go:shell-refresh"))}
+        />
+      )}
       <ToastContainer />
     </div>
   );

@@ -1,6 +1,12 @@
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import { toErrorResponse } from "@/lib/api-error";
+import {
+  buildVisibleProjectsWhere,
+  getCurrentUser,
+  getProjectAccess,
+  toPublicUser,
+} from "@/lib/auth/session";
 import { decryptSecret } from "@/lib/crypto";
 import { isSandboxModeEnabled } from "@/lib/google/sandbox-guard";
 import { prisma } from "@/lib/prisma";
@@ -9,12 +15,16 @@ export const ACTIVE_PROJECT_COOKIE = "go_active_project_id";
 
 export async function GET() {
   try {
-    const cookieStore = await cookies();
+    const [cookieStore, currentUser, dbActiveSetting] = await Promise.all([
+      cookies(),
+      getCurrentUser(prisma),
+      prisma.appSetting.findUnique({
+        where: { key: "ACTIVE_PROJECT_ID" },
+      }),
+    ]);
+
     const cookieProjectId =
       cookieStore.get(ACTIVE_PROJECT_COOKIE)?.value ?? null;
-    const dbActiveSetting = await prisma.appSetting.findUnique({
-      where: { key: "ACTIVE_PROJECT_ID" },
-    });
 
     let persistedActiveId: string | null = null;
     if (dbActiveSetting?.valueEnc) {
@@ -26,12 +36,15 @@ export async function GET() {
     }
 
     const projects = await prisma.project.findMany({
+      where: buildVisibleProjectsWhere(currentUser),
       orderBy: [{ isSandbox: "desc" }, { createdAt: "asc" }],
       select: {
         id: true,
         codeProjet: true,
         client: true,
         nomJeu: true,
+        category: true,
+        ownerId: true,
         isSandbox: true,
         driveInternalRootId: true,
         driveExternalRootId: true,
@@ -48,6 +61,10 @@ export async function GET() {
     const preferredId = cookieProjectId || persistedActiveId;
     const activeProject =
       projects.find((p) => p.id === preferredId) ?? projects[0] ?? null;
+
+    const activeProjectAccess = activeProject
+      ? await getProjectAccess(prisma, activeProject.id, currentUser)
+      : null;
 
     const googleConn = await prisma.googleConnection.findFirst({
       orderBy: { updatedAt: "desc" },
@@ -114,6 +131,8 @@ export async function GET() {
       projects,
       activeProjectId: activeProject?.id ?? null,
       activeProject,
+      activeProjectAccess,
+      currentUser: currentUser ? toPublicUser(currentUser) : null,
       googleConnected: Boolean(googleConn),
       googleEmail: googleConn?.userEmail ?? null,
       geminiConfigured,

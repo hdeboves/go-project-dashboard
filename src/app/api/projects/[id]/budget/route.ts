@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { toErrorResponse } from "@/lib/api-error";
+import { assertProjectAccess, getCurrentUser } from "@/lib/auth/session";
 import {
   getProjectBudget,
   upsertManualBudgetLine,
@@ -13,6 +14,8 @@ export async function GET(
   try {
     const { id } = await context.params;
     const { prisma } = getServices();
+    const currentUser = await getCurrentUser(prisma);
+    await assertProjectAccess(prisma, id, currentUser, "VIEW");
     const data = await getProjectBudget(prisma, id);
     return NextResponse.json(data);
   } catch (err) {
@@ -28,6 +31,8 @@ export async function POST(
     const { id } = await context.params;
     const body = (await req.json()) as { id?: string };
     const { prisma } = getServices();
+    const currentUser = await getCurrentUser(prisma);
+    await assertProjectAccess(prisma, id, currentUser, "EDIT");
     const result = await upsertManualBudgetLine(prisma, id, body);
     return NextResponse.json(result, { status: body?.id ? 200 : 201 });
   } catch (err) {

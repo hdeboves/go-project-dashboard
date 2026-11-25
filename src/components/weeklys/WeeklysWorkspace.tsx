@@ -5,6 +5,7 @@ import {
   Mail,
   Plus,
   Presentation,
+  RotateCcw,
   Settings,
   Sparkles,
   Trash2,
@@ -65,12 +66,8 @@ export function WeeklysWorkspace() {
   const [tasks, setTasks] = useState<WeeklyDigestTaskView[]>([]);
   const [visuals, setVisuals] = useState<WeeklyVisualView[]>([]);
   const [selectedVisualIds, setSelectedVisualIds] = useState<string[]>([]);
-  const [nextStepsClient, setNextStepsClient] = useState<string[]>([
-    "Validation des derniers livrables",
-  ]);
-  const [nextStepsGo, setNextStepsGo] = useState<string[]>([
-    "Poursuite de la production et suivi planning",
-  ]);
+  const [nextStepsClient, setNextStepsClient] = useState<string[]>([]);
+  const [nextStepsGo, setNextStepsGo] = useState<string[]>([]);
   const [newClientStep, setNewClientStep] = useState("");
   const [newGoStep, setNewGoStep] = useState("");
   const [weeklys, setWeeklys] = useState<WeeklyReportView[]>([]);
@@ -390,36 +387,51 @@ export function WeeklysWorkspace() {
                     client.
                   </p>
                 </div>
-                {tasks.length > 0 && (
+                <div className="flex flex-wrap items-center gap-2">
                   <button
                     type="button"
                     onClick={() => {
-                      const clientFromTasks = tasks
-                        .filter((t) => t.status === "EN_ATTENTE_CLIENT")
-                        .slice(0, 4)
-                        .map((t) => t.tache);
-                      const goFromTasks = tasks
-                        .filter((t) => t.status === "EN_COURS")
-                        .slice(0, 4)
-                        .map((t) => t.tache);
-                      if (clientFromTasks.length > 0) {
-                        setNextStepsClient(clientFromTasks);
-                      }
-                      if (goFromTasks.length > 0) {
-                        setNextStepsGo(goFromTasks);
-                      }
-                      showToast(
-                        clientFromTasks.length + goFromTasks.length > 0
-                          ? "Prochaines étapes suggérées depuis votre planning !"
-                          : "Aucune tâche En cours ou Attente client sur la période."
-                      );
+                      setNextStepsClient([]);
+                      setNextStepsGo([]);
+                      setSelectedVisualIds([]);
+                      showToast("Modèle vierge Weekly réinitialisé.");
                     }}
-                    className="inline-flex items-center gap-1.5 rounded-lg border border-indigo-200 bg-indigo-50/70 px-2.5 py-1 text-[11px] font-semibold text-indigo-700 hover:bg-indigo-100/70 dark:border-indigo-500/30 dark:bg-indigo-500/15 dark:text-indigo-300"
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300"
                   >
-                    <Sparkles className="h-3 w-3" />
-                    Suggérer depuis le planning
+                    <RotateCcw className="h-3 w-3" />
+                    Modèle vierge
                   </button>
-                )}
+                  {tasks.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const clientFromTasks = tasks
+                          .filter((t) => t.status === "EN_ATTENTE_CLIENT")
+                          .slice(0, 4)
+                          .map((t) => t.tache);
+                        const goFromTasks = tasks
+                          .filter((t) => t.status === "EN_COURS")
+                          .slice(0, 4)
+                          .map((t) => t.tache);
+                        if (clientFromTasks.length > 0) {
+                          setNextStepsClient(clientFromTasks);
+                        }
+                        if (goFromTasks.length > 0) {
+                          setNextStepsGo(goFromTasks);
+                        }
+                        showToast(
+                          clientFromTasks.length + goFromTasks.length > 0
+                            ? "Prochaines étapes suggérées depuis votre planning !"
+                            : "Aucune tâche En cours ou Attente client sur la période."
+                        );
+                      }}
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-indigo-200 bg-indigo-50/70 px-2.5 py-1 text-[11px] font-semibold text-indigo-700 hover:bg-indigo-100/70 dark:border-indigo-500/30 dark:bg-indigo-500/15 dark:text-indigo-300"
+                    >
+                      <Sparkles className="h-3 w-3" />
+                      Suggérer depuis le planning
+                    </button>
+                  )}
+                </div>
               </div>
 
               <div className="grid gap-5 md:grid-cols-2 md:divide-x md:divide-slate-100 dark:md:divide-slate-800/80">

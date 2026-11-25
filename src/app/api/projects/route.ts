@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { toErrorResponse } from "@/lib/api-error";
+import {
+  buildVisibleProjectsWhere,
+  getCurrentUser,
+  toPublicUser,
+} from "@/lib/auth/session";
 import { getGoogleGateway } from "@/lib/container";
 import { provisionProjectTree } from "@/lib/drive/tree-service";
 import { AppHttpError } from "@/lib/errors";
@@ -10,20 +15,41 @@ import {
 } from "@/lib/google/sandbox-guard";
 import { normalizeCp } from "@/lib/isolation/cp-guard";
 import { prisma } from "@/lib/prisma";
+import {
+  normalizeProjectCategory,
+  seedBlankBudgetForProject,
+  seedBlankRetroForProject,
+} from "@/lib/templates/project-templates";
 
 const CreateProjectSchema = z.object({
   codeProjet: z.string().min(2),
   client: z.string().min(1),
   nomJeu: z.string().min(1),
+  category: z.enum(["JEU", "YOUTUBE", "EVENEMENT", "SPONSOR"]).optional(),
   isSandbox: z.boolean().optional(),
   provisionDrive: z.boolean().optional(),
+  seedBlankTemplates: z.boolean().optional(),
 });
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   try {
+    const currentUser = await getCurrentUser(prisma);
+    const includeAll =
+      req.nextUrl.searchParams.get("scope") === "all" &&
+      currentUser?.role === "ADMIN";
+    const whereClause = buildVisibleProjectsWhere(currentUser, {
+      includeAllForAdmin: includeAll,
+    });
+
     const projects = await prisma.project.findMany({
+      where: whereClause,
       orderBy: [{ isSandbox: "desc" }, { createdAt: "desc" }],
       include: {
+        owner: true,
+        members: {
+          include: { user: true },
+          orderBy: { createdAt: "asc" },
+        },
         _count: {
           select: {
             driveNodes: true,
@@ -177,11 +203,30 @@ export async function GET() {
 
       const lastMeeting = p.meetingNotes[0] ?? null;
 
+      const myMembership = currentUser
+        ? p.members.find((m) => m.userId === currentUser.id)
+        : undefined;
+      const accessRole = !currentUser
+        ? "OWNER"
+        : p.ownerId === currentUser.id
+          ? "OWNER"
+          : myMembership?.role ?? (p.ownerId === null ? "LEGACY" : "VIEWER");
+
       return {
         id: p.id,
         codeProjet: p.codeProjet,
         client: p.client,
         nomJeu: p.nomJeu,
+        category: normalizeProjectCategory(p.category),
+        ownerId: p.ownerId,
+        owner: p.owner ? toPublicUser(p.owner) : null,
+        members: p.members.map((m) => ({
+          id: m.id,
+          userId: m.userId,
+          role: m.role,
+          user: toPublicUser(m.user),
+        })),
+        accessRole,
         isSandbox: p.isSandbox,
         driveInternalRootId: p.driveInternalRootId,
         driveExternalRootId: p.driveExternalRootId,
@@ -287,11 +332,14 @@ export async function GET() {
 
 export async function POST(req: NextRequest) {
   try {
+    const currentUser = await getCurrentUser(prisma);
     const body = CreateProjectSchema.parse(await req.json());
     const codeProjet = normalizeCp(body.codeProjet) ?? body.codeProjet.trim();
     const client = body.client.trim();
     const nomJeu = body.nomJeu.trim();
+    const category = normalizeProjectCategory(body.category);
     const isSandbox = body.isSandbox ?? true;
+    const shouldSeedBlank = body.seedBlankTemplates !== false;
 
     const duplicate = await prisma.project.findUnique({
       where: {
@@ -331,9 +379,22 @@ export async function POST(req: NextRequest) {
         codeProjet,
         client,
         nomJeu,
+        category,
+        ownerId: currentUser?.id ?? null,
         isSandbox,
       },
     });
+
+    let seededBudgetLines = 0;
+    let seededRetroTasks = 0;
+    if (shouldSeedBlank) {
+      const [budgetSeed, retroSeed] = await Promise.all([
+        seedBlankBudgetForProject(prisma, project.id, category),
+        seedBlankRetroForProject(prisma, project.id, { category }),
+      ]);
+      seededBudgetLines = budgetSeed.createdCount;
+      seededRetroTasks = retroSeed.createdCount;
+    }
 
     let provisioningResult: {
       internalNodesCount: number;
@@ -358,7 +419,7 @@ export async function POST(req: NextRequest) {
     await prisma.auditLog.create({
       data: {
         projectId: project.id,
-        actor: "user",
+        actor: currentUser?.email ?? "user",
         action: "PROJECT_CREATED",
         targetType: "PROJECT",
         targetId: project.id,
@@ -366,8 +427,11 @@ export async function POST(req: NextRequest) {
           codeProjet,
           client,
           nomJeu,
+          category,
           isSandbox,
           provisionDrive: Boolean(body.provisionDrive),
+          seededBudgetLines,
+          seededRetroTasks,
         }),
       },
     });
@@ -380,6 +444,11 @@ export async function POST(req: NextRequest) {
       {
         project: refreshed ?? project,
         provisioning: provisioningResult,
+        templatesSeeded: {
+          category,
+          budgetLinesCount: seededBudgetLines,
+          retroTasksCount: seededRetroTasks,
+        },
       },
       { status: 201 }
     );
