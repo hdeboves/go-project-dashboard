@@ -819,6 +819,27 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
         {/* Generous, Breathing Page Container */}
         <main className="flex-1 px-4 py-7 sm:px-6 lg:px-10">{children}</main>
+
+        {/* Discreet Version & Build Timestamp Footer */}
+        <footer
+          data-testid="app-version-footer"
+          className="border-t border-slate-200/50 px-4 py-2.5 sm:px-6 lg:px-10 dark:border-slate-800/60"
+        >
+          <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-2 text-[11px] tabular-nums text-slate-400 dark:text-slate-500">
+            <span>
+              GO Project Hub · {process.env.NEXT_PUBLIC_APP_ENV ?? "Local"} · v
+              {process.env.NEXT_PUBLIC_APP_VERSION ?? "0.1.0"} (
+              <span className="font-mono">
+                {process.env.NEXT_PUBLIC_APP_COMMIT ?? "dev"}
+              </span>
+              )
+            </span>
+            <span>
+              Build du{" "}
+              {process.env.NEXT_PUBLIC_BUILD_DATETIME ?? "—"} (heure de Paris)
+            </span>
+          </div>
+        </footer>
       </div>
 
       <CommandPalette
