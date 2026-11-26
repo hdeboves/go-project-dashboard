@@ -58,21 +58,37 @@ export async function POST(
       }
 
       const filename = fileEntry.name || "budget.xlsx";
-      if (
-        !/\.xlsx$/i.test(filename) &&
-        fileEntry.type &&
-        !fileEntry.type.includes("spreadsheetml") &&
-        fileEntry.type !== "application/octet-stream"
-      ) {
+      if (fileEntry.size > 8 * 1024 * 1024) {
+        throw new AppHttpError(
+          413,
+          "FILE_TOO_LARGE",
+          "Le fichier Excel dépasse la limite autorisée (8 Mo)."
+        );
+      }
+      if (!/\.xlsx$/i.test(filename)) {
         throw new AppHttpError(
           422,
           "INVALID_BUDGET_XLSX",
-          "Le fichier doit être au format Excel .xlsx."
+          "Le fichier doit porter l'extension .xlsx."
         );
       }
 
       const arrayBuf = await fileEntry.arrayBuffer();
       const buffer = Buffer.from(arrayBuf);
+      // Verify ZIP / OOXML magic bytes (PK\x03\x04)
+      if (
+        buffer.length < 4 ||
+        buffer[0] !== 0x50 ||
+        buffer[1] !== 0x4b ||
+        buffer[2] !== 0x03 ||
+        buffer[3] !== 0x04
+      ) {
+        throw new AppHttpError(
+          422,
+          "INVALID_BUDGET_XLSX",
+          "Le fichier fourni n'est pas un classeur Excel .xlsx valide."
+        );
+      }
       const result = await importBudgetFromXlsx({
         prisma,
         getGoogleGateway,

@@ -196,12 +196,16 @@ export class GmailAdapter implements GmailPort {
       content: Buffer;
     }>;
   }): Promise<{ draftId: string; messageId: string | null }> {
+    const stripCrlf = (val: string) => val.replace(/[\r\n]+/g, " ").trim();
+    const safeTo = stripCrlf(params.to);
+    const safeCc = (params.cc ?? [])
+      .map((entry) => stripCrlf(entry))
+      .filter(Boolean);
+
     const headers: string[] = [
-      `To: ${params.to}`,
-      ...(params.cc && params.cc.length > 0
-        ? [`Cc: ${params.cc.join(", ")}`]
-        : []),
-      `Subject: ${encodeRfc2047Subject(params.subject)}`,
+      `To: ${safeTo}`,
+      ...(safeCc.length > 0 ? [`Cc: ${safeCc.join(", ")}`] : []),
+      `Subject: ${encodeRfc2047Subject(stripCrlf(params.subject))}`,
       "MIME-Version: 1.0",
     ];
 
@@ -267,10 +271,11 @@ export class GmailAdapter implements GmailPort {
       }
 
       for (const att of params.attachments ?? []) {
-        const safeFilename = att.filename.replace(/"/g, "");
+        const safeFilename = att.filename.replace(/[\r\n"\\]+/g, "").trim() || "document.pdf";
+        const safeMimeType = att.mimeType.replace(/[\r\n;]+/g, "").trim() || "application/pdf";
         parts.push(
           `--${mixedBoundary}`,
-          `Content-Type: ${att.mimeType}; name="${safeFilename}"`,
+          `Content-Type: ${safeMimeType}; name="${safeFilename}"`,
           "Content-Transfer-Encoding: base64",
           `Content-Disposition: attachment; filename="${safeFilename}"`,
           "",

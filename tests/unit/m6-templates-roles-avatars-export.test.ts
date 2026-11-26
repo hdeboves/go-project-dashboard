@@ -70,6 +70,7 @@ describe("M6 — Blank Templates by Category, Retro XLSX Export, RBAC Session & 
         etape: "Lancement",
         tache: "Réunion Kick-off",
         owner: "Paul",
+        ownerUserId: null,
         startDate: null,
         endDate: null,
         status: "A_FAIRE",
@@ -86,6 +87,7 @@ describe("M6 — Blank Templates by Category, Retro XLSX Export, RBAC Session & 
         etape: "Réalisation",
         tache: "Montage vidéo V1",
         owner: "Hugo",
+        ownerUserId: null,
         startDate: new Date("2026-12-01T12:00:00.000Z"),
         endDate: new Date("2026-12-05T12:00:00.000Z"),
         status: "EN_COURS",
@@ -142,6 +144,7 @@ describe("M6 — Blank Templates by Category, Retro XLSX Export, RBAC Session & 
       role: "MEMBER",
       avatarId: "gamer-cat",
       avatarBg: "#FDE68A",
+      lastActiveProjectId: null,
       createdAt: new Date(),
       updatedAt: new Date(),
     });

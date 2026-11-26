@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { toErrorResponse } from "@/lib/api-error";
+import { assertProjectAccess, getCurrentUser } from "@/lib/auth/session";
 import { AppHttpError } from "@/lib/errors";
 import { CpConflictError, checkCodeProjetConflict } from "@/lib/isolation/cp-guard";
 import { prisma } from "@/lib/prisma";
@@ -17,6 +18,8 @@ export async function POST(
 ) {
   try {
     const { id } = await context.params;
+    const currentUser = await getCurrentUser(prisma);
+    await assertProjectAccess(prisma, id, currentUser, "VIEW");
     const body = CheckIsolationSchema.parse(await req.json());
 
     const project = await prisma.project.findUnique({ where: { id } });

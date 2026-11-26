@@ -33,11 +33,17 @@ export async function GET(
 
     assertInvoiceOwnerAccess(invoice, currentUser);
 
-    let buffer = await readStagedInvoicePdf(
-      id,
-      invoice.id,
-      invoice.extractedJson
-    );
+    let buffer: Buffer | null = invoice.pdfData
+      ? Buffer.from(invoice.pdfData)
+      : null;
+
+    if (!buffer) {
+      buffer = await readStagedInvoicePdf(
+        id,
+        invoice.id,
+        invoice.extractedJson
+      );
+    }
 
     if (!buffer && invoice.driveFileId) {
       const gateway = await getGoogleGateway(id);

@@ -1,11 +1,21 @@
 import zlib from "node:zlib";
 import { AppHttpError } from "@/lib/errors";
 
+export const MAX_PDF_BYTES = 10 * 1024 * 1024;
+const MAX_INFLATED_STREAM_BYTES = 5 * 1024 * 1024;
+
 export function validatePdfBuffer(
   buffer: Buffer,
   mimeType?: string | null,
   filename?: string | null
 ): void {
+  if (buffer && buffer.length > MAX_PDF_BYTES) {
+    throw new AppHttpError(
+      413,
+      "PDF_TOO_LARGE",
+      "Le fichier PDF dépasse la taille maximale autorisée (10 Mo)."
+    );
+  }
   const normalizedMime = (mimeType ?? "").toLowerCase().trim();
   if (
     normalizedMime &&
@@ -212,16 +222,20 @@ export function extractTextFromPdfBuffer(buffer: Buffer): string {
     if (dictSlice.includes("FlateDecode") && dataEnd > dataStart) {
       const compressed = buffer.subarray(dataStart, dataEnd);
       try {
-        const inflated = zlib.inflateSync(compressed);
+        const inflated = zlib.inflateSync(compressed, {
+          maxOutputLength: MAX_INFLATED_STREAM_BYTES,
+        });
         const text = inflated.toString("latin1");
         collected.push(...extractTextOperatorsFromChunk(text));
       } catch {
         try {
-          const inflatedRaw = zlib.inflateRawSync(compressed);
+          const inflatedRaw = zlib.inflateRawSync(compressed, {
+            maxOutputLength: MAX_INFLATED_STREAM_BYTES,
+          });
           const text = inflatedRaw.toString("latin1");
           collected.push(...extractTextOperatorsFromChunk(text));
         } catch {
-          // Ignore non-deflate or corrupted stream segments
+          // Ignore non-deflate, oversized, or corrupted stream segments
         }
       }
     }

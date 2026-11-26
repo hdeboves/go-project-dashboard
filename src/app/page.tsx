@@ -16,7 +16,7 @@ import {
   Settings,
   Sparkles,
 } from "lucide-react";
-import { ACTIVE_PROJECT_COOKIE } from "@/app/api/shell/status/route";
+import { ACTIVE_PROJECT_COOKIE } from "@/lib/auth/cookies";
 import {
   CockpitInvoiceDropzone,
   type CockpitBudgetLineOption,
@@ -32,6 +32,7 @@ import {
 import { decryptSecret } from "@/lib/crypto";
 import { prisma } from "@/lib/prisma";
 import { formatAuditActionFr } from "@/lib/shared/audit-labels";
+import { startOfParisTodayUtc } from "@/lib/shared/dates";
 import {
   PROJECT_CATEGORY_META,
   normalizeProjectCategory,
@@ -75,7 +76,7 @@ export default async function CommandCenterPage({
     orderBy: [{ isSandbox: "desc" }, { createdAt: "asc" }],
   });
 
-  const targetId = sp.projectId || cookieProjectId;
+  const targetId = sp.projectId || cookieProjectId || currentUser?.lastActiveProjectId;
   const activeProject =
     projects.find((p) => p.id === targetId) ?? projects[0] ?? null;
 
@@ -201,7 +202,7 @@ export default async function CommandCenterPage({
         where: {
           projectId: activeProject.id,
           status: { not: "TERMINE" },
-          endDate: { lt: new Date() },
+          endDate: { lt: startOfParisTodayUtc() },
         },
       }),
       prisma.retroTask.findMany({
@@ -269,18 +270,23 @@ export default async function CommandCenterPage({
     budgetSoldHt > 0
       ? Math.round((forecastMarginHt / budgetSoldHt) * 1000) / 10
       : 0;
-  const marginTone: "emerald" | "amber" | "rose" =
-    forecastMarginHt < 0
-      ? "rose"
-      : forecastMarginPct >= 30
-        ? "emerald"
-        : "amber";
+  const hasBudgetData = budgetSoldHt > 0 || budgetPreOpHt > 0;
+  const marginTone: "emerald" | "amber" | "rose" | "slate" =
+    !hasBudgetData
+      ? "slate"
+      : forecastMarginHt < 0
+        ? "rose"
+        : forecastMarginPct >= 30
+          ? "emerald"
+          : "amber";
   const marginBadgeLabel =
-    marginTone === "rose"
-      ? "Sous tension"
-      : marginTone === "emerald"
-        ? "Saine"
-        : "Vigilance";
+    marginTone === "slate"
+      ? "Non chiffré"
+      : marginTone === "rose"
+        ? "Sous tension"
+        : marginTone === "emerald"
+          ? "Saine"
+          : "Vigilance";
   const tasksPct =
     totalTasks > 0 ? Math.round((doneTasks / totalTasks) * 100) : 0;
 
@@ -350,8 +356,8 @@ export default async function CommandCenterPage({
           <div className="flex flex-wrap items-center gap-2">
             <p className="text-xs font-semibold text-indigo-600 dark:text-indigo-400">
               {activeProject
-                ? `CP ${activeProject.codeProjet} · Vue du jour`
-                : "GamersOrigin"}
+                ? `Code projet ${activeProject.codeProjet} · Vue du jour`
+                : "Project Hub"}
             </p>
             {activeProject && (
               <span
@@ -372,14 +378,14 @@ export default async function CommandCenterPage({
           <h1 className="mt-1 text-2xl font-bold tracking-tight text-slate-900 dark:text-white">
             {activeProject
               ? `${activeProject.client} — ${activeProject.nomJeu}`
-              : "Bienvenue sur GO Project Hub"}
+              : "Bienvenue sur Project Hub"}
           </h1>
         </div>
 
         {activeProject ? (
           <Link
             href="/weeklys"
-            className="inline-flex items-center gap-2 rounded-xl bg-rose-600 px-4 py-2 text-xs font-semibold text-white shadow-xs transition-colors hover:bg-rose-700"
+            className="inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-4 py-2 text-xs font-semibold text-white shadow-xs transition-colors hover:bg-indigo-700"
           >
             <Presentation className="h-4 w-4" />
             Préparer le Weekly

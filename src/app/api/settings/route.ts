@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { toErrorResponse } from "@/lib/api-error";
+import { requireAdminOrBootstrap } from "@/lib/auth/session";
 import { decryptSecret, encryptSecret, maskSecret } from "@/lib/crypto";
 import { computeMissingScopes } from "@/lib/google/oauth";
 import {
@@ -111,6 +112,7 @@ export async function GET() {
 
 export async function POST(req: NextRequest) {
   try {
+    const actor = await requireAdminOrBootstrap(prisma);
     const body = UpdateSettingsSchema.parse(await req.json());
     const updatedKeys: string[] = [];
 
@@ -158,7 +160,7 @@ export async function POST(req: NextRequest) {
 
     await prisma.auditLog.create({
       data: {
-        actor: "user",
+        actor: actor?.email ?? "user",
         action: "SETTINGS_UPDATED",
         targetType: "APP_SETTING",
         targetId: updatedKeys.join(",") || "none",

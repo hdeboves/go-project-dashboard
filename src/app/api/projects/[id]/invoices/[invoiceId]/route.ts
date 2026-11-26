@@ -9,8 +9,9 @@ import {
 } from "@/lib/auth/session";
 import { round2 } from "@/lib/budget/calculator";
 import { normalizeProjectCodesList } from "@/lib/invoices/accounting-email";
-import { getStagedInvoicePdfPath } from "@/lib/invoices/ingest";
+import { getStagedInvoicePdfPath, stripInvoiceBinaries } from "@/lib/invoices/ingest";
 import { prisma } from "@/lib/prisma";
+import { getParisTodayIso } from "@/lib/shared/dates";
 import { buildValidatedInvoiceFilename } from "@/lib/shared/filenames";
 
 const PatchInvoiceSchema = z.object({
@@ -66,12 +67,44 @@ export async function PATCH(
     const invoiceDate =
       body.invoiceDate !== undefined
         ? body.invoiceDate
-        : existing.invoiceDate ?? new Date().toISOString().slice(0, 10);
+        : existing.invoiceDate ?? getParisTodayIso();
     const amountHt =
       body.amountHt !== undefined ? round2(body.amountHt) : existing.amountHt;
     const amountTtc =
-      body.amountTtc !== undefined ? round2(body.amountTtc) : existing.amountTtc;
+      body.amountTtc !== undefined ? round2(body.amountTtc) : amountHt;
     const tvaAmount = round2(Math.max(0, amountTtc - amountHt));
+
+    // Cross-project IDOR guards for budgetLineId and quoteId
+    if (body.budgetLineId) {
+      const bl = await prisma.budgetLine.findUnique({
+        where: { id: body.budgetLineId },
+        select: { projectId: true },
+      });
+      if (!bl || bl.projectId !== projectId) {
+        return NextResponse.json(
+          {
+            error: "Poste budgétaire introuvable pour ce projet.",
+            code: "INVALID_BUDGET_LINE",
+          },
+          { status: 400 }
+        );
+      }
+    }
+    if (body.quoteId) {
+      const q = await prisma.quote.findUnique({
+        where: { id: body.quoteId },
+        select: { projectId: true },
+      });
+      if (!q || q.projectId !== projectId) {
+        return NextResponse.json(
+          {
+            error: "Devis introuvable pour ce projet.",
+            code: "INVALID_QUOTE",
+          },
+          { status: 400 }
+        );
+      }
+    }
 
     let existingCodes: string[] = [];
     try {
@@ -121,7 +154,10 @@ export async function PATCH(
       },
     });
 
-    return NextResponse.json({ ok: true, invoice: updated });
+    return NextResponse.json({
+      ok: true,
+      invoice: stripInvoiceBinaries(updated),
+    });
   } catch (err) {
     return toErrorResponse(err);
   }
@@ -149,37 +185,26 @@ export async function DELETE(
 
     assertInvoiceOwnerAccess(invoice, currentUser);
 
-    if (invoice.status === "VALIDATED") {
+    if (
+      invoice.status === "VALIDATED" ||
+      invoice.status === "VALIDATING" ||
+      invoice.stepSheetDone ||
+      invoice.stepDriveDone ||
+      invoice.stepGmailDone
+    ) {
       return NextResponse.json(
         {
           error:
-            "Impossible de supprimer une facture déjà validée dans Google Sheets et Pennylane.",
+            "Impossible de supprimer une facture déjà validée ou partiellement imputée dans Google Sheets / Drive.",
+          code: "INVOICE_ALREADY_PROCESSED",
         },
         { status: 400 }
       );
     }
 
-    // Clean up any staged local preview PDF or staged vigilance file
-    const pathsToClean = new Set<string>([
-      getStagedInvoicePdfPath(projectId, invoice.id),
-    ]);
-    try {
-      const parsed = JSON.parse(invoice.extractedJson || "{}") as {
-        stagedPdfPath?: string;
-        localPdfPath?: string;
-      };
-      if (parsed.stagedPdfPath) pathsToClean.add(parsed.stagedPdfPath);
-      if (parsed.localPdfPath) pathsToClean.add(parsed.localPdfPath);
-    } catch {
-      // ignore JSON parse issues
-    }
-    if (invoice.vigilanceDriveFileId?.startsWith("STAGED:")) {
-      pathsToClean.add(invoice.vigilanceDriveFileId.slice("STAGED:".length));
-    }
-
-    await Promise.all(
-      Array.from(pathsToClean).map((p) => fs.unlink(p).catch(() => undefined))
-    );
+    // Clean up only safe internal staged PDF path (never unlink arbitrary user-provided paths)
+    const stagedPath = getStagedInvoicePdfPath(projectId, invoice.id);
+    await fs.unlink(stagedPath).catch(() => undefined);
 
     await prisma.invoice.delete({ where: { id: invoice.id } });
 

@@ -1,4 +1,5 @@
 import { mkdir, writeFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { inflateSync } from "node:zlib";
 import type {
@@ -92,12 +93,12 @@ export function extractPngTextChunks(buffer: Buffer): string[] {
       if (nulIdx !== -1 && nulIdx + 2 < chunkData.length) {
         const keyword = chunkData.subarray(0, nulIdx).toString("latin1");
         try {
-          const inflated = inflateSync(chunkData.subarray(nulIdx + 2)).toString(
-            "latin1"
-          );
+          const inflated = inflateSync(chunkData.subarray(nulIdx + 2), {
+            maxOutputLength: 256 * 1024,
+          }).toString("latin1");
           texts.push(`${keyword} ${inflated}`.trim());
         } catch {
-          // Ignore malformed compressed chunk
+          // Ignore malformed or oversized compressed chunk
         }
       }
     }
@@ -275,18 +276,22 @@ export async function saveLocalReportingPreview(params: {
   rawFileId: string;
   mimeType: SupportedImageMime;
   buffer: Buffer;
-}): Promise<string> {
+}): Promise<string | null> {
   const ext = getImageExtension(params.mimeType);
-  const dir = path.join(
-    process.cwd(),
-    ".data",
-    "reporting-previews",
-    params.projectId
-  );
-  await mkdir(dir, { recursive: true });
+  const baseDir =
+    process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME
+      ? path.join(os.tmpdir(), "go-project-hub-data")
+      : path.join(process.cwd(), ".data");
+  const dir = path.join(baseDir, "reporting-previews", params.projectId);
   const filePath = path.join(dir, `${params.rawFileId}.${ext}`);
-  await writeFile(filePath, params.buffer);
-  return filePath;
+  try {
+    await mkdir(dir, { recursive: true });
+    await writeFile(filePath, params.buffer);
+    return filePath;
+  } catch {
+    // Non-fatal in serverless read-only environments; Google Drive file is the durable source.
+    return null;
+  }
 }
 
 export interface IngestInfluenceInput {

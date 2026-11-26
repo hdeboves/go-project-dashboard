@@ -39,10 +39,10 @@ export interface ResolvedGoogleOAuthConfig {
   };
 }
 
-let refreshInFlight: Promise<void> | null = null;
+const refreshInFlightByEmail = new Map<string, Promise<void>>();
 
 export function clearOAuthRefreshLockForTests(): void {
-  refreshInFlight = null;
+  refreshInFlightByEmail.clear();
 }
 
 async function readSettingDecrypted(
@@ -249,15 +249,21 @@ export async function completeOAuthCallback(
 
 export async function getAuthenticatedOAuth2Client(
   prisma: PrismaClient,
-  origin?: string
+  origin?: string,
+  userId?: string | null
 ): Promise<{
   oauth2Client: InstanceType<typeof google.auth.OAuth2>;
   userEmail: string;
   scope: string;
 }> {
-  const connection = await prisma.googleConnection.findFirst({
-    orderBy: { updatedAt: "desc" },
-  });
+  let connection = userId
+    ? await prisma.googleConnection.findUnique({ where: { userId } })
+    : null;
+  if (!connection) {
+    connection = await prisma.googleConnection.findFirst({
+      orderBy: { updatedAt: "desc" },
+    });
+  }
 
   if (!connection) {
     throw new PreconditionError(
@@ -340,14 +346,16 @@ export async function getAuthenticatedOAuth2Client(
   // Proactive refresh if token expires within 120 seconds (skip if harness URL handles fake tokens)
   const isNearExpiry = connection.expiresAt.getTime() - Date.now() < 120_000;
   if (isNearExpiry && refreshToken) {
-    if (!refreshInFlight) {
-      refreshInFlight = (async () => {
+    const emailKey = connection.userEmail;
+    let inFlight = refreshInFlightByEmail.get(emailKey);
+    if (!inFlight) {
+      inFlight = (async () => {
         try {
           const refreshed = await oauth2Client.refreshAccessToken();
           const creds = refreshed.credentials;
           if (creds.access_token) {
             await prisma.googleConnection.update({
-              where: { userEmail: connection.userEmail },
+              where: { userEmail: emailKey },
               data: {
                 accessTokenEnc: encryptSecret(creds.access_token),
                 ...(creds.refresh_token
@@ -360,12 +368,22 @@ export async function getAuthenticatedOAuth2Client(
               },
             });
           }
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          if (/invalid_grant|token has been expired|revoked/i.test(msg)) {
+            throw new PreconditionError(
+              "GOOGLE_TOKEN_EXPIRED",
+              "Votre connexion Google Workspace a expiré ou été révoquée. Reconnectez votre compte dans Paramètres."
+            );
+          }
+          throw err;
         } finally {
-          refreshInFlight = null;
+          refreshInFlightByEmail.delete(emailKey);
         }
       })();
+      refreshInFlightByEmail.set(emailKey, inFlight);
     }
-    await refreshInFlight;
+    await inFlight;
   }
 
   return {

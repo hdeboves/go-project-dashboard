@@ -1,7 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { toErrorResponse } from "@/lib/api-error";
-import { getCurrentUser, toPublicUser } from "@/lib/auth/session";
+import {
+  getCurrentUser,
+  requireWorkspaceUser,
+  toPublicUser,
+} from "@/lib/auth/session";
 import { AppHttpError } from "@/lib/errors";
 import { prisma } from "@/lib/prisma";
 
@@ -12,20 +16,18 @@ const UpdateUserRoleSchema = z.object({
 
 export async function GET() {
   try {
-    const [currentUser, users] = await Promise.all([
-      getCurrentUser(prisma),
-      prisma.user.findMany({
-        orderBy: [{ role: "asc" }, { createdAt: "asc" }],
-        include: {
-          _count: {
-            select: {
-              ownedProjects: { where: { isArchived: false } },
-              memberships: { where: { project: { isArchived: false } } },
-            },
+    const currentUser = await requireWorkspaceUser(prisma);
+    const users = await prisma.user.findMany({
+      orderBy: [{ role: "asc" }, { createdAt: "asc" }],
+      include: {
+        _count: {
+          select: {
+            ownedProjects: { where: { isArchived: false } },
+            memberships: { where: { project: { isArchived: false } } },
           },
         },
-      }),
-    ]);
+      },
+    });
 
     return NextResponse.json({
       currentUser: currentUser ? toPublicUser(currentUser) : null,

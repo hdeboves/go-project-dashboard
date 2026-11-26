@@ -3,6 +3,8 @@ import { z } from "zod";
 import { toErrorResponse } from "@/lib/api-error";
 import {
   getCurrentUser,
+  isGoogleOAuthConfigured,
+  isStrictAuthEnforced,
   setUserSessionCookie,
   toPublicUser,
   upsertUserByEmail,
@@ -56,6 +58,14 @@ export async function PATCH(req: NextRequest) {
     let createdSession = false;
 
     if (!user) {
+      const oauthConfigured = await isGoogleOAuthConfigured(prisma);
+      if (isStrictAuthEnforced() && oauthConfigured) {
+        throw new AppHttpError(
+          401,
+          "NOT_AUTHENTICATED",
+          "Connectez-vous via Google Workspace pour modifier votre profil."
+        );
+      }
       if (body.email) {
         user = await upsertUserByEmail(prisma, {
           email: body.email,
@@ -69,7 +79,7 @@ export async function PATCH(req: NextRequest) {
         throw new AppHttpError(
           401,
           "NOT_AUTHENTICATED",
-          "Connectez-vous ou créez votre profil pour personnaliser votre avatar."
+          "Connectez-vous pour personnaliser votre avatar."
         );
       }
     }

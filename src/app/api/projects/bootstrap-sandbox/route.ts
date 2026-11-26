@@ -1,12 +1,14 @@
 import { NextResponse } from "next/server";
 import { toErrorResponse } from "@/lib/api-error";
+import { ACTIVE_PROJECT_COOKIE } from "@/lib/auth/cookies";
+import { requireAdminOrBootstrap } from "@/lib/auth/session";
 import { getGoogleGateway } from "@/lib/container";
 import { bootstrapPilotSandbox } from "@/lib/drive/tree-service";
 import { prisma } from "@/lib/prisma";
-import { ACTIVE_PROJECT_COOKIE } from "@/app/api/shell/status/route";
 
 export async function POST() {
   try {
+    await requireAdminOrBootstrap(prisma);
     const gateway = await getGoogleGateway();
     const result = await bootstrapPilotSandbox(prisma, gateway.drive);
 

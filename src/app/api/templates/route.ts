@@ -1,7 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { toErrorResponse } from "@/lib/api-error";
-import { getCurrentUser } from "@/lib/auth/session";
+import {
+  getCurrentUser,
+  requireAdminOrBootstrap,
+} from "@/lib/auth/session";
 import { AppHttpError } from "@/lib/errors";
 import { prisma } from "@/lib/prisma";
 import {
@@ -146,8 +149,8 @@ export async function GET() {
 
 export async function PUT(req: NextRequest) {
   try {
+    const currentUser = (await requireAdminOrBootstrap(prisma)) ?? (await getCurrentUser(prisma));
     const body = UpdateTemplateSchema.parse(await req.json());
-    const currentUser = await getCurrentUser(prisma);
 
     if (body.reset) {
       await prisma.categoryTemplate.deleteMany({

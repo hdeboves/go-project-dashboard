@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { toErrorResponse } from "@/lib/api-error";
+import { assertProjectAccess, getCurrentUser } from "@/lib/auth/session";
 import {
   ingestKrispMeeting,
   serializeMeetingNote,
@@ -36,6 +37,8 @@ export async function GET(
 ) {
   try {
     const { id: projectId } = await context.params;
+    const currentUser = await getCurrentUser(prisma);
+    await assertProjectAccess(prisma, projectId, currentUser, "VIEW");
     const project = await prisma.project.findUnique({
       where: { id: projectId },
       select: {
@@ -86,6 +89,8 @@ export async function POST(
 ) {
   try {
     const { id: projectId } = await context.params;
+    const currentUser = await getCurrentUser(prisma);
+    await assertProjectAccess(prisma, projectId, currentUser, "EDIT");
     const project = await prisma.project.findUnique({
       where: { id: projectId },
     });

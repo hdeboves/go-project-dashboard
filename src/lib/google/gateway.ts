@@ -63,10 +63,13 @@ export class GoogleWorkspaceGateway implements GoogleWorkspacePort {
     options?: {
       activeProjectId?: string;
       rootUrl?: string;
+      userId?: string | null;
     }
   ): Promise<GoogleWorkspaceGateway> {
     const { oauth2Client, userEmail } = await getAuthenticatedOAuth2Client(
-      prisma
+      prisma,
+      undefined,
+      options?.userId
     );
 
     const projects = await prisma.project.findMany({

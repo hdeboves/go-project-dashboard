@@ -1,6 +1,7 @@
 export type PreconditionCode =
   | "GOOGLE_NOT_CONNECTED"
   | "GOOGLE_OAUTH_CONFIG_MISSING"
+  | "GOOGLE_TOKEN_EXPIRED"
   | "GEMINI_KEY_MISSING";
 
 export class PreconditionError extends Error {

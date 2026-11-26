@@ -35,6 +35,7 @@ interface UserProfile {
 export default function ProfilePage() {
   const [user, setUser] = useState<UserProfile | null>(null);
   const [users, setUsers] = useState<UserProfile[]>([]);
+  const [oauthOnly, setOauthOnly] = useState(false);
   const [loading, setLoading] = useState(true);
 
   // Sign-in form
@@ -57,9 +58,12 @@ export default function ProfilePage() {
         const sJson = (await sessionRes.json()) as {
           user: UserProfile | null;
           users: UserProfile[];
+          oauthConfigured?: boolean;
+          authRequired?: boolean;
         };
         setUser(sJson.user);
         setUsers(sJson.users ?? []);
+        setOauthOnly(Boolean(sJson.authRequired && sJson.oauthConfigured));
         if (sJson.user) {
           setName(sJson.user.name);
           setJobTitle(sJson.user.jobTitle ?? "");
@@ -371,50 +375,54 @@ export default function ProfilePage() {
               <button
                 type="button"
                 onClick={() => void handleGoogleLogin()}
-                className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+                className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl bg-indigo-600 px-4 py-2 text-xs font-semibold text-white hover:bg-indigo-700"
               >
-                <ShieldCheck className="h-4 w-4 text-emerald-600" />
-                Se connecter avec Google
+                <ShieldCheck className="h-4 w-4" />
+                Se connecter avec Google Workspace
               </button>
 
-              <div className="my-4 flex items-center gap-2 text-[11px] text-slate-400">
-                <span className="h-px flex-1 bg-slate-200 dark:bg-slate-800" />
-                ou profil par email
-                <span className="h-px flex-1 bg-slate-200 dark:bg-slate-800" />
-              </div>
+              {!oauthOnly && (
+                <>
+                  <div className="my-4 flex items-center gap-2 text-[11px] text-slate-500 dark:text-slate-400">
+                    <span className="h-px flex-1 bg-slate-200 dark:bg-slate-800" />
+                    ou profil local (dev)
+                    <span className="h-px flex-1 bg-slate-200 dark:bg-slate-800" />
+                  </div>
 
-              <form
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  void handleSignIn(loginEmail, loginName);
-                }}
-                className="space-y-2.5"
-              >
-                <input
-                  type="email"
-                  required
-                  value={loginEmail}
-                  onChange={(e) => setLoginEmail(e.target.value)}
-                  placeholder="prenom@gamersorigin.com"
-                  className="w-full rounded-xl border border-slate-200 bg-slate-50/70 px-3 py-2 text-xs text-slate-900 focus:border-indigo-400 focus:bg-white focus:outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-white"
-                />
-                <input
-                  type="text"
-                  value={loginName}
-                  onChange={(e) => setLoginName(e.target.value)}
-                  placeholder="Votre nom (optionnel)"
-                  className="w-full rounded-xl border border-slate-200 bg-slate-50/70 px-3 py-2 text-xs text-slate-900 focus:border-indigo-400 focus:bg-white focus:outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-white"
-                />
-                <button
-                  type="submit"
-                  disabled={signingIn}
-                  data-testid="email-signin-btn"
-                  className="flex w-full items-center justify-center gap-1.5 rounded-xl bg-slate-900 px-4 py-2 text-xs font-semibold text-white hover:bg-slate-800 disabled:opacity-50 dark:bg-indigo-600 dark:hover:bg-indigo-500"
-                >
-                  <LogIn className="h-3.5 w-3.5" />
-                  {signingIn ? "Connexion..." : "Se connecter / Créer profil"}
-                </button>
-              </form>
+                  <form
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      void handleSignIn(loginEmail, loginName);
+                    }}
+                    className="space-y-2.5"
+                  >
+                    <input
+                      type="email"
+                      required
+                      value={loginEmail}
+                      onChange={(e) => setLoginEmail(e.target.value)}
+                      placeholder="prenom@gamersorigin.com ou @lintrus.fr"
+                      className="w-full rounded-xl border border-slate-200 bg-slate-50/70 px-3 py-2 text-xs text-slate-900 focus:border-indigo-400 focus:bg-white focus:outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+                    />
+                    <input
+                      type="text"
+                      value={loginName}
+                      onChange={(e) => setLoginName(e.target.value)}
+                      placeholder="Votre nom (optionnel)"
+                      className="w-full rounded-xl border border-slate-200 bg-slate-50/70 px-3 py-2 text-xs text-slate-900 focus:border-indigo-400 focus:bg-white focus:outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+                    />
+                    <button
+                      type="submit"
+                      disabled={signingIn}
+                      data-testid="email-signin-btn"
+                      className="flex w-full items-center justify-center gap-1.5 rounded-xl bg-slate-900 px-4 py-2 text-xs font-semibold text-white hover:bg-slate-800 disabled:opacity-50 dark:bg-indigo-600 dark:hover:bg-indigo-500"
+                    >
+                      <LogIn className="h-3.5 w-3.5" />
+                      {signingIn ? "Connexion..." : "Se connecter / Créer profil"}
+                    </button>
+                  </form>
+                </>
+              )}
 
               {user && (
                 <button
@@ -428,8 +436,8 @@ export default function ProfilePage() {
               )}
             </section>
 
-            {/* Quick Switcher for existing profiles */}
-            {users.length > 0 && (
+            {/* Quick Switcher for existing profiles (dev / non-OAuth only) */}
+            {!oauthOnly && users.length > 0 && (
               <section className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-[0_1px_2px_rgba(15,23,42,0.04)] dark:border-slate-800 dark:bg-[#111827]">
                 <h3 className="text-xs font-bold tracking-wider text-slate-500 uppercase dark:text-slate-400">
                   Profils de l&apos;équipe ({users.length})

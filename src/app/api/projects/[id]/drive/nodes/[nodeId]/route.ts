@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { toErrorResponse } from "@/lib/api-error";
+import { assertProjectAccess, getCurrentUser } from "@/lib/auth/session";
 import { ValidationStatus } from "@/lib/drive/sync-policy";
 import { updateDriveNodeStatus } from "@/lib/drive/sync-service";
 import { prisma } from "@/lib/prisma";
@@ -23,6 +24,8 @@ export async function PATCH(
 ) {
   try {
     const { id, nodeId } = await context.params;
+    const currentUser = await getCurrentUser(prisma);
+    await assertProjectAccess(prisma, id, currentUser, "EDIT");
     const body = PatchNodeSchema.parse(await req.json());
 
     const result = await updateDriveNodeStatus(prisma, {

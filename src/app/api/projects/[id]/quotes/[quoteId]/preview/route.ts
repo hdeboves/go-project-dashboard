@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { NextRequest, NextResponse } from "next/server";
 import { toErrorResponse } from "@/lib/api-error";
 import { assertProjectAccess, getCurrentUser } from "@/lib/auth/session";
+import { getServices } from "@/lib/container";
 import { AppHttpError } from "@/lib/errors";
 import { prisma } from "@/lib/prisma";
 import { sanitizeContentDispositionFilename } from "@/lib/shared/filenames";
@@ -20,21 +21,36 @@ export async function GET(
       throw new AppHttpError(404, "QUOTE_NOT_FOUND", "Devis introuvable.");
     }
 
-    if (!quote.localPdfPath || !fs.existsSync(quote.localPdfPath)) {
+    let buf: Buffer | null = quote.pdfData ? Buffer.from(quote.pdfData) : null;
+
+    if (!buf && quote.driveFileId) {
+      try {
+        const { getGoogleGateway } = getServices();
+        const gateway = await getGoogleGateway(id);
+        buf = await gateway.drive.downloadFile(quote.driveFileId);
+      } catch {
+        buf = null;
+      }
+    }
+
+    if (!buf && quote.localPdfPath && fs.existsSync(quote.localPdfPath)) {
+      buf = await fs.promises.readFile(quote.localPdfPath);
+    }
+
+    if (!buf) {
       throw new AppHttpError(
         404,
         "QUOTE_PDF_MISSING",
-        "Aucun PDF enregistré localement pour ce devis."
+        "Aucun PDF disponible pour ce devis."
       );
     }
 
-    const buf = await fs.promises.readFile(quote.localPdfPath);
     return new NextResponse(new Uint8Array(buf), {
       status: 200,
       headers: {
         "Content-Type": "application/pdf",
         "Content-Disposition": `inline; filename="${sanitizeContentDispositionFilename(quote.originalFilename ?? `${quote.quoteNumber}.pdf`)}"`,
-        "Cache-Control": "no-store",
+        "Cache-Control": "private, max-age=300",
       },
     });
   } catch (err) {

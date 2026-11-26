@@ -1,7 +1,6 @@
-import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { NextRequest, NextResponse } from "next/server";
+import { z } from "zod";
 import { toErrorResponse } from "@/lib/api-error";
 import {
   assertInvoiceOwnerAccess,
@@ -11,9 +10,22 @@ import {
 import { ensureProjectFolderNode } from "@/lib/budget/service";
 import { getServices } from "@/lib/container";
 import { AppHttpError } from "@/lib/errors";
+import { stripInvoiceBinaries } from "@/lib/invoices/ingest";
 import { prisma } from "@/lib/prisma";
+import { getParisTodayIso } from "@/lib/shared/dates";
+import { recordVendorVigilance } from "@/lib/vendors/vendor-service";
 
-const MAX_VIGILANCE_BYTES = 15 * 1024 * 1024;
+const MAX_VIGILANCE_BYTES = 10 * 1024 * 1024;
+
+const AlreadyInDriveSchema = z.object({
+  alreadyInDrive: z.literal(true),
+  filename: z.string().trim().min(1).max(200).optional(),
+  driveFileId: z
+    .string()
+    .trim()
+    .regex(/^[a-zA-Z0-9_-]{8,128}$/, "Identifiant Google Drive invalide.")
+    .optional(),
+});
 
 export async function POST(
   req: NextRequest,
@@ -39,32 +51,32 @@ export async function POST(
 
     const contentType = req.headers.get("content-type") ?? "";
     if (!contentType.includes("multipart/form-data")) {
-      const body = (await req.json().catch(() => ({}))) as {
-        alreadyInDrive?: boolean;
-        filename?: string;
-        driveFileId?: string;
-      };
-      if (!body.alreadyInDrive) {
-        throw new AppHttpError(
-          400,
-          "MISSING_FILE",
-          "Veuillez joindre le fichier d'attestation de vigilance."
-        );
-      }
+      const parsed = AlreadyInDriveSchema.parse(await req.json());
+      const driveId = parsed.driveFileId || "DRIVE_CONFIRMED";
+      const fileLabel = parsed.filename || "Attestation de vigilance (Drive)";
 
       const updated = await prisma.invoice.update({
         where: { id: invoice.id },
         data: {
-          vigilanceDriveFileId: body.driveFileId?.trim() || "DRIVE_CONFIRMED",
-          vigilanceFilename:
-            body.filename?.trim() || "Attestation de vigilance (Drive)",
+          vigilanceDriveFileId: driveId,
+          vigilanceFilename: fileLabel,
+          vigilancePdfData: null,
         },
       });
+
+      if (invoice.vendorName) {
+        await recordVendorVigilance(prisma, {
+          vendorName: invoice.vendorName,
+          driveFileId: driveId,
+          filename: fileLabel,
+        }).catch(() => undefined);
+      }
 
       return NextResponse.json({
         ok: true,
         uploadedToDrive: true,
-        invoice: updated,
+        filename: fileLabel,
+        invoice: stripInvoiceBinaries(updated),
       });
     }
 
@@ -81,7 +93,7 @@ export async function POST(
       throw new AppHttpError(
         413,
         "FILE_TOO_LARGE",
-        "L'attestation dépasse la taille maximale autorisée (15 Mo)."
+        "L'attestation dépasse la taille maximale autorisée (10 Mo)."
       );
     }
 
@@ -95,21 +107,8 @@ export async function POST(
         .normalize("NFC")
         .replace(/[^a-zA-Z0-9À-ÿ-]/g, "") || "Prestataire";
     const safeCp = project.codeProjet.replace(/[^0-9A-Za-z-]/g, "") || "000000";
-    const today = new Date().toISOString().slice(0, 10);
+    const today = getParisTodayIso();
     const targetFilename = `AttestationVigilance_${safeCp}_${safePresta}_${today}${ext}`;
-
-    // Stage in writable tmp dir (Vercel /var/task is read-only!)
-    const baseDir =
-      process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME
-        ? path.join(os.tmpdir(), "go-project-hub-data")
-        : path.join(process.cwd(), ".data");
-    const stagedPath = path.join(baseDir, "vigilance", id, `${invoice.id}${ext}`);
-    try {
-      await fs.promises.mkdir(path.dirname(stagedPath), { recursive: true });
-      await fs.promises.writeFile(stagedPath, buf);
-    } catch {
-      // Non-fatal; Google Drive upload or base64 fallback handles persistence
-    }
 
     // Upload directly into Drive folder 001.3 Factures if Google Workspace is connected
     let driveFileId: string | null = null;
@@ -132,8 +131,8 @@ export async function POST(
       driveFileId = uploaded.id;
       uploadedToDrive = true;
     } catch {
-      // Google not connected yet — stays staged and will be uploaded on validation
-      driveFileId = `STAGED:${stagedPath}`;
+      // Google not connected yet — persist durably in PostgreSQL Bytes column until validation
+      driveFileId = "DB_STAGED";
     }
 
     const updated = await prisma.invoice.update({
@@ -141,8 +140,17 @@ export async function POST(
       data: {
         vigilanceDriveFileId: driveFileId,
         vigilanceFilename: targetFilename,
+        vigilancePdfData: uploadedToDrive ? null : new Uint8Array(buf),
       },
     });
+
+    if (uploadedToDrive && driveFileId && invoice.vendorName) {
+      await recordVendorVigilance(prisma, {
+        vendorName: invoice.vendorName,
+        driveFileId,
+        filename: targetFilename,
+      }).catch(() => undefined);
+    }
 
     await prisma.auditLog.create({
       data: {
@@ -164,7 +172,7 @@ export async function POST(
       uploadedToDrive,
       filename: targetFilename,
       driveFileId: uploadedToDrive ? driveFileId : null,
-      invoice: updated,
+      invoice: stripInvoiceBinaries(updated),
     });
   } catch (err) {
     return toErrorResponse(err);

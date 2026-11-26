@@ -11,6 +11,36 @@ import { decryptSecret, encryptSecret } from "@/lib/crypto";
 import { AppHttpError } from "@/lib/errors";
 
 export const USER_SESSION_COOKIE = "go_user_session";
+export const SESSION_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+export const DEFAULT_ALLOWED_AUTH_DOMAINS = [
+  "gamersorigin.com",
+  "lintrus.fr",
+  "lintrus.com",
+] as const;
+
+export function isAllowedWorkspaceEmail(email: string): boolean {
+  const clean = normalizeEmail(email);
+  const atIdx = clean.lastIndexOf("@");
+  if (atIdx <= 0) return false;
+  const domain = clean.slice(atIdx + 1);
+
+  const extraEmails = (process.env.ALLOWED_AUTH_EMAILS ?? "")
+    .split(/[,;\s]+/)
+    .map((e) => normalizeEmail(e))
+    .filter(Boolean);
+  if (extraEmails.includes(clean)) return true;
+
+  const extraDomains = (process.env.ALLOWED_AUTH_DOMAINS ?? "")
+    .split(/[,;\s]+/)
+    .map((d) => d.trim().toLowerCase().replace(/^@/, ""))
+    .filter(Boolean);
+
+  const allowedDomains = new Set<string>([
+    ...DEFAULT_ALLOWED_AUTH_DOMAINS,
+    ...extraDomains,
+  ]);
+  return allowedDomains.has(domain);
+}
 
 export const PROJECT_MEMBER_ROLES = ["OWNER", "EDITOR", "VIEWER"] as const;
 export type ProjectMemberRole = (typeof PROJECT_MEMBER_ROLES)[number];
@@ -133,10 +163,20 @@ export function encodeSessionToken(userId: string): string {
 export function decodeSessionToken(token: string | null | undefined): string | null {
   if (!token) return null;
   try {
-    const parsed = JSON.parse(decryptSecret(token)) as { userId?: unknown };
-    return typeof parsed.userId === "string" && parsed.userId.length > 0
-      ? parsed.userId
-      : null;
+    const parsed = JSON.parse(decryptSecret(token)) as {
+      userId?: unknown;
+      iat?: unknown;
+    };
+    if (typeof parsed.userId !== "string" || parsed.userId.length === 0) {
+      return null;
+    }
+    if (
+      typeof parsed.iat === "number" &&
+      Date.now() - parsed.iat > SESSION_MAX_AGE_MS
+    ) {
+      return null;
+    }
+    return parsed.userId;
   } catch {
     return null;
   }
@@ -184,6 +224,115 @@ export async function getCurrentUser(
   }
 }
 
+export async function requireCurrentUser(
+  prisma: PrismaClient
+): Promise<User> {
+  const user = await getCurrentUser(prisma);
+  if (!user) {
+    throw new AppHttpError(
+      401,
+      "UNAUTHORIZED",
+      "Connexion requise via Google Workspace (@gamersorigin.com ou @lintrus.fr)."
+    );
+  }
+  return user;
+}
+
+export async function requireAdmin(prisma: PrismaClient): Promise<User> {
+  const user = await requireCurrentUser(prisma);
+  if (user.role !== "ADMIN") {
+    throw new AppHttpError(
+      403,
+      "ADMIN_ONLY",
+      "Accès réservé aux administrateurs."
+    );
+  }
+  return user;
+}
+
+export async function isGoogleOAuthConfigured(
+  prisma: PrismaClient
+): Promise<boolean> {
+  if (
+    process.env.GOOGLE_CLIENT_ID?.trim() &&
+    process.env.GOOGLE_CLIENT_SECRET?.trim()
+  ) {
+    return true;
+  }
+  const rows = await prisma.appSetting.findMany({
+    where: { key: { in: ["GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET"] } },
+  });
+  let hasId = false;
+  let hasSecret = false;
+  for (const r of rows) {
+    if (!r.valueEnc) continue;
+    try {
+      const val = decryptSecret(r.valueEnc).trim();
+      if (!val) continue;
+      if (r.key === "GOOGLE_CLIENT_ID") hasId = true;
+      if (r.key === "GOOGLE_CLIENT_SECRET") hasSecret = true;
+    } catch {
+      // ignore corrupted entry
+    }
+  }
+  return hasId && hasSecret;
+}
+
+export function isStrictAuthEnforced(): boolean {
+  if (process.env.REQUIRE_AUTH === "1") return true;
+  if (
+    process.env.VITEST === "true" ||
+    process.env.TEST_BOUNDARY_HARNESS === "1"
+  ) {
+    return false;
+  }
+  return process.env.NODE_ENV === "production";
+}
+
+export async function requireAdminOrBootstrap(
+  prisma: PrismaClient
+): Promise<User | null> {
+  const user = await getCurrentUser(prisma);
+  if (user) {
+    if (user.role !== "ADMIN") {
+      throw new AppHttpError(
+        403,
+        "ADMIN_ONLY",
+        "Accès réservé aux administrateurs."
+      );
+    }
+    return user;
+  }
+  if (!isStrictAuthEnforced()) {
+    return null;
+  }
+  const [oauthConfigured, userCount] = await Promise.all([
+    isGoogleOAuthConfigured(prisma),
+    prisma.user.count(),
+  ]);
+  if (!oauthConfigured && userCount === 0) {
+    return null;
+  }
+  throw new AppHttpError(
+    401,
+    "UNAUTHORIZED",
+    "Connexion administrateur requise via Google Workspace."
+  );
+}
+
+export async function requireWorkspaceUser(
+  prisma: PrismaClient
+): Promise<User | null> {
+  const user = await getCurrentUser(prisma);
+  if (user) return user;
+  if (!isStrictAuthEnforced()) return null;
+  throw new AppHttpError(
+    401,
+    "UNAUTHORIZED",
+    "Connexion requise via Google Workspace (@gamersorigin.com ou @lintrus.fr)."
+  );
+}
+
 export interface ProjectAccessResult {
   canView: boolean;
   canEdit: boolean;
@@ -196,6 +345,9 @@ export function buildVisibleProjectsWhere(
   options: { includeAllForAdmin?: boolean } = {}
 ): Prisma.ProjectWhereInput {
   if (!user) {
+    if (isStrictAuthEnforced()) {
+      return { id: "__no_access__" };
+    }
     return {};
   }
   if (options.includeAllForAdmin && user.role === "ADMIN") {
@@ -216,6 +368,13 @@ export async function getProjectAccess(
   user: User | null
 ): Promise<ProjectAccessResult> {
   if (!user) {
+    if (isStrictAuthEnforced()) {
+      throw new AppHttpError(
+        401,
+        "UNAUTHORIZED",
+        "Connexion requise via Google Workspace (@gamersorigin.com ou @lintrus.fr)."
+      );
+    }
     return {
       canView: true,
       canEdit: true,
@@ -273,7 +432,7 @@ export async function getProjectAccess(
       return {
         canView: true,
         canEdit: true,
-        canManageMembers: true,
+        canManageMembers: false,
         accessRole: "EDITOR",
       };
     }

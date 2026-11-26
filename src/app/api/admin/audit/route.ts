@@ -1,19 +1,11 @@
 import { NextResponse } from "next/server";
 import { toErrorResponse } from "@/lib/api-error";
-import { getCurrentUser } from "@/lib/auth/session";
-import { AppHttpError } from "@/lib/errors";
+import { requireAdmin } from "@/lib/auth/session";
 import { prisma } from "@/lib/prisma";
 
 export async function GET() {
   try {
-    const currentUser = await getCurrentUser(prisma);
-    if (currentUser && currentUser.role !== "ADMIN") {
-      throw new AppHttpError(
-        403,
-        "ADMIN_ONLY",
-        "Accès réservé aux administrateurs."
-      );
-    }
+    await requireAdmin(prisma);
 
     const logs = await prisma.auditLog.findMany({
       orderBy: { createdAt: "desc" },

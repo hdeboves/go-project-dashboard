@@ -447,6 +447,7 @@ describe("M3 F15 — Retroplanning Sheet Codec, Bidirectional Sync, Concurrency 
         etape: "Mapping",
         tache: `Tache ${st}`,
         owner: null,
+        ownerUserId: null,
         startDate: new Date(Date.UTC(2026, 5, 22, 12, 0, 0)),
         endDate: new Date(Date.UTC(2026, 5, 26, 12, 0, 0)),
         status: st,

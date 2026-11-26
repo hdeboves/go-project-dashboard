@@ -27,6 +27,7 @@ function fakeUser(overrides: Partial<User> = {}): User {
     role: "MEMBER",
     avatarId: "gamer-cat",
     avatarBg: "#FDE68A",
+    lastActiveProjectId: null,
     createdAt: new Date(),
     updatedAt: new Date(),
     ...overrides,

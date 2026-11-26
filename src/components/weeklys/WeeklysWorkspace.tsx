@@ -23,6 +23,7 @@ import {
   type WeeklyDigestTaskView,
 } from "@/components/weeklys/WeeklyDigestPreview";
 import type { BlankWeeklyTemplate } from "@/lib/templates/project-templates";
+import { getParisWorkWeekWindow } from "@/lib/shared/dates";
 import { showToast } from "@/lib/toast";
 
 interface WeeklyReportView {
@@ -48,14 +49,7 @@ interface ShellStatusResponse {
 }
 
 function currentWorkWeekWindow(): { weekStart: string; weekEnd: string } {
-  const now = new Date();
-  const day = (now.getDay() + 6) % 7;
-  const mon = new Date(now.getTime() - day * 86_400_000);
-  const fri = new Date(mon.getTime() + 4 * 86_400_000);
-  return {
-    weekStart: mon.toISOString().slice(0, 10),
-    weekEnd: fri.toISOString().slice(0, 10),
-  };
+  return getParisWorkWeekWindow();
 }
 
 export function WeeklysWorkspace() {
@@ -149,6 +143,15 @@ export function WeeklysWorkspace() {
     if (isProjectSwitch) {
       setLoading(true);
       setSelectedVisualIds([]);
+      setNextStepsClient([]);
+      setNextStepsGo([]);
+      setNewClientStep("");
+      setNewGoStep("");
+      setApiWarnings([]);
+      setFeedback(null);
+      setWeeklys([]);
+      setTasks([]);
+      setVisuals([]);
     }
     try {
       const res = await fetch(
@@ -574,8 +577,8 @@ export function WeeklysWorkspace() {
                 {/* Côté GO */}
                 <div className="flex flex-col justify-between gap-2.5 md:pl-5">
                   <div className="space-y-2.5">
-                    <h3 className="text-[11px] font-bold tracking-wider text-rose-700 uppercase dark:text-rose-300">
-                      Côté GamersOrigin
+                    <h3 className="text-[11px] font-bold tracking-wider text-indigo-700 uppercase dark:text-indigo-300">
+                      Côté Agence
                     </h3>
                     <ul className="space-y-1.5">
                       {nextStepsGo.map((step, idx) => (

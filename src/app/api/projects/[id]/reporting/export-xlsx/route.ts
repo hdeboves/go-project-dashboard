@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { toErrorResponse } from "@/lib/api-error";
+import { assertProjectAccess, getCurrentUser } from "@/lib/auth/session";
 import { AppHttpError } from "@/lib/errors";
 import { prisma } from "@/lib/prisma";
 import {
@@ -13,6 +14,8 @@ export async function GET(
 ) {
   try {
     const { id } = await context.params;
+    const currentUser = await getCurrentUser(prisma);
+    await assertProjectAccess(prisma, id, currentUser, "VIEW");
     const project = await prisma.project.findUnique({ where: { id } });
     if (!project) {
       throw new AppHttpError(404, "PROJECT_NOT_FOUND", "Projet introuvable.");

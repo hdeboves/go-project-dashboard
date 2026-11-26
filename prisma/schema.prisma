@@ -18,6 +18,7 @@ model AppSetting {
 
 model GoogleConnection {
   id              String   @id @default(cuid())
+  userId          String?  @unique
   userEmail       String   @unique
   accessTokenEnc  String
   refreshTokenEnc String?
@@ -25,22 +26,30 @@ model GoogleConnection {
   scope           String
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
+
+  user User? @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 model User {
-  id        String   @id @default(cuid())
-  email     String   @unique
-  name      String
-  jobTitle  String?
-  role      String   @default("MEMBER")
-  avatarId  String   @default("gamer-cat")
-  avatarBg  String   @default("#FDE68A")
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id                  String   @id @default(cuid())
+  email               String   @unique
+  name                String
+  jobTitle            String?
+  role                String   @default("MEMBER")
+  avatarId            String   @default("gamer-cat")
+  avatarBg            String   @default("#FDE68A")
+  lastActiveProjectId String?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
 
-  ownedProjects    Project[]       @relation("ProjectOwner")
-  memberships      ProjectMember[]
-  uploadedInvoices Invoice[]       @relation("InvoiceUploader")
+  googleConnection  GoogleConnection?
+  ownedProjects     Project[]          @relation("ProjectOwner")
+  memberships       ProjectMember[]
+  uploadedInvoices  Invoice[]          @relation("InvoiceUploader")
+  assignedTasks     RetroTask[]        @relation("TaskOwnerUser")
+  notificationReads NotificationRead[]
+
+  @@index([role])
 }
 
 model ProjectMember {
@@ -79,6 +88,7 @@ model Project {
   archivedAt                DateTime?
   archivedById              String?
   isSandbox                 Boolean   @default(true)
+  nextInvoiceSeq            Int       @default(0)
   driveInternalRootId       String?
   driveExternalRootId       String?
   budgetSheetId             String?
@@ -211,6 +221,7 @@ model Quote {
   status           String   @default("EN_ATTENTE")
   originalFilename String?
   localPdfPath     String?
+  pdfData          Bytes?
   driveFileId      String?
   notes            String?
   createdAt        DateTime @default(now())
@@ -234,27 +245,30 @@ model Invoice {
   originalFilename   String
   renamedFilename    String?
   driveFileId        String?
-  vendorName         String?
-  invoiceNumber      String?
-  invoiceDate        String?
-  amountHt           Float    @default(0)
-  tvaAmount          Float    @default(0)
-  amountTtc          Float    @default(0)
-  invoiceType        String   @default("UNIQUE")
-  prestationLabel      String?
-  detectedCodeProjet   String?
-  projectCodesJson     String   @default("[]")
-  vigilanceDriveFileId String?
-  vigilanceFilename    String?
-  cpConflict           Boolean  @default(false)
-  status             String   @default("PENDING_VALIDATION")
-  pennylaneDraftId   String?
-  extractedJson      String   @default("{}")
-  stepDriveDone      Boolean  @default(false)
-  stepSheetDone      Boolean  @default(false)
-  stepGmailDone      Boolean  @default(false)
-  createdAt          DateTime @default(now())
-  updatedAt          DateTime @updatedAt
+  vendorName            String?
+  invoiceNumber         String?
+  supplierInvoiceNumber String?
+  invoiceDate           String?
+  amountHt              Float    @default(0)
+  tvaAmount             Float    @default(0)
+  amountTtc             Float    @default(0)
+  invoiceType           String   @default("UNIQUE")
+  prestationLabel       String?
+  detectedCodeProjet    String?
+  projectCodesJson      String   @default("[]")
+  vigilanceDriveFileId  String?
+  vigilanceFilename     String?
+  vigilancePdfData      Bytes?
+  pdfData               Bytes?
+  cpConflict            Boolean  @default(false)
+  status                String   @default("PENDING_VALIDATION")
+  pennylaneDraftId      String?
+  extractedJson         String   @default("{}")
+  stepDriveDone         Boolean  @default(false)
+  stepSheetDone         Boolean  @default(false)
+  stepGmailDone         Boolean  @default(false)
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
 
   project    Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
   uploadedBy User?       @relation("InvoiceUploader", fields: [uploadedById], references: [id], onDelete: SetNull)
@@ -264,9 +278,27 @@ model Invoice {
   @@index([projectId, status])
   @@index([projectId, uploadedById, status])
   @@index([projectId, cpConflict])
+  @@index([projectId, invoiceNumber])
+  @@index([projectId, supplierInvoiceNumber])
+  @@index([gmailMessageId])
   @@index([quoteId])
   @@index([budgetLineId])
   @@index([projectId, createdAt])
+}
+
+model Vendor {
+  id                   String    @id @default(cuid())
+  name                 String
+  normalizedName       String    @unique
+  email                String?
+  siret                String?
+  category             String?
+  vigilanceDriveFileId String?
+  vigilanceFilename    String?
+  vigilanceIssuedAt    DateTime?
+  vigilanceExpiresAt   DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
 }
 
 model RetroTask {
@@ -276,6 +308,7 @@ model RetroTask {
   etape         String?
   tache         String
   owner         String?
+  ownerUserId   String?
   startDate     DateTime?
   endDate       DateTime?
   status        String    @default("A_FAIRE")
@@ -286,11 +319,13 @@ model RetroTask {
   updatedAt     DateTime  @updatedAt
 
   project        Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  ownerUser      User?           @relation("TaskOwnerUser", fields: [ownerUserId], references: [id], onDelete: SetNull)
   proposals      RetroProposal[]
   calendarEvents CalendarEvent[]
 
   @@index([projectId])
   @@index([projectId, status, endDate])
+  @@index([ownerUserId, status, endDate])
   @@index([projectId, sheetRowIndex])
 }
 
@@ -314,6 +349,7 @@ model RetroProposal {
   retroTask RetroTask? @relation(fields: [retroTaskId], references: [id], onDelete: SetNull)
 
   @@index([projectId, status])
+  @@index([retroTaskId])
 }
 
 model RetroSnapshot {
@@ -364,6 +400,7 @@ model CalendarEvent {
   @@index([projectId])
   @@index([projectId, retroTaskId, status])
   @@index([projectId, startAt])
+  @@index([googleEventId])
 }
 
 model WeeklyReport {
@@ -480,33 +517,36 @@ model AuditLog {
 
   @@index([projectId, createdAt])
   @@index([action])
+  @@index([createdAt])
 }
 
 model MeetingNote {
-  id               String   @id @default(cuid())
-  projectId        String
-  source           String   @default("KRISP_WEBHOOK")
-  externalId       String?
-  title            String
-  meetingDate      DateTime
-  durationMinutes  Int?
-  participantsJson String   @default("[]")
-  summary          String
-  keyDecisionsJson String   @default("[]")
-  actionItemsJson  String   @default("[]")
-  rawTranscript    String?
-  driveFileId      String?
-  driveFileName    String?
-  driveWebViewLink String?
-  driveFolderCode  String   @default("002.3")
-  status           String   @default("SAVED_TO_DRIVE")
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
+  id                         String   @id @default(cuid())
+  projectId                  String
+  source                     String   @default("KRISP_WEBHOOK")
+  externalId                 String?
+  title                      String
+  meetingDate                DateTime
+  durationMinutes            Int?
+  participantsJson           String   @default("[]")
+  summary                    String
+  keyDecisionsJson           String   @default("[]")
+  actionItemsJson            String   @default("[]")
+  convertedActionIndexesJson String   @default("[]")
+  rawTranscript              String?
+  driveFileId                String?
+  driveFileName              String?
+  driveWebViewLink           String?
+  driveFolderCode            String   @default("002.3")
+  status                     String   @default("SAVED_TO_DRIVE")
+  createdAt                  DateTime @default(now())
+  updatedAt                  DateTime @updatedAt
 
   project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
 
   @@index([projectId, meetingDate])
   @@index([externalId])
+  @@index([projectId, externalId])
 }
 
 model Notification {
@@ -520,10 +560,24 @@ model Notification {
   read      Boolean  @default(false)
   createdAt DateTime @default(now())
 
-  project Project? @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  project Project?           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  reads   NotificationRead[]
 
   @@index([read, createdAt])
   @@index([projectId, createdAt])
+}
+
+model NotificationRead {
+  id             String   @id @default(cuid())
+  notificationId String
+  userId         String
+  readAt         DateTime @default(now())
+
+  notification Notification @relation(fields: [notificationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([notificationId, userId])
+  @@index([userId])
 }
 
 model BackupSnapshot {

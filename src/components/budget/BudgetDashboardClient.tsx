@@ -973,6 +973,7 @@ export function BudgetDashboardClient() {
       {/* TAB 2: Spreadsheet */}
       {activeTab === "table" && (
         <BudgetTable
+          key={`budget-table-${projectId}`}
           projectId={projectId}
           lines={budget?.lines ?? []}
           invoices={invoices}
@@ -990,6 +991,7 @@ export function BudgetDashboardClient() {
       {/* TAB 3: Quotes (Devis) */}
       {activeTab === "quotes" && (
         <QuotesPanel
+          key={`quotes-panel-${projectId}`}
           projectId={projectId}
           quotes={quotes}
           invoices={invoices}
@@ -1002,6 +1004,7 @@ export function BudgetDashboardClient() {
       {/* TAB 4: Invoices */}
       {activeTab === "invoices" && (
         <InvoicePipelinePanel
+          key={`invoices-panel-${projectId}`}
           projectId={projectId}
           projectCode={projectCode}
           budgetLines={budget?.lines ?? []}

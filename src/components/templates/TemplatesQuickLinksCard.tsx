@@ -25,7 +25,7 @@ const LINKS = [
   {
     href: "/weeklys?tab=template",
     title: "Modèle Weekly Client",
-    desc: "Personnaliser les prochaines étapes types Client / GamersOrigin.",
+    desc: "Personnaliser les prochaines étapes types Client / Agence.",
     icon: Presentation,
   },
 ] as const;

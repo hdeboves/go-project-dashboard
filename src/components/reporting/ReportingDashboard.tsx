@@ -287,11 +287,11 @@ export function ReportingDashboard() {
           const shellJson = (await shellRes.json()) as ShellStatus;
           setShell(shellJson);
           if (!resolvedId) resolvedId = shellJson.activeProjectId;
-          if (shellJson.activeProject?.reportingSheetId) {
-            setReportingSheetId((prev) => prev || shellJson.activeProject?.reportingSheetId || "");
-          }
+          setReportingSheetId(shellJson.activeProject?.reportingSheetId || "");
         }
         setProjectId(resolvedId);
+        setSlidesFileId(null);
+        setPublishedExtMessage(null);
         if (!resolvedId) return;
 
         const [fortRes, infRes, verbRes, driveRes, budgetRes] =

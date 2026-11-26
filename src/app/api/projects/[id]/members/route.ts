@@ -82,10 +82,15 @@ export async function POST(
     await assertProjectAccess(prisma, id, currentUser, "MANAGE");
 
     const body = ShareProjectSchema.parse(await req.json());
-    const targetUser = await upsertUserByEmail(prisma, {
-      email: body.email,
-      name: body.name,
+    const existingTarget = await prisma.user.findUnique({
+      where: { email: body.email.trim().toLowerCase() },
     });
+    const targetUser = existingTarget
+      ? existingTarget
+      : await upsertUserByEmail(prisma, {
+          email: body.email,
+          name: body.name,
+        });
 
     const project = await prisma.project.findUnique({
       where: { id },

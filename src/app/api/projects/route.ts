@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { toErrorResponse } from "@/lib/api-error";
 import {
+  buildVisibleInvoicesWhere,
   buildVisibleProjectsWhere,
   getCurrentUser,
   toPublicUser,
@@ -15,6 +16,7 @@ import {
 } from "@/lib/google/sandbox-guard";
 import { normalizeCp } from "@/lib/isolation/cp-guard";
 import { prisma } from "@/lib/prisma";
+import { startOfParisTodayUtc } from "@/lib/shared/dates";
 import {
   normalizeProjectCategory,
   seedBlankBudgetForProject,
@@ -68,10 +70,21 @@ export async function GET(req: NextRequest) {
             id: true,
             status: true,
             cpConflict: true,
+            uploadedById: true,
+            gmailMessageId: true,
+            createdAt: true,
+          },
+        },
+        quotes: {
+          where: { status: "ACCEPTE" },
+          select: {
+            budgetLineId: true,
+            amountHt: true,
           },
         },
         budgetLines: {
           select: {
+            id: true,
             saleTotalHt: true,
             preOpTotalHt: true,
             postOpTotalHt: true,
@@ -98,14 +111,42 @@ export async function GET(req: NextRequest) {
       },
     });
 
-    const now = new Date();
+    const todayStartUtc = startOfParisTodayUtc();
+    const fiveDaysAgo = new Date(Date.now() - 5 * 86_400_000);
+    // Keep unused import check happy while scoping pending invoices per user
+    void buildVisibleInvoicesWhere;
+
     const formatted = projects.map((p) => {
-      const cpConflictCount = p.invoices.filter(
+      const visiblePending = p.invoices.filter((i) => {
+        if (i.status === "VALIDATED") return false;
+        if (!currentUser) return i.uploadedById === null;
+        return (
+          i.uploadedById === currentUser.id ||
+          (i.uploadedById === null && i.gmailMessageId !== null)
+        );
+      });
+      const cpConflictCount = visiblePending.filter(
         (i) => i.cpConflict && i.status === "CONFLICT_BLOCKED"
       ).length;
-      const pendingInvoicesCount = p.invoices.filter(
+      const pendingInvoicesCount = visiblePending.filter(
         (i) => i.status === "PENDING_VALIDATION"
       ).length;
+      const stalePendingInvoicesCount = visiblePending.filter(
+        (i) => i.status === "PENDING_VALIDATION" && i.createdAt < fiveDaysAgo
+      ).length;
+
+      const acceptedQuoteByLine = new Map<string, number>();
+      let unlinkedAcceptedQuotesHt = 0;
+      for (const q of p.quotes) {
+        if (q.budgetLineId) {
+          acceptedQuoteByLine.set(
+            q.budgetLineId,
+            (acceptedQuoteByLine.get(q.budgetLineId) ?? 0) + (q.amountHt || 0)
+          );
+        } else {
+          unlinkedAcceptedQuotesHt += q.amountHt || 0;
+        }
+      }
 
       const totalSoldHt = p.budgetLines.reduce(
         (acc, l) => acc + (l.saleTotalHt || 0),
@@ -119,10 +160,17 @@ export async function GET(req: NextRequest) {
         (acc, l) => acc + (l.postOpTotalHt || 0),
         0
       );
-      const forecastCostHt = p.budgetLines.reduce(
-        (acc, l) => acc + Math.max(l.preOpTotalHt || 0, l.postOpTotalHt || 0),
-        0
-      );
+      const forecastCostHt =
+        p.budgetLines.reduce(
+          (acc, l) =>
+            acc +
+            Math.max(
+              l.preOpTotalHt || 0,
+              l.postOpTotalHt || 0,
+              acceptedQuoteByLine.get(l.id) ?? 0
+            ),
+          0
+        ) + unlinkedAcceptedQuotesHt;
       const budgetBase = totalPreOpHt > 0 ? totalPreOpHt : totalSoldHt;
       const consumedPct =
         budgetBase > 0 ? Math.round((totalActualHt / budgetBase) * 100) : 0;
@@ -141,7 +189,9 @@ export async function GET(req: NextRequest) {
           (l.preOpTotalHt === 0 && l.postOpTotalHt > 0)
       ).length;
       const budgetOverrunCount = p.budgetLines.filter(
-        (l) => l.postOpTotalHt > l.preOpTotalHt
+        (l) =>
+          l.postOpTotalHt > l.preOpTotalHt ||
+          (acceptedQuoteByLine.get(l.id) ?? 0) > l.preOpTotalHt
       ).length;
 
       const totalTasks = p.retroTasks.length;
@@ -150,7 +200,7 @@ export async function GET(req: NextRequest) {
         (t) =>
           t.status !== "TERMINE" &&
           t.endDate !== null &&
-          new Date(t.endDate) < now
+          new Date(t.endDate) < todayStartUtc
       ).length;
       const progressPct =
         totalTasks > 0 ? Math.round((doneTasks / totalTasks) * 100) : 0;
@@ -166,37 +216,48 @@ export async function GET(req: NextRequest) {
 
       const healthReasons: string[] = [];
       if (cpConflictCount > 0) {
-        healthReasons.push(`${cpConflictCount} facture(s) en conflit CP`);
+        healthReasons.push(
+          `${cpConflictCount} facture${cpConflictCount > 1 ? "s" : ""} en conflit CP`
+        );
       }
       if (consumedPct > 100 || budgetOverrunCount > 0) {
         healthReasons.push(
           budgetOverrunCount > 0
-            ? `${budgetOverrunCount} poste(s) en dépassement`
+            ? `${budgetOverrunCount} poste${budgetOverrunCount > 1 ? "s" : ""} en dépassement`
             : `Budget dépassé (${consumedPct}%)`
         );
-      } else if (consumedPct >= 90 && consumedPct < 100) {
-        healthReasons.push(`Budget à ${consumedPct}% (seuil 90%)`);
+      } else if (consumedPct >= 90 && consumedPct <= 100) {
+        healthReasons.push(
+          consumedPct === 100
+            ? "Budget soldé à 100%"
+            : `Budget à ${consumedPct}% (seuil 90%)`
+        );
       }
       if (budgetAlertCount > budgetOverrunCount) {
+        const nearCount = budgetAlertCount - budgetOverrunCount;
         healthReasons.push(
-          `${budgetAlertCount - budgetOverrunCount} poste(s) ≥ 90%`
+          `${nearCount} poste${nearCount > 1 ? "s" : ""} ≥ 90%`
         );
       }
       if (lateTasks > 0) {
-        healthReasons.push(`${lateTasks} tâche(s) en retard`);
+        healthReasons.push(
+          `${lateTasks} tâche${lateTasks > 1 ? "s" : ""} en retard`
+        );
       }
-      if (pendingInvoicesCount > 0) {
-        healthReasons.push(`${pendingInvoicesCount} facture(s) à valider`);
+      if (stalePendingInvoicesCount > 0) {
+        healthReasons.push(
+          `${stalePendingInvoicesCount} facture${stalePendingInvoicesCount > 1 ? "s" : ""} en attente > 5j`
+        );
       }
 
       let health: "SAIN" | "VIGILANCE" | "CRITIQUE" = "SAIN";
-      if (cpConflictCount > 0 || consumedPct > 100 || lateTasks >= 3) {
+      if (cpConflictCount > 0 || consumedPct > 100 || budgetOverrunCount > 0 || lateTasks >= 3) {
         health = "CRITIQUE";
       } else if (
         (consumedPct >= 90 && consumedPct < 100) ||
         budgetAlertCount > 0 ||
         lateTasks > 0 ||
-        pendingInvoicesCount > 0
+        stalePendingInvoicesCount > 0
       ) {
         health = "VIGILANCE";
       }

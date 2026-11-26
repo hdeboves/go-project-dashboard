@@ -531,6 +531,25 @@ export function CockpitInvoiceDropzone({
 
     setLoadingPreview(true);
     try {
+      // Persist edited verification fields & auto-updated nomenclature before read-only email-preview
+      await fetch(
+        `/api/projects/${project.id}/invoices/${currentInvoice.id}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            vendorName: vendorName.trim(),
+            invoiceNumber: invoiceNumber.trim(),
+            invoiceDate: invoiceDate.trim(),
+            amountHt: parsedHt,
+            prestationLabel: prestationLabel.trim() || "Prestation",
+            budgetLineId,
+            quoteId: quoteId || null,
+            projectCodes,
+          }),
+        }
+      ).catch(() => undefined);
+
       const res = await fetch(
         `/api/projects/${project.id}/invoices/${currentInvoice.id}/email-preview`,
         {

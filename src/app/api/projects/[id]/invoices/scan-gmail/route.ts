@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { toErrorResponse } from "@/lib/api-error";
+import { assertProjectAccess, getCurrentUser } from "@/lib/auth/session";
 import { getServices } from "@/lib/container";
 import { scanProjectGmailInvoices } from "@/lib/invoices/scan-job";
 
@@ -15,11 +16,13 @@ export async function POST(
 ) {
   try {
     const { id } = await context.params;
+    const { prisma, getGoogleGateway, getGeminiClient } = getServices();
+    const currentUser = await getCurrentUser(prisma);
+    await assertProjectAccess(prisma, id, currentUser, "EDIT");
     const rawText = await req.text();
     const parsedJson = rawText.trim() ? JSON.parse(rawText) : {};
     const body = ScanGmailSchema.parse(parsedJson);
 
-    const { prisma, getGoogleGateway, getGeminiClient } = getServices();
     const result = await scanProjectGmailInvoices({
       prisma,
       getGoogleGateway,

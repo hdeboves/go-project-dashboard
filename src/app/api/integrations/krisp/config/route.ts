@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { toErrorResponse } from "@/lib/api-error";
+import { requireAdmin } from "@/lib/auth/session";
 import {
   getOrCreateKrispWebhookSecret,
   rotateKrispWebhookSecret,
@@ -8,6 +9,7 @@ import { prisma } from "@/lib/prisma";
 
 export async function GET(req: NextRequest) {
   try {
+    await requireAdmin(prisma);
     const secret = await getOrCreateKrispWebhookSecret(prisma);
     const [totalMeetings, savedToDriveCount, lastMeeting, googleConn] =
       await Promise.all([
@@ -52,6 +54,7 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
+    await requireAdmin(prisma);
     const body = (await req.json().catch(() => ({}))) as { action?: string };
     if (body.action === "rotate") {
       const secret = await rotateKrispWebhookSecret(prisma);

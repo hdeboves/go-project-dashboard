@@ -1,8 +1,8 @@
 import { cookies } from "next/headers";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { ACTIVE_PROJECT_COOKIE } from "@/app/api/shell/status/route";
 import { toErrorResponse } from "@/lib/api-error";
+import { ACTIVE_PROJECT_COOKIE } from "@/lib/auth/cookies";
 import { assertProjectAccess, getCurrentUser } from "@/lib/auth/session";
 import { AppHttpError } from "@/lib/errors";
 import { prisma } from "@/lib/prisma";
@@ -19,7 +19,7 @@ export async function PATCH(
     const { id } = await context.params;
     const currentUser = await getCurrentUser(prisma);
     if (currentUser?.role !== "ADMIN") {
-      await assertProjectAccess(prisma, id, currentUser, "EDIT");
+      await assertProjectAccess(prisma, id, currentUser, "MANAGE");
     }
 
     const body = ArchiveSchema.parse(await req.json());
@@ -63,8 +63,11 @@ export async function PATCH(
       if (cookieStore.get(ACTIVE_PROJECT_COOKIE)?.value === id) {
         res.cookies.delete(ACTIVE_PROJECT_COOKIE);
       }
-      await prisma.appSetting
-        .deleteMany({ where: { key: "ACTIVE_PROJECT_ID" } })
+      await prisma.user
+        .updateMany({
+          where: { lastActiveProjectId: id },
+          data: { lastActiveProjectId: null },
+        })
         .catch(() => undefined);
     }
 

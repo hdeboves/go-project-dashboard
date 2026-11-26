@@ -195,8 +195,8 @@ export function formatKrispMeetingHtml(params: {
 <html lang="fr">
 <head><meta charset="utf-8" /><title>${escapeHtml(params.title)}</title></head>
 <body style="font-family:Arial,sans-serif;color:#0f172a;line-height:1.5;">
-  <p style="color:#e11d48;font-weight:bold;font-size:10pt;text-transform:uppercase;letter-spacing:0.06em;">
-    GamersOrigin · Compte Rendu Krisp · CP ${escapeHtml(params.project.codeProjet)}
+  <p style="color:#4f46e5;font-weight:bold;font-size:10pt;text-transform:uppercase;letter-spacing:0.06em;">
+    Project Hub · Compte Rendu Krisp · Code projet ${escapeHtml(params.project.codeProjet)}
   </p>
   <h1 style="margin-top:4px;margin-bottom:8px;">${escapeHtml(params.title)}</h1>
   <p style="color:#475569;font-size:10pt;">
@@ -231,13 +231,14 @@ export async function resolveTargetProject(
   }
 
   const allProjects = await prisma.project.findMany({
+    where: { isArchived: false },
     orderBy: [{ isSandbox: "desc" }, { createdAt: "asc" }],
   });
   if (allProjects.length === 0) {
     throw new AppHttpError(
       404,
       "NO_PROJECT_AVAILABLE",
-      "Aucun projet configuré pour recevoir ce compte rendu."
+      "Aucun projet actif configuré pour recevoir ce compte rendu."
     );
   }
 
@@ -264,21 +265,16 @@ export async function resolveTargetProject(
   );
   if (byName) return byName;
 
-  // 4. Fallback to active project setting or first project
-  const activeSetting = await prisma.appSetting.findUnique({
-    where: { key: "ACTIVE_PROJECT_ID" },
-  });
-  if (activeSetting?.valueEnc) {
-    try {
-      const activeId = decryptSecret(activeSetting.valueEnc);
-      const active = allProjects.find((p) => p.id === activeId);
-      if (active) return active;
-    } catch {
-      // ignore
-    }
+  // 4. Only fallback if there is a single active project; otherwise avoid silent cross-project pollution
+  if (allProjects.length === 1) {
+    return allProjects[0];
   }
 
-  return allProjects[0];
+  throw new AppHttpError(
+    422,
+    "PROJECT_AMBIGUOUS",
+    "Impossible d'identifier le projet cible pour ce CR Krisp. Mentionnez le code projet ou le nom du client dans le titre."
+  );
 }
 
 export async function ingestKrispMeeting(
@@ -487,6 +483,7 @@ export function serializeMeetingNote(row: {
   summary: string;
   keyDecisionsJson: string;
   actionItemsJson: string;
+  convertedActionIndexesJson?: string | null;
   rawTranscript: string | null;
   driveFileId: string | null;
   driveFileName: string | null;
@@ -515,6 +512,9 @@ export function serializeMeetingNote(row: {
     summary: row.summary,
     keyDecisions: safeParseArray<string>(row.keyDecisionsJson),
     actionItems: safeParseArray<KrispActionItem>(row.actionItemsJson),
+    convertedActionIndexes: safeParseArray<number>(
+      row.convertedActionIndexesJson ?? "[]"
+    ),
     rawTranscript: row.rawTranscript,
     driveFileId: row.driveFileId,
     driveFileName: row.driveFileName,

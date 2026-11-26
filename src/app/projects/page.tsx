@@ -29,6 +29,7 @@ import {
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useShell } from "@/components/ShellContext";
 import { AvatarDisplay } from "@/components/AvatarDisplay";
 import { ProjectShareModal } from "@/components/ProjectShareModal";
 import {
@@ -158,6 +159,8 @@ function healthStyle(health: "SAIN" | "VIGILANCE" | "CRITIQUE") {
 
 export default function ProjectsPage() {
   const router = useRouter();
+  const { status: shellStatus } = useShell();
+  const sandboxMode = Boolean(shellStatus?.sandboxMode);
   const [projects, setProjects] = useState<PortfolioProjectItem[]>([]);
   const [summary, setSummary] = useState<PortfolioSummary | null>(null);
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
@@ -324,7 +327,7 @@ export default function ProjectsPage() {
           nomJeu,
           category,
           seedBlankTemplates,
-          isSandbox: false,
+          isSandbox: sandboxMode,
           provisionDrive,
         }),
       });
@@ -570,7 +573,7 @@ export default function ProjectsPage() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `portefeuille_gamersorigin_${new Date().toISOString().slice(0, 10)}.csv`;
+    a.download = `portefeuille_projets_${new Date().toISOString().slice(0, 10)}.csv`;
     a.click();
     URL.revokeObjectURL(url);
     showToast("Synthèse portefeuille exportée en CSV.");

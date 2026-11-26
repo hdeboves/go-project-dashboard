@@ -68,7 +68,7 @@ export function useTemplatesApi() {
         body: JSON.stringify({ target: category, budgetLines }),
       });
       if (!res.ok) {
-        showToast("Impossible d'enregistrer le modèle budget.");
+        showToast("Impossible d'enregistrer le modèle budget.", "error");
         return false;
       }
       showToast("Modèle vierge budget enregistré.");
@@ -88,7 +88,7 @@ export function useTemplatesApi() {
         body: JSON.stringify({ target: "RETRO_GLOBAL", retroTasks }),
       });
       if (!res.ok) {
-        showToast("Impossible d'enregistrer le modèle rétroplanning.");
+        showToast("Impossible d'enregistrer le modèle rétroplanning.", "error");
         return false;
       }
       showToast("Modèle vierge rétroplanning enregistré.");
@@ -108,7 +108,7 @@ export function useTemplatesApi() {
         body: JSON.stringify({ target: "WEEKLY_GLOBAL", weeklyTemplate }),
       });
       if (!res.ok) {
-        showToast("Impossible d'enregistrer le modèle Weekly.");
+        showToast("Impossible d'enregistrer le modèle Weekly.", "error");
         return false;
       }
       showToast("Modèle vierge Weekly enregistré.");
@@ -130,7 +130,7 @@ export function useTemplatesApi() {
         body: JSON.stringify({ target, reset: true }),
       });
       if (!res.ok) {
-        showToast("Impossible de réinitialiser le modèle.");
+        showToast("Impossible de réinitialiser le modèle.", "error");
         return false;
       }
       showToast("Modèle réinitialisé par défaut.");

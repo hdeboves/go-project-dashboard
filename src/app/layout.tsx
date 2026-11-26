@@ -16,16 +16,20 @@ const jetbrainsMono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "GO Project Hub — GamersOrigin",
+  title: {
+    default: "Project Hub — GamersOrigin & L'Intrus",
+    template: "%s · Project Hub",
+  },
   description:
-    "Gestion de projet, budget, factures et livrables clients pour les équipes GamersOrigin.",
+    "Pilotage de projets, budgets, factures et livrables clients pour les équipes GamersOrigin & L'Intrus.",
 };
 
 const THEME_INIT_SCRIPT = `
 (function() {
   try {
     var saved = localStorage.getItem('go-theme');
-    if (saved === 'dark') {
+    var prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+    if (saved === 'dark' || (!saved && prefersDark)) {
       document.documentElement.classList.add('dark');
     } else {
       document.documentElement.classList.remove('dark');

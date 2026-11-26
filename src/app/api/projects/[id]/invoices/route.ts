@@ -11,6 +11,7 @@ import { AppHttpError } from "@/lib/errors";
 import {
   InvoiceCpConflictError,
   processInvoicePdfIngestion,
+  stripInvoiceBinaries,
 } from "@/lib/invoices/ingest";
 
 const JsonInvoiceUploadSchema = z.object({
@@ -39,9 +40,44 @@ export async function GET(
     const invoices = await prisma.invoice.findMany({
       where: buildVisibleInvoicesWhere(id, currentUser),
       orderBy: { createdAt: "desc" },
+      select: {
+        id: true,
+        projectId: true,
+        uploadedById: true,
+        budgetLineId: true,
+        quoteId: true,
+        gmailMessageId: true,
+        originalFilename: true,
+        renamedFilename: true,
+        driveFileId: true,
+        vendorName: true,
+        invoiceNumber: true,
+        supplierInvoiceNumber: true,
+        invoiceDate: true,
+        amountHt: true,
+        tvaAmount: true,
+        amountTtc: true,
+        invoiceType: true,
+        prestationLabel: true,
+        detectedCodeProjet: true,
+        projectCodesJson: true,
+        vigilanceDriveFileId: true,
+        vigilanceFilename: true,
+        cpConflict: true,
+        status: true,
+        pennylaneDraftId: true,
+        extractedJson: true,
+        stepDriveDone: true,
+        stepSheetDone: true,
+        stepGmailDone: true,
+        createdAt: true,
+        updatedAt: true,
+      },
     });
 
-    return NextResponse.json({ invoices });
+    return NextResponse.json({
+      invoices: invoices.map((inv) => stripInvoiceBinaries(inv)),
+    });
   } catch (err) {
     return toErrorResponse(err);
   }
@@ -141,6 +177,7 @@ export async function POST(
         {
           ok: true,
           ...result,
+          invoice: stripInvoiceBinaries(result.invoice),
         },
         { status: 201 }
       );
@@ -153,7 +190,7 @@ export async function POST(
             detectedCps: err.result.detectedCps,
             conflictingCps: err.result.conflictingCps,
             result: err.result,
-            invoice: err.invoice,
+            invoice: stripInvoiceBinaries(err.invoice),
           },
           { status: 409 }
         );

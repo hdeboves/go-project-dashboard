@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { toErrorResponse } from "@/lib/api-error";
+import { assertProjectAccess, getCurrentUser } from "@/lib/auth/session";
 import {
   deleteCalendarRule,
   getCalendarState,
@@ -43,6 +44,8 @@ export async function GET(
 ) {
   try {
     const { id } = await context.params;
+    const currentUser = await getCurrentUser(prisma);
+    await assertProjectAccess(prisma, id, currentUser, "VIEW");
     const state = await getCalendarState(prisma, id);
     return NextResponse.json(state);
   } catch (err) {
@@ -56,6 +59,8 @@ export async function POST(
 ) {
   try {
     const { id } = await context.params;
+    const currentUser = await getCurrentUser(prisma);
+    await assertProjectAccess(prisma, id, currentUser, "EDIT");
     let rawBody: unknown = {};
     const text = await req.text();
     if (text.trim().length > 0) {
@@ -129,6 +134,8 @@ export async function PATCH(
 ) {
   try {
     const { id } = await context.params;
+    const currentUser = await getCurrentUser(prisma);
+    await assertProjectAccess(prisma, id, currentUser, "EDIT");
     const rawBody: unknown = await req.json();
     const ruleInput = UpsertRuleSchema.parse(rawBody);
     const rule = await upsertCalendarRule(prisma, id, {
@@ -147,6 +154,8 @@ export async function DELETE(
 ) {
   try {
     const { id } = await context.params;
+    const currentUser = await getCurrentUser(prisma);
+    await assertProjectAccess(prisma, id, currentUser, "EDIT");
     const ruleId = req.nextUrl.searchParams.get("ruleId")?.trim() ?? "";
     if (!ruleId) {
       throw new AppHttpError(

@@ -75,7 +75,7 @@ export function WeeklyTemplateEditor({
           </div>
           <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
             Configurez la trame par défaut (prochaines étapes Client et
-            GamersOrigin) chargée lorsqu&apos;on démarre un Weekly vierge.
+            Agence) chargée lorsqu&apos;on démarre un Weekly vierge.
           </p>
         </div>
 
@@ -181,7 +181,7 @@ export function WeeklyTemplateEditor({
           <div className="space-y-2.5 rounded-xl border border-slate-200/80 bg-slate-50/50 p-4 dark:border-slate-800 dark:bg-slate-900/40">
             <div className="flex items-center justify-between">
               <h3 className="text-xs font-bold text-slate-800 dark:text-slate-100">
-                Prochaines étapes — Côté GamersOrigin
+                Prochaines étapes — Côté Agence
               </h3>
               <button
                 type="button"

@@ -151,7 +151,7 @@ export async function provisionProjectCalendar(
       summary,
       description:
         opts?.description ??
-        `Agenda projet GamersOrigin — CP ${project.codeProjet} (${project.client} / ${project.nomJeu})`,
+        `Agenda projet — Code projet ${project.codeProjet} (${project.client} / ${project.nomJeu})`,
       timeZone: "Europe/Paris",
     });
 

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { toErrorResponse } from "@/lib/api-error";
+import { assertProjectAccess, getCurrentUser } from "@/lib/auth/session";
 import { getGoogleGateway } from "@/lib/container";
 import { prisma } from "@/lib/prisma";
 import {
@@ -22,6 +23,8 @@ export async function GET(
 ) {
   try {
     const { id } = await context.params;
+    const currentUser = await getCurrentUser(prisma);
+    await assertProjectAccess(prisma, id, currentUser, "VIEW");
     const fromId = req.nextUrl.searchParams.get("fromId");
     const toId = req.nextUrl.searchParams.get("toId");
 
@@ -41,6 +44,8 @@ export async function POST(
 ) {
   try {
     const { id } = await context.params;
+    const currentUser = await getCurrentUser(prisma);
+    await assertProjectAccess(prisma, id, currentUser, "EDIT");
     let rawBody: unknown = {};
     const text = await req.text();
     if (text.trim().length > 0) {

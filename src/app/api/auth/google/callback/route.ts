@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { toErrorResponse } from "@/lib/api-error";
 import {
+  isAllowedWorkspaceEmail,
   setUserSessionCookie,
   upsertUserByEmail,
 } from "@/lib/auth/session";
@@ -47,12 +48,28 @@ export async function GET(req: NextRequest) {
       harnessRootUrl,
     });
 
+    if (!isAllowedWorkspaceEmail(oauthResult.userEmail)) {
+      throw new AppHttpError(
+        403,
+        "EMAIL_DOMAIN_FORBIDDEN",
+        `Accès refusé pour ${oauthResult.userEmail}. Seuls les comptes Google Workspace @gamersorigin.com et @lintrus.fr sont autorisés.`
+      );
+    }
+
     const user = await upsertUserByEmail(prisma, {
       email: oauthResult.userEmail,
       name: oauthResult.userName,
     });
 
-    const redirectUrl = new URL("/settings?oauth_status=connected", req.url);
+    // Link this Google OAuth connection to the signed-in user so Gmail drafts go to THEIR inbox
+    await prisma.googleConnection
+      .update({
+        where: { userEmail: oauthResult.userEmail },
+        data: { userId: user.id },
+      })
+      .catch(() => undefined);
+
+    const redirectUrl = new URL("/?oauth_status=connected", req.url);
     const response = NextResponse.redirect(redirectUrl);
     response.cookies.delete(OAUTH_STATE_COOKIE_NAME);
     setUserSessionCookie(response, user.id);

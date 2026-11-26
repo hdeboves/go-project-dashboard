@@ -1,5 +1,7 @@
+import { Prisma } from "@prisma/client";
 import { NextResponse } from "next/server";
 import { ZodError } from "zod";
+import { CryptoKeyError } from "@/lib/crypto";
 import {
   InternalOnlySyncForbiddenError,
   RetroplanningPermanentSyncForbiddenError,
@@ -94,8 +96,54 @@ export function toErrorResponse(err: unknown): NextResponse {
     );
   }
 
+  if (err instanceof CryptoKeyError) {
+    console.error("[CRYPTO_KEY_ERROR]", err.message);
+    return NextResponse.json(
+      {
+        error: "Configuration de chiffrement serveur incomplète.",
+        code: "CRYPTO_KEY_ERROR",
+      },
+      { status: 500 }
+    );
+  }
+
+  if (err instanceof Prisma.PrismaClientKnownRequestError) {
+    if (err.code === "P2002") {
+      return NextResponse.json(
+        {
+          error: "Un enregistrement identique existe déjà.",
+          code: "UNIQUE_CONSTRAINT_VIOLATION",
+        },
+        { status: 409 }
+      );
+    }
+    if (err.code === "P2025") {
+      return NextResponse.json(
+        {
+          error: "Élément introuvable.",
+          code: "NOT_FOUND",
+        },
+        { status: 404 }
+      );
+    }
+    if (err.code === "P2003") {
+      return NextResponse.json(
+        {
+          error: "Référence liée invalide ou introuvable.",
+          code: "FOREIGN_KEY_VIOLATION",
+        },
+        { status: 400 }
+      );
+    }
+  }
+
+  console.error("[API_INTERNAL_ERROR]", err);
   const message =
-    err instanceof Error ? err.message : "Erreur interne inattendue.";
+    process.env.NODE_ENV === "production"
+      ? "Une erreur interne est survenue. Veuillez réessayer."
+      : err instanceof Error
+        ? err.message
+        : "Erreur interne inattendue.";
   return NextResponse.json(
     {
       error: message,

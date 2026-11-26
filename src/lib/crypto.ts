@@ -49,6 +49,11 @@ function resolveMasterKey(): Buffer {
       }
     }
   } else {
+    if (process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME) {
+      throw new CryptoKeyError(
+        "Variable d'environnement APP_ENCRYPTION_KEY manquante en environnement serverless."
+      );
+    }
     if (fs.existsSync(/*turbopackIgnore: true*/ keyPath)) {
       const hex = fs.readFileSync(/*turbopackIgnore: true*/ keyPath, "utf8").trim();
       if (!/^[0-9a-fA-F]{64}$/.test(hex)) {

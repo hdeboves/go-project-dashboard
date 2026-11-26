@@ -95,7 +95,7 @@ export const DEFAULT_BUDGET_TEMPLATES: Record<
       category: "CONCEPTION & GAME DESIGN",
       objet: "Cadrage créatif & Game Design Document (GDD)",
       expenseType: "RH Internes",
-      realisePar: "Interne GO",
+      realisePar: "Interne agence",
     },
     {
       category: "CONCEPTION & GAME DESIGN",
@@ -146,19 +146,19 @@ export const DEFAULT_BUDGET_TEMPLATES: Record<
       category: "GESTION DE PROJET & FRAIS DIVERS",
       objet: "Direction & Gestion de projet",
       expenseType: "RH Internes",
-      realisePar: "Interne GO",
+      realisePar: "Interne agence",
     },
     {
       category: "GESTION DE PROJET & FRAIS DIVERS",
       objet: "Licences logiciels, Serveurs & Matériel",
       expenseType: "Amortissement",
-      realisePar: "Interne GO",
+      realisePar: "Interne agence",
     },
     {
       category: "GESTION DE PROJET & FRAIS DIVERS",
       objet: "Reporting & Bilan post-opération",
       expenseType: "RH Internes",
-      realisePar: "Interne GO",
+      realisePar: "Interne agence",
     },
   ],
   YOUTUBE: [
@@ -166,7 +166,7 @@ export const DEFAULT_BUDGET_TEMPLATES: Record<
       category: "PRÉ-PRODUCTION & ÉCRITURE",
       objet: "Concept créatif, Script & Conducteur",
       expenseType: "RH Internes",
-      realisePar: "Interne GO",
+      realisePar: "Interne agence",
     },
     {
       category: "PRÉ-PRODUCTION & ÉCRITURE",
@@ -187,7 +187,7 @@ export const DEFAULT_BUDGET_TEMPLATES: Record<
       category: "TOURNAGE & STUDIO",
       objet: "Location / Amortissement matériel caméra & son",
       expenseType: "Amortissement",
-      realisePar: "Interne GO",
+      realisePar: "Interne agence",
     },
     {
       category: "TOURNAGE & STUDIO",
@@ -228,7 +228,7 @@ export const DEFAULT_BUDGET_TEMPLATES: Record<
       category: "GESTION DE PROJET",
       objet: "Coordination de production & Suivi client",
       expenseType: "RH Internes",
-      realisePar: "Interne GO",
+      realisePar: "Interne agence",
     },
   ],
   EVENEMENT: [
@@ -296,13 +296,13 @@ export const DEFAULT_BUDGET_TEMPLATES: Record<
       category: "SÉCURITÉ & GESTION DE PROJET",
       objet: "Amortissement matériel interne événementiel",
       expenseType: "Amortissement",
-      realisePar: "Interne GO",
+      realisePar: "Interne agence",
     },
     {
       category: "SÉCURITÉ & GESTION DE PROJET",
       objet: "Direction de production & Coordination terrain",
       expenseType: "RH Internes",
-      realisePar: "Interne GO",
+      realisePar: "Interne agence",
     },
   ],
   SPONSOR: [
@@ -310,13 +310,13 @@ export const DEFAULT_BUDGET_TEMPLATES: Record<
       category: "DROITS & STRATÉGIE PARTENARIAT",
       objet: "Droits d'image & Visibilité marque (Maillot / Équipe)",
       expenseType: "RH Internes",
-      realisePar: "Interne GO",
+      realisePar: "Interne agence",
     },
     {
       category: "DROITS & STRATÉGIE PARTENARIAT",
       objet: "Direction stratégique & Plan d'activation annuel",
       expenseType: "RH Internes",
-      realisePar: "Interne GO",
+      realisePar: "Interne agence",
     },
     {
       category: "CONTENUS & ACTIVATIONS SOCIALES",
@@ -362,13 +362,13 @@ export const DEFAULT_BUDGET_TEMPLATES: Record<
       category: "SUIVI & REPORTING",
       objet: "Account Management & Comités de pilotage",
       expenseType: "RH Internes",
-      realisePar: "Interne GO",
+      realisePar: "Interne agence",
     },
     {
       category: "SUIVI & REPORTING",
       objet: "Outils de tracking & Bilan ROI / Valorisation média",
       expenseType: "Amortissement",
-      realisePar: "Interne GO",
+      realisePar: "Interne agence",
     },
   ],
 };

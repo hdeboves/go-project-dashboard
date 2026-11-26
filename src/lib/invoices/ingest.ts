@@ -22,6 +22,30 @@ import {
   validatePdfBuffer,
 } from "@/lib/invoices/pdf-text";
 import { buildValidatedInvoiceFilename } from "@/lib/shared/filenames";
+import { findValidVendorVigilance } from "@/lib/vendors/vendor-service";
+
+export function stripInvoiceBinaries<
+  T extends {
+    extractedJson?: string | null;
+    pdfData?: unknown;
+    vigilancePdfData?: unknown;
+  },
+>(invoice: T): Omit<T, "pdfData" | "vigilancePdfData"> {
+  const copy = { ...invoice } as Record<string, unknown>;
+  delete copy.pdfData;
+  delete copy.vigilancePdfData;
+  if (typeof copy.extractedJson === "string" && copy.extractedJson.includes("pdfBase64")) {
+    try {
+      const parsed = JSON.parse(copy.extractedJson) as Record<string, unknown>;
+      delete parsed.pdfBase64;
+      delete parsed.localPdfPath;
+      copy.extractedJson = JSON.stringify(parsed);
+    } catch {
+      // keep as-is
+    }
+  }
+  return copy as Omit<T, "pdfData" | "vigilancePdfData">;
+}
 
 export class InvoiceCpConflictError extends CpConflictError {
   readonly invoice: Invoice;
@@ -428,8 +452,8 @@ export async function processInvoicePdfIngestion(params: {
     });
   }
 
-  const pdfBase64 =
-    pdfBuffer.length <= MAX_DB_PDF_BYTES ? pdfBuffer.toString("base64") : undefined;
+  const pdfBytes =
+    pdfBuffer.length <= MAX_DB_PDF_BYTES ? new Uint8Array(pdfBuffer) : undefined;
 
   const amountHt = round2(Math.max(0, extracted.montantHT));
   let tvaAmount = 0;
@@ -460,7 +484,7 @@ export async function processInvoicePdfIngestion(params: {
         : round2(amountHt + tvaAmount);
   }
 
-  // Keep supplier's raw invoice reference, and compute sequential 1..N number if requested
+  // Keep supplier's raw invoice reference, and allocate atomic sequential 1..N number if requested
   const supplierInvoiceNumber = (extracted.numeroFacture ?? "").trim();
   const existingProjectInvoices = await prisma.invoice.findMany({
     where: {
@@ -472,15 +496,36 @@ export async function processInvoicePdfIngestion(params: {
       id: true,
       status: true,
       invoiceNumber: true,
-      extractedJson: true,
+      supplierInvoiceNumber: true,
     },
   });
 
-  const assignedInvoiceNumber = useSequentialInvoiceNumber
-    ? computeNextSequentialInvoiceNumber(
+  let assignedInvoiceNumber = supplierInvoiceNumber;
+  if (useSequentialInvoiceNumber) {
+    const fallbackNext = Number.parseInt(
+      computeNextSequentialInvoiceNumber(
         existingProjectInvoices.map((inv) => inv.invoiceNumber)
-      )
-    : supplierInvoiceNumber;
+      ),
+      10
+    );
+    const bumped = await prisma.project.update({
+      where: { id: project.id },
+      data: {
+        nextInvoiceSeq:
+          project.nextInvoiceSeq >= fallbackNext - 1
+            ? { increment: 1 }
+            : fallbackNext,
+      },
+      select: { nextInvoiceSeq: true },
+    });
+    assignedInvoiceNumber = String(bumped.nextInvoiceSeq);
+  }
+
+  // Auto-attach valid Vendor URSSAF attestation (< 6 months old) from Coffre Prestataires
+  const validVendorVigilance = await findValidVendorVigilance(
+    prisma,
+    extracted.prestataire
+  ).catch(() => null);
 
   // Auto-match Quote from PDF text / vendor / HT amount
   const matchedQuote = matchQuoteForInvoice(quotes, {
@@ -540,6 +585,7 @@ export async function processInvoicePdfIngestion(params: {
         renamedFilename: autoRenamedFilename,
         vendorName: extracted.prestataire,
         invoiceNumber: assignedInvoiceNumber,
+        supplierInvoiceNumber: supplierInvoiceNumber || null,
         invoiceDate: extracted.dateFacture,
         amountHt,
         tvaAmount,
@@ -549,6 +595,9 @@ export async function processInvoicePdfIngestion(params: {
         detectedCodeProjet:
           cpCheck.conflictingCps[0] ?? extracted.codeProjetDetecte ?? null,
         projectCodesJson: JSON.stringify(detectedProjectCodes),
+        vigilanceDriveFileId: validVendorVigilance?.vigilanceDriveFileId ?? null,
+        vigilanceFilename: validVendorVigilance?.vigilanceFilename ?? null,
+        ...(pdfBytes ? { pdfData: pdfBytes } : {}),
         cpConflict: true,
         status: "CONFLICT_BLOCKED",
         extractedJson: JSON.stringify({
@@ -557,7 +606,6 @@ export async function processInvoicePdfIngestion(params: {
           localPdfTextSnippet: localPdfText.slice(0, 500),
           cpCheck,
           attachmentId: attachmentId ?? null,
-          ...(pdfBase64 ? { pdfBase64 } : {}),
         }),
       },
     });
@@ -595,28 +643,16 @@ export async function processInvoicePdfIngestion(params: {
     };
   }
 
-  // 7. Duplicate supplier invoiceNumber detection within project
+  // 7. Duplicate supplier invoiceNumber detection within project (indexed, zero extractedJson scan!)
   const normSupplierNum = normalizeInvoiceNumber(supplierInvoiceNumber);
   let duplicateOf: { id: string; status: string } | null = null;
   if (normSupplierNum) {
     duplicateOf =
-      existingProjectInvoices.find((inv) => {
-        if (normalizeInvoiceNumber(inv.invoiceNumber) === normSupplierNum) {
-          return true;
-        }
-        try {
-          const parsed = JSON.parse(inv.extractedJson || "{}") as {
-            supplierInvoiceNumber?: string | null;
-          };
-          return (
-            parsed.supplierInvoiceNumber &&
-            normalizeInvoiceNumber(parsed.supplierInvoiceNumber) ===
-              normSupplierNum
-          );
-        } catch {
-          return false;
-        }
-      }) ?? null;
+      existingProjectInvoices.find(
+        (inv) =>
+          normalizeInvoiceNumber(inv.invoiceNumber) === normSupplierNum ||
+          normalizeInvoiceNumber(inv.supplierInvoiceNumber) === normSupplierNum
+      ) ?? null;
   }
 
   const isDuplicate = Boolean(duplicateOf);
@@ -655,6 +691,7 @@ export async function processInvoicePdfIngestion(params: {
       renamedFilename: autoRenamedFilename,
       vendorName: extracted.prestataire,
       invoiceNumber: assignedInvoiceNumber,
+      supplierInvoiceNumber: supplierInvoiceNumber || null,
       invoiceDate: extracted.dateFacture,
       amountHt,
       tvaAmount,
@@ -665,6 +702,9 @@ export async function processInvoicePdfIngestion(params: {
         extracted.codeProjetDetecte ??
         (cpCheck.detectedCps[0] || project.codeProjet),
       projectCodesJson: JSON.stringify(detectedProjectCodes),
+      vigilanceDriveFileId: validVendorVigilance?.vigilanceDriveFileId ?? null,
+      vigilanceFilename: validVendorVigilance?.vigilanceFilename ?? null,
+      ...(pdfBytes ? { pdfData: pdfBytes } : {}),
       cpConflict: false,
       status: "PENDING_VALIDATION",
       extractedJson: JSON.stringify({
@@ -690,7 +730,6 @@ export async function processInvoicePdfIngestion(params: {
         duplicateOfInvoiceId: duplicateOf?.id ?? null,
         attachmentId: attachmentId ?? null,
         localPdfPath,
-        ...(pdfBase64 ? { pdfBase64 } : {}),
       }),
     },
   });

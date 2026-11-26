@@ -1,49 +1,51 @@
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import { toErrorResponse } from "@/lib/api-error";
+import { ACTIVE_PROJECT_COOKIE } from "@/lib/auth/cookies";
 import {
   buildVisibleInvoicesWhere,
   buildVisibleProjectsWhere,
   getCurrentUser,
   getProjectAccess,
+  isGoogleOAuthConfigured,
+  isStrictAuthEnforced,
   toPublicUser,
 } from "@/lib/auth/session";
 import { decryptSecret } from "@/lib/crypto";
 import { isSandboxModeEnabled } from "@/lib/google/sandbox-guard";
 import { prisma } from "@/lib/prisma";
-
-export const ACTIVE_PROJECT_COOKIE = "go_active_project_id";
+import { startOfParisTodayUtc } from "@/lib/shared/dates";
 
 export async function GET() {
   try {
-    const [cookieStore, currentUser, settingsRows, googleConn] =
+    const [cookieStore, currentUser, geminiSetting, oauthConfigured] =
       await Promise.all([
         cookies(),
         getCurrentUser(prisma),
-        prisma.appSetting.findMany({
-          where: { key: { in: ["ACTIVE_PROJECT_ID", "GEMINI_API_KEY"] } },
+        prisma.appSetting.findUnique({
+          where: { key: "GEMINI_API_KEY" },
         }),
-        prisma.googleConnection.findFirst({
-          orderBy: { updatedAt: "desc" },
-          select: { userEmail: true, scope: true, expiresAt: true },
-        }),
+        isGoogleOAuthConfigured(prisma),
       ]);
 
-    const settingsMap = new Map(settingsRows.map((s) => [s.key, s]));
-    const dbActiveSetting = settingsMap.get("ACTIVE_PROJECT_ID");
-    const geminiSetting = settingsMap.get("GEMINI_API_KEY");
+    const authRequired = isStrictAuthEnforced() && oauthConfigured;
+    const isAuthenticatedOrPermissive = Boolean(currentUser) || !authRequired;
 
-    const cookieProjectId =
-      cookieStore.get(ACTIVE_PROJECT_COOKIE)?.value ?? null;
-
-    let persistedActiveId: string | null = null;
-    if (dbActiveSetting?.valueEnc) {
-      try {
-        persistedActiveId = decryptSecret(dbActiveSetting.valueEnc);
-      } catch {
-        persistedActiveId = null;
-      }
-    }
+    const googleConn = currentUser
+      ? (await prisma.googleConnection.findUnique({
+          where: { userId: currentUser.id },
+          select: { userEmail: true, scope: true, expiresAt: true },
+        })) ??
+        (await prisma.googleConnection.findFirst({
+          orderBy: { updatedAt: "desc" },
+          select: { userEmail: true, scope: true, expiresAt: true },
+        }))
+      : !authRequired
+        ? await prisma.googleConnection.findFirst({
+            orderBy: { updatedAt: "desc" },
+            select: { userEmail: true, scope: true, expiresAt: true },
+          })
+        : null;
 
     let hasDbGemini = false;
     if (geminiSetting?.valueEnc) {
@@ -55,6 +57,31 @@ export async function GET() {
     }
     const geminiConfigured =
       hasDbGemini || Boolean(process.env.GEMINI_API_KEY?.trim());
+
+    if (!isAuthenticatedOrPermissive) {
+      return NextResponse.json({
+        projects: [],
+        activeProjectId: null,
+        activeProject: null,
+        activeProjectAccess: null,
+        currentUser: null,
+        oauthConfigured,
+        authRequired: true,
+        googleConnected: false,
+        googleEmail: null,
+        geminiConfigured,
+        sandboxMode: isSandboxModeEnabled(),
+        cpConflictCount: 0,
+        extDriftCount: 0,
+        pendingInvoicesCount: 0,
+        lateTasksCount: 0,
+        myTasksCount: 0,
+      });
+    }
+
+    const cookieProjectId =
+      cookieStore.get(ACTIVE_PROJECT_COOKIE)?.value ?? null;
+    const userLastProjectId = currentUser?.lastActiveProjectId ?? null;
 
     const projects = await prisma.project.findMany({
       where: {
@@ -83,7 +110,7 @@ export async function GET() {
       },
     });
 
-    const preferredId = cookieProjectId || persistedActiveId;
+    const preferredId = cookieProjectId || userLastProjectId;
     const activeProject =
       projects.find((p) => p.id === preferredId) ?? projects[0] ?? null;
 
@@ -92,6 +119,30 @@ export async function GET() {
     let extDriftCount = 0;
     let pendingInvoicesCount = 0;
     let lateTasksCount = 0;
+    let myTasksCount = 0;
+
+    const parisToday = startOfParisTodayUtc();
+    const visibleProjectIds = projects.map((p) => p.id);
+
+    if (visibleProjectIds.length > 0) {
+      myTasksCount = await prisma.retroTask.count({
+        where: {
+          projectId: { in: visibleProjectIds },
+          status: { not: "TERMINE" },
+          ...(currentUser
+            ? {
+                OR: [
+                  { ownerUserId: currentUser.id },
+                  {
+                    ownerUserId: null,
+                    project: { ownerId: currentUser.id },
+                  },
+                ],
+              }
+            : {}),
+        },
+      });
+    }
 
     if (activeProject) {
       const [access, invoiceConflicts, drifts, pendingInvs, lateTasks] =
@@ -120,7 +171,7 @@ export async function GET() {
             where: {
               projectId: activeProject.id,
               status: { not: "TERMINE" },
-              endDate: { lt: new Date() },
+              endDate: { lt: parisToday },
             },
           }),
         ]);
@@ -137,6 +188,8 @@ export async function GET() {
       activeProject,
       activeProjectAccess,
       currentUser: currentUser ? toPublicUser(currentUser) : null,
+      oauthConfigured,
+      authRequired,
       googleConnected: Boolean(googleConn),
       googleEmail: googleConn?.userEmail ?? null,
       geminiConfigured,
@@ -145,6 +198,7 @@ export async function GET() {
       extDriftCount,
       pendingInvoicesCount,
       lateTasksCount,
+      myTasksCount,
     });
   } catch (err) {
     return toErrorResponse(err);

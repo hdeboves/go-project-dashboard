@@ -139,9 +139,7 @@ export function RetroplanningWorkspace() {
             ? `${proj.client} — ${proj.nomJeu} (CP ${proj.codeProjet})`
             : `Projet actif`
         );
-        if (proj?.retroplanningSheetId) {
-          setRetroSheetId(proj.retroplanningSheetId);
-        }
+        setRetroSheetId(proj?.retroplanningSheetId ?? null);
 
         if (shell && !shell.googleConnected) {
           setSetupRequiredMsg(
@@ -178,9 +176,7 @@ export function RetroplanningWorkspace() {
           return;
         }
 
-        if (json.project?.retroplanningSheetId) {
-          setRetroSheetId(json.project.retroplanningSheetId);
-        }
+        setRetroSheetId(json.project?.retroplanningSheetId ?? null);
         setTasks(json.tasks ?? []);
         setProposals(json.proposals ?? []);
         setSnapshots(json.snapshots ?? []);
@@ -923,6 +919,7 @@ export function RetroplanningWorkspace() {
             activeTab === "kanban" ||
             activeTab === "timeline") && (
             <GanttBoard
+              key={`gantt-${projectId}`}
               viewMode={activeTab}
               tasks={tasks}
               onCreateTask={handleCreateTask}
@@ -933,6 +930,7 @@ export function RetroplanningWorkspace() {
 
           {activeTab === "ai" && (
             <VeilleProposalPanel
+              key={`veille-${projectId}`}
               proposals={proposals}
               tasks={tasks}
               runningVeille={runningVeille}
@@ -944,6 +942,7 @@ export function RetroplanningWorkspace() {
 
           {activeTab === "history" && (
             <SnapshotComparator
+              key={`snap-${projectId}`}
               snapshots={snapshots}
               comparison={comparison}
               creatingSnapshot={creatingSnapshot}

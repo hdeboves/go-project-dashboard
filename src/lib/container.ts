@@ -1,4 +1,5 @@
 import type { PrismaClient } from "@prisma/client";
+import { getCurrentUser } from "@/lib/auth/session";
 import { PreconditionError } from "@/lib/errors";
 import { GeminiClient, resolveGeminiApiKey } from "@/lib/gemini/client";
 import { GoogleWorkspaceGateway } from "@/lib/google/gateway";
@@ -32,7 +33,8 @@ export interface AppServices {
 
 export async function getGoogleGateway(
   activeProjectId?: string,
-  db: PrismaClient = prisma
+  db: PrismaClient = prisma,
+  userId?: string | null
 ): Promise<GoogleWorkspacePort> {
   if (isTestBoundaryHarnessActive()) {
     const boundary = globalThis.__GO_TEST_BOUNDARY__;
@@ -54,11 +56,25 @@ export async function getGoogleGateway(
       return GoogleWorkspaceGateway.fromPrisma(db, {
         activeProjectId,
         rootUrl: harnessUrl,
+        userId,
       });
     }
   }
 
-  return GoogleWorkspaceGateway.fromPrisma(db, { activeProjectId });
+  let resolvedUserId = userId ?? null;
+  if (!resolvedUserId) {
+    try {
+      const user = await getCurrentUser(db);
+      resolvedUserId = user?.id ?? null;
+    } catch {
+      resolvedUserId = null;
+    }
+  }
+
+  return GoogleWorkspaceGateway.fromPrisma(db, {
+    activeProjectId,
+    userId: resolvedUserId,
+  });
 }
 
 export async function getGeminiClient(

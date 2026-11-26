@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { toErrorResponse } from "@/lib/api-error";
-import { getCurrentUser } from "@/lib/auth/session";
+import { requireAdmin } from "@/lib/auth/session";
 import { AppHttpError } from "@/lib/errors";
 import { prisma } from "@/lib/prisma";
 
@@ -9,14 +9,7 @@ export async function GET(
   context: { params: Promise<{ backupId: string }> }
 ) {
   try {
-    const currentUser = await getCurrentUser(prisma);
-    if (currentUser && currentUser.role !== "ADMIN") {
-      throw new AppHttpError(
-        403,
-        "ADMIN_ONLY",
-        "Seul un administrateur peut télécharger un backup."
-      );
-    }
+    await requireAdmin(prisma);
 
     const { backupId } = await context.params;
     const snap = await prisma.backupSnapshot.findUnique({

@@ -1,20 +1,12 @@
 import { NextResponse } from "next/server";
 import { toErrorResponse } from "@/lib/api-error";
-import { getCurrentUser } from "@/lib/auth/session";
+import { requireAdmin } from "@/lib/auth/session";
 import { createBackupSnapshot } from "@/lib/backup/backup-service";
-import { AppHttpError } from "@/lib/errors";
 import { prisma } from "@/lib/prisma";
 
 export async function GET() {
   try {
-    const currentUser = await getCurrentUser(prisma);
-    if (currentUser && currentUser.role !== "ADMIN") {
-      throw new AppHttpError(
-        403,
-        "ADMIN_ONLY",
-        "Accès réservé aux administrateurs."
-      );
-    }
+    await requireAdmin(prisma);
 
     const backups = await prisma.backupSnapshot.findMany({
       orderBy: { createdAt: "desc" },
@@ -52,18 +44,11 @@ export async function GET() {
 
 export async function POST() {
   try {
-    const currentUser = await getCurrentUser(prisma);
-    if (currentUser && currentUser.role !== "ADMIN") {
-      throw new AppHttpError(
-        403,
-        "ADMIN_ONLY",
-        "Seul un administrateur peut lancer un backup manuel."
-      );
-    }
+    const currentUser = await requireAdmin(prisma);
 
     const result = await createBackupSnapshot(prisma, {
       trigger: "MANUAL",
-      createdBy: currentUser?.email ?? "admin",
+      createdBy: currentUser.email,
     });
 
     return NextResponse.json({ ok: true, ...result }, { status: 201 });

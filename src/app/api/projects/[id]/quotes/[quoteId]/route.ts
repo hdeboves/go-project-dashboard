@@ -6,7 +6,7 @@ import { assertProjectAccess, getCurrentUser } from "@/lib/auth/session";
 import { round2 } from "@/lib/budget/calculator";
 import { AppHttpError } from "@/lib/errors";
 import { prisma } from "@/lib/prisma";
-import { formatQuotesForProject } from "@/app/api/projects/[id]/quotes/route";
+import { formatQuotesForProject } from "@/lib/quotes/quote-service";
 
 const UpdateQuoteSchema = z.object({
   quoteNumber: z.string().trim().min(1).optional(),
@@ -45,18 +45,8 @@ export async function PATCH(
 
     const nextAmountHt =
       input.amountHt !== undefined ? round2(input.amountHt) : existing.amountHt;
-    const nextTva =
-      input.tvaAmount !== undefined
-        ? round2(input.tvaAmount)
-        : input.amountHt !== undefined
-          ? round2(nextAmountHt * 0.2)
-          : existing.tvaAmount;
-    const nextTtc =
-      input.amountTtc !== undefined
-        ? round2(input.amountTtc)
-        : input.amountHt !== undefined || input.tvaAmount !== undefined
-          ? round2(nextAmountHt + nextTva)
-          : existing.amountTtc;
+    const nextTva = 0;
+    const nextTtc = nextAmountHt;
 
     await prisma.$transaction(async (tx) => {
       if (input.budgetLineId) {
@@ -139,7 +129,7 @@ export async function PATCH(
       },
     });
 
-    const quotes = await formatQuotesForProject(id);
+    const quotes = await formatQuotesForProject(id, currentUser);
     return NextResponse.json({
       ok: true,
       quote: quotes.find((q) => q.id === quoteId) ?? null,
@@ -179,7 +169,7 @@ export async function DELETE(
       },
     });
 
-    const quotes = await formatQuotesForProject(id);
+    const quotes = await formatQuotesForProject(id, currentUser);
     return NextResponse.json({ ok: true, deletedId: quoteId, quotes });
   } catch (err) {
     return toErrorResponse(err);

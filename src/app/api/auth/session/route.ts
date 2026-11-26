@@ -4,10 +4,14 @@ import { toErrorResponse } from "@/lib/api-error";
 import {
   clearUserSessionCookie,
   getCurrentUser,
+  isAllowedWorkspaceEmail,
+  isGoogleOAuthConfigured,
+  isStrictAuthEnforced,
   setUserSessionCookie,
   toPublicUser,
   upsertUserByEmail,
 } from "@/lib/auth/session";
+import { AppHttpError } from "@/lib/errors";
 import { prisma } from "@/lib/prisma";
 
 const SignInSchema = z.object({
@@ -18,16 +22,23 @@ const SignInSchema = z.object({
 
 export async function GET() {
   try {
-    const [currentUser, allUsers] = await Promise.all([
+    const [currentUser, oauthConfigured] = await Promise.all([
       getCurrentUser(prisma),
-      prisma.user.findMany({
-        orderBy: [{ createdAt: "asc" }],
-      }),
+      isGoogleOAuthConfigured(prisma),
     ]);
+
+    const allowDirectory = Boolean(currentUser) || !isStrictAuthEnforced();
+    const allUsers = allowDirectory
+      ? await prisma.user.findMany({
+          orderBy: [{ createdAt: "asc" }],
+        })
+      : [];
 
     return NextResponse.json({
       user: currentUser ? toPublicUser(currentUser) : null,
       users: allUsers.map(toPublicUser),
+      oauthConfigured,
+      authRequired: isStrictAuthEnforced(),
     });
   } catch (err) {
     return toErrorResponse(err);
@@ -36,7 +47,24 @@ export async function GET() {
 
 export async function POST(req: NextRequest) {
   try {
+    const oauthConfigured = await isGoogleOAuthConfigured(prisma);
+    if (isStrictAuthEnforced() && oauthConfigured) {
+      throw new AppHttpError(
+        403,
+        "GOOGLE_OAUTH_REQUIRED",
+        "La connexion par email simple est désactivée. Connectez-vous avec votre compte Google Workspace (@gamersorigin.com ou @lintrus.fr)."
+      );
+    }
+
     const body = SignInSchema.parse(await req.json());
+    if (isStrictAuthEnforced() && !isAllowedWorkspaceEmail(body.email)) {
+      throw new AppHttpError(
+        403,
+        "EMAIL_DOMAIN_FORBIDDEN",
+        "Accès réservé aux comptes @gamersorigin.com et @lintrus.fr."
+      );
+    }
+
     const user = await upsertUserByEmail(prisma, {
       email: body.email,
       name: body.name,

@@ -227,7 +227,7 @@ export function ProjectShareModal({
                 required
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                placeholder="email@gamersorigin.com"
+                placeholder="prenom@gamersorigin.com ou @lintrus.fr"
                 className="rounded-xl border border-slate-200 bg-slate-50/70 px-3 py-2 text-xs text-slate-900 focus:border-indigo-400 focus:bg-white focus:outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-white"
               />
               <input
@@ -270,7 +270,7 @@ export function ProjectShareModal({
               <button
                 type="submit"
                 disabled={submitting || !email.trim()}
-                className="inline-flex items-center gap-1.5 rounded-xl bg-rose-600 px-4 py-2 text-xs font-semibold text-white hover:bg-rose-700 disabled:opacity-50"
+                className="inline-flex items-center gap-1.5 rounded-xl bg-indigo-600 px-4 py-2 text-xs font-semibold text-white hover:bg-indigo-700 disabled:opacity-50"
               >
                 <UserPlus className="h-3.5 w-3.5" />
                 {submitting ? "Partage..." : "Partager"}

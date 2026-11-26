@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import type { Invoice, PrismaClient } from "@prisma/client";
 import { z } from "zod";
 import {
@@ -33,9 +32,12 @@ import type { GoogleWorkspacePort } from "@/lib/ports";
 import {
   normalizeInvoiceNumber,
   readStagedInvoicePdf,
+  stripInvoiceBinaries,
 } from "@/lib/invoices/ingest";
 import { PROCESSED_INVOICE_GMAIL_LABEL } from "@/lib/invoices/scan-job";
+import { getParisTodayIso } from "@/lib/shared/dates";
 import { buildValidatedInvoiceFilename } from "@/lib/shared/filenames";
+import { recordVendorVigilance } from "@/lib/vendors/vendor-service";
 
 export { buildValidatedInvoiceFilename };
 
@@ -297,7 +299,7 @@ export async function validateInvoicePipeline(params: {
   const invoiceDate =
     input.invoiceDate ??
     existingInvoice.invoiceDate ??
-    new Date().toISOString().slice(0, 10);
+    getParisTodayIso();
   const amountHt = round2(input.amountHt ?? existingInvoice.amountHt);
   let tvaAmount = round2(input.tvaAmount ?? existingInvoice.tvaAmount);
   let amountTtc: number;
@@ -435,12 +437,14 @@ export async function validateInvoicePipeline(params: {
   // 6. Acquire Google Gateway BEFORE any DB writes (412 leaves DB untouched)
   const gateway = await getGoogleGateway(projectId);
 
-  // 7. Load PDF bytes (staged locally or fallback to Gmail attachment)
-  let pdfBuffer = await readStagedInvoicePdf(
-    projectId,
-    existingInvoice.id,
-    existingInvoice.extractedJson
-  );
+  // 7. Load PDF bytes (durable Postgres pdfData -> staged local -> Gmail attachment)
+  let pdfBuffer: Buffer | null = existingInvoice.pdfData
+    ? Buffer.from(existingInvoice.pdfData)
+    : await readStagedInvoicePdf(
+        projectId,
+        existingInvoice.id,
+        existingInvoice.extractedJson
+      );
 
   if (!pdfBuffer && existingInvoice.gmailMessageId) {
     try {
@@ -495,6 +499,24 @@ export async function validateInvoicePipeline(params: {
     amountHt,
   });
 
+  // Atomic concurrency lock: prevent double-click / concurrent double validation & double billing
+  const previousStatus = existingInvoice.status;
+  const lockResult = await prisma.invoice.updateMany({
+    where: {
+      id: existingInvoice.id,
+      status: { notIn: ["VALIDATING", "VALIDATED"] },
+    },
+    data: { status: "VALIDATING" },
+  });
+  if (lockResult.count === 0) {
+    throw new AppHttpError(
+      409,
+      "VALIDATION_IN_PROGRESS",
+      "Cette facture est déjà en cours de validation."
+    );
+  }
+
+  try {
   // Persist confirmed edits so partial failure retries reuse exact confirmed values
   let invoice: Invoice = await prisma.invoice.update({
     where: { id: existingInvoice.id },
@@ -553,84 +575,82 @@ export async function validateInvoicePipeline(params: {
         driveFileId: uploaded.id,
         renamedFilename,
         stepDriveDone: true,
+        pdfData: null, // Purge binary blob from Postgres now that Drive holds the durable copy
       },
     });
 
-    // If a vigilance attestation was staged locally prior to Google connection, upload it to Drive 001.3 now
-    if (invoice.vigilanceDriveFileId?.startsWith("STAGED:")) {
-      const stagedVigilancePath = invoice.vigilanceDriveFileId.slice(
-        "STAGED:".length
-      );
+    // If a vigilance attestation was persisted in Postgres prior to Google connection, upload it to Drive 001.3 now
+    if (invoice.vigilancePdfData) {
       try {
-        if (fs.existsSync(stagedVigilancePath)) {
-          const vigBuf = await fs.promises.readFile(stagedVigilancePath);
-          const vigUploaded = await gateway.drive.createFile({
-            name:
-              invoice.vigilanceFilename ??
-              `AttestationVigilance_${projectCodes.join("-")}_${invoice.id}.pdf`,
-            parentId: folder0013.driveFileId,
-            mimeType: "application/pdf",
-            body: vigBuf,
-          });
-          invoice = await prisma.invoice.update({
-            where: { id: invoice.id },
-            data: { vigilanceDriveFileId: vigUploaded.id },
-          });
-        }
+        const vigBuf = Buffer.from(invoice.vigilancePdfData);
+        const vigFilename =
+          invoice.vigilanceFilename ??
+          `AttestationVigilance_${projectCodes.join("-")}_${invoice.id}.pdf`;
+        const vigUploaded = await gateway.drive.createFile({
+          name: vigFilename,
+          parentId: folder0013.driveFileId,
+          mimeType: "application/pdf",
+          body: vigBuf,
+        });
+        invoice = await prisma.invoice.update({
+          where: { id: invoice.id },
+          data: {
+            vigilanceDriveFileId: vigUploaded.id,
+            vigilancePdfData: null,
+          },
+        });
+        await recordVendorVigilance(prisma, {
+          vendorName,
+          driveFileId: vigUploaded.id,
+          filename: vigFilename,
+        }).catch(() => undefined);
       } catch {
-        // Non-fatal
+        // Non-fatal; vigilancePdfData stays preserved for retry
       }
     }
   }
 
-  // STEP 2: Cumulate HT & Invoice Numbers Note in Sheet FIRST, then DB
+  // STEP 2: Cumulate HT & Invoice Numbers Note (re-read fresh budgetLine inside transaction to prevent lost updates!)
   if (!invoice.stepSheetDone) {
-    const nextPostOpTotalHt = fromCents(
-      toCents(budgetLine.postOpTotalHt) + toCents(amountHt)
-    );
-    const nextPostOpQty = budgetLine.postOpQty > 0 ? budgetLine.postOpQty : 1;
-    const nextPostOpDays =
-      budgetLine.postOpDays > 0 ? budgetLine.postOpDays : 1;
-    const nextPostOpUnitCost = round2(
-      nextPostOpTotalHt / (nextPostOpQty * nextPostOpDays)
-    );
-    const nextNote = buildCumulativeInvoiceNote(
-      budgetLine.invoiceNumbersNote,
-      invoiceNumber
-    );
-
-    if (project.budgetSheetId) {
-      const target = await resolveSheetPostOpTarget({
-        gateway,
-        spreadsheetId: project.budgetSheetId,
-        lineObjet: budgetLine.objet,
-        storedRowIndex: budgetLine.sheetRowIndex,
-      });
-
-      const escapedTitle = target.sheetTitle.replace(/'/g, "''");
-      const range = `'${escapedTitle}'!${colIndexToLetter(target.startCol)}${target.row}:${colIndexToLetter(target.totalCol)}${target.row}`;
-
-      await gateway.sheets.updateValues({
-        spreadsheetId: project.budgetSheetId,
-        range,
-        values: [
-          [nextPostOpQty, nextPostOpDays, nextPostOpUnitCost, nextPostOpTotalHt],
-        ],
-        valueInputOption: "USER_ENTERED",
-      });
-
-      await gateway.sheets.updateCellNote({
-        spreadsheetId: project.budgetSheetId,
-        sheetId: target.sheetId,
-        rowIndex: target.row - 1,
-        columnIndex: target.totalCol,
-        note: nextNote,
-      });
-    }
+    let sheetPayload = {
+      nextPostOpQty: 1,
+      nextPostOpDays: 1,
+      nextPostOpUnitCost: amountHt,
+      nextPostOpTotalHt: amountHt,
+      nextNote: buildCumulativeInvoiceNote(budgetLine.invoiceNumbersNote, invoiceNumber),
+      lineObjet: budgetLine.objet,
+      sheetRowIndex: budgetLine.sheetRowIndex,
+    };
 
     invoice = await prisma.$transaction(async (tx) => {
-      await tx.budgetLine.update({
+      const freshLine = await tx.budgetLine.findUniqueOrThrow({
         where: { id: budgetLine.id },
+      });
+      const nextPostOpTotalHt = fromCents(
+        toCents(freshLine.postOpTotalHt) + toCents(amountHt)
+      );
+      const nextPostOpQty = freshLine.postOpQty > 0 ? freshLine.postOpQty : 1;
+      const nextPostOpDays = freshLine.postOpDays > 0 ? freshLine.postOpDays : 1;
+      const nextPostOpUnitCost = round2(
+        nextPostOpTotalHt / (nextPostOpQty * nextPostOpDays)
+      );
+      const nextNote = buildCumulativeInvoiceNote(
+        freshLine.invoiceNumbersNote,
+        invoiceNumber
+      );
+
+      sheetPayload = {
+        nextPostOpQty,
+        nextPostOpDays,
+        nextPostOpUnitCost,
+        nextPostOpTotalHt,
+        nextNote,
+        lineObjet: freshLine.objet,
+        sheetRowIndex: freshLine.sheetRowIndex,
+      };
+
+      await tx.budgetLine.update({
+        where: { id: freshLine.id },
         data: {
           postOpQty: nextPostOpQty,
           postOpDays: nextPostOpDays,
@@ -645,6 +665,40 @@ export async function validateInvoicePipeline(params: {
         data: { stepSheetDone: true },
       });
     });
+
+    if (project.budgetSheetId) {
+      const target = await resolveSheetPostOpTarget({
+        gateway,
+        spreadsheetId: project.budgetSheetId,
+        lineObjet: sheetPayload.lineObjet,
+        storedRowIndex: sheetPayload.sheetRowIndex,
+      });
+
+      const escapedTitle = target.sheetTitle.replace(/'/g, "''");
+      const range = `'${escapedTitle}'!${colIndexToLetter(target.startCol)}${target.row}:${colIndexToLetter(target.totalCol)}${target.row}`;
+
+      await gateway.sheets.updateValues({
+        spreadsheetId: project.budgetSheetId,
+        range,
+        values: [
+          [
+            sheetPayload.nextPostOpQty,
+            sheetPayload.nextPostOpDays,
+            sheetPayload.nextPostOpUnitCost,
+            sheetPayload.nextPostOpTotalHt,
+          ],
+        ],
+        valueInputOption: "USER_ENTERED",
+      });
+
+      await gateway.sheets.updateCellNote({
+        spreadsheetId: project.budgetSheetId,
+        sheetId: target.sheetId,
+        rowIndex: target.row - 1,
+        columnIndex: target.totalCol,
+        note: sheetPayload.nextNote,
+      });
+    }
   }
 
   // STEP 3: Create Pennylane Gmail Draft ONLY (never send! Strictly 1 invoice per email!)
@@ -772,15 +826,25 @@ export async function validateInvoicePipeline(params: {
   return {
     ok: true,
     alreadyValidated: false,
-    invoice,
+    invoice: stripInvoiceBinaries(invoice),
     pennylaneDraft: {
       draftId: invoice.pennylaneDraftId,
       to: pennylane.to,
-      cc: pennylane.cc,
+      cc: finalCc,
       subject,
       attachmentFilename: renamedFilename,
       sent: false,
     },
     ...computed,
   };
+  } catch (err) {
+    // Release lock cleanly if validation failed before reaching VALIDATED
+    await prisma.invoice
+      .updateMany({
+        where: { id: existingInvoice.id, status: "VALIDATING" },
+        data: { status: previousStatus },
+      })
+      .catch(() => undefined);
+    throw err;
+  }
 }

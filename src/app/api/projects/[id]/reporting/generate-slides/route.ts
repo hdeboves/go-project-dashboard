@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { toErrorResponse } from "@/lib/api-error";
+import { assertProjectAccess, getCurrentUser } from "@/lib/auth/session";
 import { getGoogleGateway } from "@/lib/container";
 import { AppHttpError } from "@/lib/errors";
 import { prisma } from "@/lib/prisma";
@@ -12,6 +13,8 @@ export async function POST(
 ) {
   try {
     const { id } = await context.params;
+    const currentUser = await getCurrentUser(prisma);
+    await assertProjectAccess(prisma, id, currentUser, "EDIT");
     const project = await prisma.project.findUnique({ where: { id } });
     if (!project) {
       throw new AppHttpError(404, "PROJECT_NOT_FOUND", "Projet introuvable.");

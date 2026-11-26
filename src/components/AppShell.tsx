@@ -6,6 +6,7 @@ import {
   AlertTriangle,
   BarChart3,
   Calendar,
+  CheckSquare,
   ChevronDown,
   Eye,
   FileSpreadsheet,
@@ -13,6 +14,7 @@ import {
   GanttChartSquare,
   Home,
   LayoutGrid,
+  LogIn,
   Menu,
   Mic,
   Moon,
@@ -28,53 +30,14 @@ import {
   Users,
   X,
 } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AvatarDisplay } from "@/components/AvatarDisplay";
 import { CommandPalette } from "@/components/CommandPalette";
 import { NotificationBell } from "@/components/NotificationBell";
 import { ProjectShareModal } from "@/components/ProjectShareModal";
+import { ShellContext, type ShellStatus } from "@/components/ShellContext";
 import { ToastContainer } from "@/components/ToastContainer";
 import { showToast } from "@/lib/toast";
-
-interface ShellProject {
-  id: string;
-  codeProjet: string;
-  client: string;
-  nomJeu: string;
-  category?: string;
-  isSandbox: boolean;
-}
-
-interface ShellCurrentUser {
-  id: string;
-  email: string;
-  name: string;
-  jobTitle: string | null;
-  role: string;
-  avatarId: string;
-  avatarBg: string;
-}
-
-interface ShellStatus {
-  projects: ShellProject[];
-  activeProjectId: string | null;
-  activeProject: ShellProject | null;
-  activeProjectAccess?: {
-    canView: boolean;
-    canEdit: boolean;
-    canManageMembers: boolean;
-    accessRole: string | null;
-  } | null;
-  currentUser?: ShellCurrentUser | null;
-  googleConnected: boolean;
-  googleEmail: string | null;
-  geminiConfigured: boolean;
-  sandboxMode: boolean;
-  cpConflictCount: number;
-  extDriftCount: number;
-  pendingInvoicesCount?: number;
-  lateTasksCount?: number;
-}
 
 const NAV_PRIMARY = [
   { href: "/", label: "Cockpit Projet", icon: Home },
@@ -92,6 +55,7 @@ const NAV_CLIENT = [
 
 const PAGE_TITLES: Record<string, string> = {
   "/": "Cockpit Projet",
+  "/my-tasks": "Mes Tâches",
   "/projects": "Vue d'ensemble (Tous les projets)",
   "/retroplanning": "Tâches & Planning",
   "/budget": "Budget & Factures",
@@ -111,10 +75,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [status, setStatus] = useState<ShellStatus | null>(null);
+  const [statusLoading, setStatusLoading] = useState(true);
   const [switching, setSwitching] = useState(false);
   const [theme, setTheme] = useState<"light" | "dark">("light");
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
+  const [isMac, setIsMac] = useState(false);
+  const channelRef = useRef<BroadcastChannel | null>(null);
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -134,6 +101,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       if (!active) return;
       const isDark = document.documentElement.classList.contains("dark");
       setTheme(isDark ? "dark" : "light");
+      setIsMac(/Mac|iPhone|iPad|iPod/i.test(navigator.platform || navigator.userAgent));
       try {
         if (localStorage.getItem("go-sidebar-collapsed") === "1") {
           setSidebarCollapsed(true);
@@ -179,6 +147,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       }
     } catch {
       // ignore transient errors
+    } finally {
+      setStatusLoading(false);
     }
   }, []);
 
@@ -193,50 +163,132 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         }
       } catch {
         // ignore transient errors
+      } finally {
+        if (active) setStatusLoading(false);
       }
     };
     void run();
+
     const handler = () => {
       void loadStatus();
     };
     window.addEventListener("go:shell-refresh", handler);
+
+    let bc: BroadcastChannel | null = null;
+    if (typeof BroadcastChannel !== "undefined") {
+      try {
+        bc = new BroadcastChannel("project-hub-sync");
+        channelRef.current = bc;
+        bc.onmessage = (event) => {
+          if (event.data?.type === "refresh") {
+            void loadStatus();
+            router.refresh();
+          }
+        };
+      } catch {
+        bc = null;
+      }
+    }
+
     return () => {
       active = false;
       window.removeEventListener("go:shell-refresh", handler);
-    };
-  }, [loadStatus]);
-
-  async function handleProjectChange(projectId: string) {
-    if (!projectId) return;
-    setSwitching(true);
-    try {
-      const res = await fetch("/api/shell/active-project", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ projectId }),
-      });
-      if (res.ok) {
-        const picked = status?.projects.find((p) => p.id === projectId);
-        if (picked) {
-          showToast(`Projet actif : ${picked.client} — ${picked.nomJeu}`);
-        }
-        router.refresh();
-        window.dispatchEvent(new CustomEvent("go:shell-refresh"));
+      if (bc) {
+        bc.close();
+        channelRef.current = null;
       }
-    } finally {
-      setSwitching(false);
-    }
-  }
+    };
+  }, [loadStatus, router]);
+
+  const handleProjectChange = useCallback(
+    async (projectId: string) => {
+      if (!projectId) return;
+      setSwitching(true);
+      try {
+        const res = await fetch("/api/shell/active-project", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ projectId }),
+        });
+        if (res.ok) {
+          const picked = status?.projects.find((p) => p.id === projectId);
+          if (picked) {
+            showToast(`Projet actif : ${picked.client} — ${picked.nomJeu}`);
+          }
+          await loadStatus();
+          router.refresh();
+          window.dispatchEvent(new CustomEvent("go:shell-refresh"));
+          channelRef.current?.postMessage({ type: "refresh", projectId });
+        }
+      } finally {
+        setSwitching(false);
+      }
+    },
+    [status?.projects, loadStatus, router]
+  );
+
+  const shellContextValue = useMemo(
+    () => ({
+      status,
+      loading: statusLoading,
+      refreshShell: loadStatus,
+      selectProject: handleProjectChange,
+    }),
+    [status, statusLoading, loadStatus, handleProjectChange]
+  );
 
   const activeProject = status?.activeProject ?? null;
   const settingsActive = pathname === "/settings";
   const projectsActive = pathname === "/projects";
+  const myTasksActive = pathname === "/my-tasks";
   const allConnected = Boolean(
     status?.googleConnected && status?.geminiConfigured
   );
   const currentPageTitle = PAGE_TITLES[pathname] ?? "Espace Projet";
+  const showAuthGate =
+    !statusLoading &&
+    Boolean(status?.authRequired) &&
+    !status?.currentUser &&
+    pathname !== "/settings";
+
+  if (showAuthGate) {
+    return (
+      <ShellContext.Provider value={shellContextValue}>
+        <div className="flex min-h-screen flex-col items-center justify-center bg-[#f8fafc] px-4 py-12 text-slate-900 dark:bg-[#0b0f17] dark:text-slate-100">
+          <div className="w-full max-w-md rounded-2xl border border-slate-200/80 bg-white p-8 text-center shadow-lg dark:border-slate-800 dark:bg-[#111827]">
+            <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-indigo-600 text-base font-extrabold text-white shadow-sm">
+              PH
+            </div>
+            <h1 className="mt-4 text-xl font-bold tracking-tight text-slate-900 dark:text-white">
+              Project Hub
+            </h1>
+            <p className="mt-1 text-xs font-medium text-indigo-600 dark:text-indigo-400">
+              GamersOrigin &amp; L&apos;Intrus
+            </p>
+            <p className="mt-4 text-sm text-slate-600 dark:text-slate-300">
+              Connectez-vous avec votre compte Google Workspace pour accéder à
+              vos projets, budgets, factures et brouillons Gmail personnels.
+            </p>
+            <a
+              href="/api/auth/google/start"
+              className="mt-6 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-indigo-600 px-5 py-3 text-sm font-semibold text-white shadow-xs transition-colors hover:bg-indigo-700"
+            >
+              <LogIn className="h-4 w-4" />
+              Se connecter avec Google Workspace
+            </a>
+            <p className="mt-4 text-[11px] text-slate-500 dark:text-slate-400">
+              Accès réservé aux adresses <span className="font-mono">@gamersorigin.com</span> et{" "}
+              <span className="font-mono">@lintrus.fr</span>.
+            </p>
+          </div>
+          <ToastContainer />
+        </div>
+      </ShellContext.Provider>
+    );
+  }
 
   return (
+    <ShellContext.Provider value={shellContextValue}>
     <div className="flex min-h-screen bg-[#f8fafc] text-slate-900 dark:bg-[#0b0f17] dark:text-slate-100">
       {/* Mobile Sidebar Backdrop */}
       {mobileOpen && (
@@ -262,11 +314,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <Link
             href="/"
             onClick={() => setMobileOpen(false)}
-            title="GO Project Hub"
+            title="Project Hub — GamersOrigin & L'Intrus"
             className="flex items-center gap-2.5"
           >
-            <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-rose-600 text-[11px] font-extrabold text-white shadow-2xs">
-              GO
+            <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-indigo-600 text-[11px] font-extrabold text-white shadow-2xs">
+              PH
             </div>
             <span
               className={`text-sm font-bold tracking-tight text-slate-900 dark:text-white ${
@@ -322,8 +374,44 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </div>
         )}
 
-        {/* Global Level: All Projects Overview (ABOVE Project Switcher) */}
-        <div className="px-2.5 pb-2">
+        {/* Global Level: My Tasks & All Projects Overview (ABOVE Project Switcher) */}
+        <div className="space-y-0.5 px-2.5 pb-2">
+          <Link
+            href="/my-tasks"
+            onClick={() => setMobileOpen(false)}
+            title="Mes tâches sur tous mes projets"
+            data-testid="nav-my-tasks"
+            className={`flex items-center rounded-xl px-2.5 py-2 text-[13px] transition-colors ${
+              sidebarCollapsed ? "justify-between lg:justify-center lg:px-0" : "justify-between"
+            } ${
+              myTasksActive
+                ? "bg-indigo-50 font-semibold text-indigo-700 dark:bg-indigo-500/15 dark:text-indigo-300"
+                : "font-medium text-slate-700 hover:bg-slate-100/80 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800/70 dark:hover:text-white"
+            }`}
+          >
+            <span className="flex items-center gap-2.5">
+              <CheckSquare
+                className={`h-4 w-4 shrink-0 ${
+                  myTasksActive
+                    ? "text-indigo-600 dark:text-indigo-400"
+                    : "text-slate-500 dark:text-slate-400"
+                }`}
+              />
+              <span className={sidebarCollapsed ? "lg:hidden" : ""}>
+                Mes tâches
+              </span>
+            </span>
+            {(status?.myTasksCount ?? 0) > 0 && (
+              <span
+                className={`rounded-full bg-indigo-50 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-indigo-700 dark:bg-indigo-500/20 dark:text-indigo-300 ${
+                  sidebarCollapsed ? "lg:hidden" : ""
+                }`}
+              >
+                {status?.myTasksCount}
+              </span>
+            )}
+          </Link>
+
           <Link
             href="/projects"
             onClick={() => setMobileOpen(false)}
@@ -333,7 +421,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               sidebarCollapsed ? "justify-between lg:justify-center lg:px-0" : "justify-between"
             } ${
               projectsActive
-                ? "bg-rose-50 font-semibold text-rose-700 dark:bg-rose-500/15 dark:text-rose-300"
+                ? "bg-indigo-50 font-semibold text-indigo-700 dark:bg-indigo-500/15 dark:text-indigo-300"
                 : "font-medium text-slate-700 hover:bg-slate-100/80 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800/70 dark:hover:text-white"
             }`}
           >
@@ -341,8 +429,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               <LayoutGrid
                 className={`h-4 w-4 shrink-0 ${
                   projectsActive
-                    ? "text-rose-600 dark:text-rose-400"
-                    : "text-slate-400"
+                    ? "text-indigo-600 dark:text-indigo-400"
+                    : "text-slate-500 dark:text-slate-400"
                 }`}
               />
               <span className={sidebarCollapsed ? "lg:hidden" : ""}>
@@ -350,7 +438,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               </span>
             </span>
             <span
-              className={`rounded-full bg-slate-100 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-slate-500 dark:bg-slate-800 dark:text-slate-400 ${
+              className={`rounded-full bg-slate-100 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-slate-600 dark:bg-slate-800 dark:text-slate-400 ${
                 sidebarCollapsed ? "lg:hidden" : ""
               }`}
             >
@@ -434,8 +522,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                     <Icon
                       className={`h-4 w-4 shrink-0 ${
                         active
-                          ? "text-rose-600 dark:text-rose-400"
-                          : "text-slate-400 group-hover:text-slate-600 dark:text-slate-500 dark:group-hover:text-slate-300"
+                          ? "text-indigo-600 dark:text-indigo-400"
+                          : "text-slate-500 group-hover:text-slate-700 dark:text-slate-400 dark:group-hover:text-slate-200"
                       }`}
                     />
                     <span className={sidebarCollapsed ? "lg:hidden" : ""}>
@@ -520,8 +608,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                     <Icon
                       className={`h-4 w-4 shrink-0 ${
                         active
-                          ? "text-rose-600 dark:text-rose-400"
-                          : "text-slate-400 group-hover:text-slate-600 dark:text-slate-500 dark:group-hover:text-slate-300"
+                          ? "text-indigo-600 dark:text-indigo-400"
+                          : "text-slate-500 group-hover:text-slate-700 dark:text-slate-400 dark:group-hover:text-slate-200"
                       }`}
                     />
                     <span className={sidebarCollapsed ? "lg:hidden" : ""}>
@@ -546,7 +634,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 : "justify-between"
             } ${
               pathname === "/team"
-                ? "bg-rose-50 font-semibold text-rose-700 dark:bg-rose-500/15 dark:text-rose-300"
+                ? "bg-indigo-50 font-semibold text-indigo-700 dark:bg-indigo-500/15 dark:text-indigo-300"
                 : "font-medium text-slate-600 hover:bg-slate-100/80 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800/70"
             }`}
           >
@@ -554,8 +642,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               <Users
                 className={`h-4 w-4 shrink-0 ${
                   pathname === "/team"
-                    ? "text-rose-600 dark:text-rose-400"
-                    : "text-slate-400"
+                    ? "text-indigo-600 dark:text-indigo-400"
+                    : "text-slate-500 dark:text-slate-400"
                 }`}
               />
               <span className={`truncate ${sidebarCollapsed ? "lg:hidden" : ""}`}>
@@ -574,7 +662,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 : "justify-between"
             } ${
               pathname === "/profile"
-                ? "bg-rose-50 font-semibold text-rose-700 dark:bg-rose-500/15 dark:text-rose-300"
+                ? "bg-indigo-50 font-semibold text-indigo-700 dark:bg-indigo-500/15 dark:text-indigo-300"
                 : "font-medium text-slate-600 hover:bg-slate-100/80 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800/70"
             }`}
           >
@@ -658,13 +746,22 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
               {activeProject &&
                 pathname !== "/projects" &&
+                pathname !== "/my-tasks" &&
                 pathname !== "/settings" &&
                 pathname !== "/team" &&
                 pathname !== "/profile" && (
                   <>
+                    <button
+                      type="button"
+                      onClick={() => setMobileOpen(true)}
+                      className="inline-flex max-w-[130px] items-center gap-1 truncate rounded-md bg-slate-100 px-1.5 py-0.5 text-[11px] font-semibold text-slate-700 dark:bg-slate-800 dark:text-slate-200 sm:hidden"
+                      title={`Projet actif : ${activeProject.client} · ${activeProject.nomJeu}`}
+                    >
+                      <span className="truncate">{activeProject.client}</span>
+                    </button>
                     <Link
                       href="/"
-                      className="hidden max-w-[260px] truncate font-medium text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white sm:inline"
+                      className="hidden max-w-[260px] truncate font-medium text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white sm:inline"
                     >
                       {activeProject.client} · {activeProject.nomJeu}
                     </Link>
@@ -718,8 +815,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               >
                 <Search className="h-3.5 w-3.5" />
                 <span className="hidden sm:inline">Rechercher…</span>
-                <kbd className="hidden rounded bg-white px-1 py-0.5 font-mono text-[10px] text-slate-400 ring-1 ring-slate-200 dark:bg-slate-800 dark:ring-slate-700 md:inline">
-                  Ctrl K
+                <kbd className="hidden rounded bg-white px-1 py-0.5 font-mono text-[10px] text-slate-500 ring-1 ring-slate-200 dark:bg-slate-800 dark:text-slate-400 dark:ring-slate-700 md:inline">
+                  {isMac ? "⌘K" : "Ctrl K"}
                 </kbd>
               </button>
 
@@ -766,7 +863,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                     ? `${status.currentUser.name} (${status.currentUser.email})`
                     : "Se connecter & personnaliser mon avatar"
                 }
-                className="inline-flex items-center gap-1.5 rounded-full border border-slate-200/80 bg-white py-0.5 pr-2.5 pl-0.5 text-xs font-medium text-slate-700 transition-colors hover:border-rose-300 hover:bg-rose-50/40 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-200"
+                className="inline-flex items-center gap-1.5 rounded-full border border-slate-200/80 bg-white py-0.5 pr-2.5 pl-0.5 text-xs font-medium text-slate-700 transition-colors hover:border-indigo-300 hover:bg-indigo-50/40 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-200"
               >
                 {status?.currentUser ? (
                   <>
@@ -825,9 +922,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           data-testid="app-version-footer"
           className="border-t border-slate-200/50 px-4 py-2.5 sm:px-6 lg:px-10 dark:border-slate-800/60"
         >
-          <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-2 text-[11px] tabular-nums text-slate-400 dark:text-slate-500">
+          <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-2 text-[11px] tabular-nums text-slate-500 dark:text-slate-400">
             <span>
-              GO Project Hub · {process.env.NEXT_PUBLIC_APP_ENV ?? "Local"} · v
+              Project Hub · {process.env.NEXT_PUBLIC_APP_ENV ?? "Local"} · v
               {process.env.NEXT_PUBLIC_APP_VERSION ?? "0.1.0"} (
               <span className="font-mono">
                 {process.env.NEXT_PUBLIC_APP_COMMIT ?? "dev"}
@@ -854,7 +951,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       {activeProject && (
         <ProjectShareModal
           projectId={activeProject.id}
-          projectLabel={`${activeProject.client} — ${activeProject.nomJeu} (CP ${activeProject.codeProjet})`}
+          projectLabel={`${activeProject.client} — ${activeProject.nomJeu} (Code projet ${activeProject.codeProjet})`}
           open={shareOpen}
           onClose={() => setShareOpen(false)}
           onChanged={() => window.dispatchEvent(new CustomEvent("go:shell-refresh"))}
@@ -862,5 +959,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       )}
       <ToastContainer />
     </div>
+    </ShellContext.Provider>
   );
 }

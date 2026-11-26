@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { toErrorResponse } from "@/lib/api-error";
+import { assertProjectAccess, getCurrentUser } from "@/lib/auth/session";
 import { getGoogleGateway } from "@/lib/container";
 import { getSyncPolicy, isRetroplanningNodeCode } from "@/lib/drive/sync-policy";
 import { refreshProjectDriveDrift } from "@/lib/drive/sync-service";
@@ -13,6 +14,8 @@ export async function GET(
 ) {
   try {
     const { id } = await context.params;
+    const currentUser = await getCurrentUser(prisma);
+    await assertProjectAccess(prisma, id, currentUser, "VIEW");
     const project = await prisma.project.findUnique({ where: { id } });
     if (!project) {
       throw new AppHttpError(404, "PROJECT_NOT_FOUND", "Projet introuvable.");
@@ -59,6 +62,8 @@ export async function POST(
 ) {
   try {
     const { id } = await context.params;
+    const currentUser = await getCurrentUser(prisma);
+    await assertProjectAccess(prisma, id, currentUser, "EDIT");
     const project = await prisma.project.findUnique({ where: { id } });
     if (!project) {
       throw new AppHttpError(404, "PROJECT_NOT_FOUND", "Projet introuvable.");

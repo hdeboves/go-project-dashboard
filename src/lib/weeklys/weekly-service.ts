@@ -185,7 +185,7 @@ function buildNextStepsColumnRequests(
             tableObjectId: tableEl.objectId,
             updates: [
               { rowIndex: 0, columnIndex: 0, text: `Côté Client (${clientLabel})` },
-              { rowIndex: 0, columnIndex: 1, text: "Côté GO" },
+              { rowIndex: 0, columnIndex: 1, text: "Côté Agence" },
               { rowIndex: 1, columnIndex: 0, text: clientBody },
               { rowIndex: 1, columnIndex: 1, text: goBody },
             ],
@@ -205,7 +205,7 @@ function buildNextStepsColumnRequests(
     const leftId = `go_weekly_client_col_${Date.now()}`;
     const rightId = `go_weekly_go_col_${Date.now()}`;
     const leftText = `Côté Client — ${clientLabel}\n\n${clientBody}`;
-    const rightText = `Côté GO — GamersOrigin\n\n${goBody}`;
+    const rightText = `Côté Agence\n\n${goBody}`;
 
     const requests: Record<string, unknown>[] = [
       { deleteObject: { objectId: "g3faa55c2181_35_7" } },
@@ -458,13 +458,13 @@ export async function generateWeeklyReport(
     `2. Prochaines étapes — Côté Client :`,
     clientBullets,
     ``,
-    `3. Prochaines étapes — Côté GO :`,
+    `3. Prochaines étapes — Côté Agence :`,
     goBullets,
     ``,
     `Support interne (Brouillon 003.2) : ${slidesLink}`,
     ``,
     `Bien cordialement,`,
-    `L'équipe GamersOrigin`,
+    `L'équipe projet`,
   ].join("\n");
 
   const draftRes = await gateway.gmail.createDraft({

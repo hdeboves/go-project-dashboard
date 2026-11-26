@@ -1,11 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { toErrorResponse } from "@/lib/api-error";
+import { ACTIVE_PROJECT_COOKIE } from "@/lib/auth/cookies";
 import { assertProjectAccess, getCurrentUser } from "@/lib/auth/session";
-import { encryptSecret } from "@/lib/crypto";
 import { AppHttpError } from "@/lib/errors";
 import { prisma } from "@/lib/prisma";
-import { ACTIVE_PROJECT_COOKIE } from "@/app/api/shell/status/route";
 
 const ActiveProjectSchema = z.object({
   projectId: z.string().min(1),
@@ -23,18 +22,14 @@ export async function POST(req: NextRequest) {
       throw new AppHttpError(404, "PROJECT_NOT_FOUND", "Projet introuvable.");
     }
 
-    await prisma.appSetting.upsert({
-      where: { key: "ACTIVE_PROJECT_ID" },
-      update: {
-        valueEnc: encryptSecret(project.id),
-        isSecret: false,
-      },
-      create: {
-        key: "ACTIVE_PROJECT_ID",
-        valueEnc: encryptSecret(project.id),
-        isSecret: false,
-      },
-    });
+    if (currentUser) {
+      await prisma.user
+        .update({
+          where: { id: currentUser.id },
+          data: { lastActiveProjectId: project.id },
+        })
+        .catch(() => undefined);
+    }
 
     const response = NextResponse.json({
       ok: true,
@@ -44,6 +39,7 @@ export async function POST(req: NextRequest) {
     response.cookies.set(ACTIVE_PROJECT_COOKIE, project.id, {
       httpOnly: false,
       sameSite: "lax",
+      secure: process.env.NODE_ENV === "production",
       path: "/",
       maxAge: 60 * 60 * 24 * 30,
     });

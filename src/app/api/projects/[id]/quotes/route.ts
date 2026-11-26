@@ -1,16 +1,20 @@
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { toErrorResponse } from "@/lib/api-error";
-import { assertProjectAccess, getCurrentUser } from "@/lib/auth/session";
+import {
+  assertProjectAccess,
+  buildVisibleInvoicesWhere,
+  getCurrentUser,
+} from "@/lib/auth/session";
 import { round2 } from "@/lib/budget/calculator";
+import { getServices } from "@/lib/container";
 import { AppHttpError } from "@/lib/errors";
 import { prisma } from "@/lib/prisma";
+import { formatQuotesForProject } from "@/lib/quotes/quote-service";
+import { getParisTodayIso } from "@/lib/shared/dates";
 import { parseFrenchAmount } from "@/lib/shared/format";
 
-const MAX_QUOTE_PDF_BYTES = 15 * 1024 * 1024;
+const MAX_QUOTE_PDF_BYTES = 10 * 1024 * 1024;
 
 const CreateQuoteSchema = z.object({
   quoteNumber: z.string().trim().min(1, "Le numéro de devis est requis."),
@@ -29,56 +33,6 @@ const CreateQuoteSchema = z.object({
   linkedInvoiceIds: z.array(z.string().min(1)).optional(),
 });
 
-export async function formatQuotesForProject(projectId: string) {
-  const quotes = await prisma.quote.findMany({
-    where: { projectId },
-    orderBy: [{ createdAt: "desc" }],
-    include: {
-      budgetLine: {
-        select: { id: true, category: true, objet: true },
-      },
-      invoices: {
-        orderBy: { createdAt: "desc" },
-        select: {
-          id: true,
-          invoiceNumber: true,
-          vendorName: true,
-          invoiceDate: true,
-          amountHt: true,
-          amountTtc: true,
-          status: true,
-          renamedFilename: true,
-          originalFilename: true,
-          driveFileId: true,
-          budgetLineId: true,
-        },
-      },
-    },
-  });
-
-  return quotes.map((q) => {
-    const invoicedTotalHt = round2(
-      q.invoices.reduce((sum, inv) => sum + (inv.amountHt || 0), 0)
-    );
-    const remainingHt = round2(q.amountHt - invoicedTotalHt);
-    const invoicedPct =
-      q.amountHt > 0
-        ? Math.round((invoicedTotalHt / q.amountHt) * 100)
-        : invoicedTotalHt > 0
-          ? 100
-          : 0;
-
-    return {
-      ...q,
-      hasPdf: Boolean(q.localPdfPath || q.driveFileId),
-      invoicedTotalHt,
-      remainingHt,
-      invoicedPct,
-      overQuote: invoicedTotalHt > 0 && invoicedTotalHt > q.amountHt,
-    };
-  });
-}
-
 export async function GET(
   _req: NextRequest,
   context: { params: Promise<{ id: string }> }
@@ -88,7 +42,7 @@ export async function GET(
     const currentUser = await getCurrentUser(prisma);
     await assertProjectAccess(prisma, id, currentUser, "VIEW");
 
-    const quotes = await formatQuotesForProject(id);
+    const quotes = await formatQuotesForProject(id, currentUser);
     const activeQuotes = quotes.filter(
       (q) => q.status === "ACCEPTE" || q.status === "FACTURE"
     );
@@ -159,14 +113,6 @@ export async function POST(
         issueDate: String(formData.get("issueDate") ?? "") || null,
         validUntil: String(formData.get("validUntil") ?? "") || null,
         amountHt: parseFrenchAmount(String(formData.get("amountHt") ?? "0")),
-        tvaAmount:
-          formData.get("tvaAmount") !== null && formData.get("tvaAmount") !== ""
-            ? parseFrenchAmount(String(formData.get("tvaAmount")))
-            : undefined,
-        amountTtc:
-          formData.get("amountTtc") !== null && formData.get("amountTtc") !== ""
-            ? parseFrenchAmount(String(formData.get("amountTtc")))
-            : undefined,
         status: String(formData.get("status") ?? "EN_ATTENTE"),
         budgetLineId: String(formData.get("budgetLineId") ?? "") || null,
         notes: String(formData.get("notes") ?? "") || null,
@@ -177,6 +123,27 @@ export async function POST(
     }
 
     const input = CreateQuoteSchema.parse(rawPayload);
+
+    // Validate uploaded PDF BEFORE any database writes (prevents orphan quotes!)
+    let validatedPdfBuf: Buffer | null = null;
+    if (uploadedFile) {
+      if (uploadedFile.size > MAX_QUOTE_PDF_BYTES) {
+        throw new AppHttpError(
+          413,
+          "PDF_TOO_LARGE",
+          "Le fichier devis dépasse la taille maximale autorisée (10 Mo)."
+        );
+      }
+      const buf = Buffer.from(await uploadedFile.arrayBuffer());
+      if (buf.length < 5 || buf.subarray(0, 5).toString("ascii") !== "%PDF-") {
+        throw new AppHttpError(
+          400,
+          "INVALID_PDF",
+          "Le fichier envoyé n'est pas un PDF valide."
+        );
+      }
+      validatedPdfBuf = buf;
+    }
 
     if (input.budgetLineId) {
       const bl = await prisma.budgetLine.findUnique({
@@ -192,87 +159,88 @@ export async function POST(
     }
 
     const amountHt = round2(input.amountHt);
-    const tvaAmount = round2(
-      input.tvaAmount !== undefined ? input.tvaAmount : amountHt * 0.2
-    );
-    const amountTtc = round2(
-      input.amountTtc !== undefined ? input.amountTtc : amountHt + tvaAmount
-    );
+    const tvaAmount = 0;
+    const amountTtc = amountHt;
 
-    let quote = await prisma.quote.create({
-      data: {
-        projectId: id,
-        budgetLineId: input.budgetLineId || null,
-        quoteNumber: input.quoteNumber,
-        vendorName: input.vendorName,
-        description: input.description || null,
-        issueDate: input.issueDate || new Date().toISOString().slice(0, 10),
-        validUntil: input.validUntil || null,
-        amountHt,
-        tvaAmount,
-        amountTtc,
-        status: input.status ?? "EN_ATTENTE",
-        originalFilename: uploadedFile?.name ?? null,
-        notes: input.notes || null,
-      },
-    });
-
-    if (uploadedFile) {
-      if (uploadedFile.size > MAX_QUOTE_PDF_BYTES) {
-        throw new AppHttpError(
-          413,
-          "PDF_TOO_LARGE",
-          "Le fichier devis dépasse la taille maximale autorisée (15 Mo)."
-        );
+    // Best-effort durable Drive upload into 001.2 Devis (fallback to Postgres pdfData Bytes!)
+    let driveFileId: string | null = null;
+    if (validatedPdfBuf && uploadedFile) {
+      try {
+        const { getGoogleGateway } = getServices();
+        const gateway = await getGoogleGateway(id);
+        const folder0012 = await prisma.driveNode.findFirst({
+          where: { projectId: id, code: "001.2" },
+        });
+        const parentId = folder0012?.driveFileId ?? project.driveInternalRootId;
+        if (parentId) {
+          const uploaded = await gateway.drive.createFile({
+            name: uploadedFile.name || `Devis_${input.quoteNumber}.pdf`,
+            parentId,
+            mimeType: "application/pdf",
+            body: validatedPdfBuf,
+          });
+          driveFileId = uploaded.id;
+        }
+      } catch {
+        // Google not connected — Postgres pdfData column persists the PDF durably across lambdas
       }
-      const pdfBuf = Buffer.from(await uploadedFile.arrayBuffer());
-      if (pdfBuf.length < 5 || pdfBuf.subarray(0, 5).toString("ascii") !== "%PDF-") {
-        throw new AppHttpError(
-          400,
-          "INVALID_PDF",
-          "Le fichier envoyé n'est pas un PDF valide."
-        );
-      }
-      const baseDir =
-        process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME
-          ? path.join(os.tmpdir(), "go-project-hub-data")
-          : path.join(process.cwd(), ".data");
-      const filePath = path.join(baseDir, "quotes", id, `${quote.id}.pdf`);
-      await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
-      await fs.promises.writeFile(filePath, pdfBuf);
-      quote = await prisma.quote.update({
-        where: { id: quote.id },
-        data: { localPdfPath: filePath },
-      });
     }
 
-    if (input.linkedInvoiceIds && input.linkedInvoiceIds.length > 0) {
-      await prisma.invoice.updateMany({
-        where: {
+    const quote = await prisma.$transaction(async (tx) => {
+      const created = await tx.quote.create({
+        data: {
           projectId: id,
-          id: { in: input.linkedInvoiceIds },
+          budgetLineId: input.budgetLineId || null,
+          quoteNumber: input.quoteNumber,
+          vendorName: input.vendorName,
+          description: input.description || null,
+          issueDate: input.issueDate || getParisTodayIso(),
+          validUntil: input.validUntil || null,
+          amountHt,
+          tvaAmount,
+          amountTtc,
+          status: input.status ?? "EN_ATTENTE",
+          originalFilename: uploadedFile?.name ?? null,
+          driveFileId,
+          pdfData:
+            validatedPdfBuf && !driveFileId
+              ? new Uint8Array(validatedPdfBuf)
+              : null,
+          notes: input.notes || null,
         },
-        data: { quoteId: quote.id },
       });
-    }
 
-    await prisma.auditLog.create({
-      data: {
-        projectId: id,
-        actor: currentUser?.email ?? "user",
-        action: "QUOTE_CREATED",
-        targetType: "QUOTE",
-        targetId: quote.id,
-        detailsJson: JSON.stringify({
-          quoteNumber: quote.quoteNumber,
-          vendorName: quote.vendorName,
-          amountHt: quote.amountHt,
-          linkedInvoicesCount: input.linkedInvoiceIds?.length ?? 0,
-        }),
-      },
+      if (input.linkedInvoiceIds && input.linkedInvoiceIds.length > 0) {
+        await tx.invoice.updateMany({
+          where: {
+            ...buildVisibleInvoicesWhere(id, currentUser),
+            id: { in: input.linkedInvoiceIds },
+          },
+          data: { quoteId: created.id },
+        });
+      }
+
+      await tx.auditLog.create({
+        data: {
+          projectId: id,
+          actor: currentUser?.email ?? "user",
+          action: "QUOTE_CREATED",
+          targetType: "QUOTE",
+          targetId: created.id,
+          detailsJson: JSON.stringify({
+            quoteNumber: created.quoteNumber,
+            vendorName: created.vendorName,
+            amountHt: created.amountHt,
+            linkedInvoicesCount: input.linkedInvoiceIds?.length ?? 0,
+            uploadedToDrive: Boolean(driveFileId),
+          }),
+        },
+      });
+
+      return created;
     });
 
-    const quotes = await formatQuotesForProject(id);
+    const quotes = await formatQuotesForProject(id, currentUser);
     const createdFormatted = quotes.find((q) => q.id === quote.id) ?? quote;
     return NextResponse.json(
       { ok: true, quote: createdFormatted, quotes },
