@@ -23,6 +23,7 @@ import {
   type CockpitInvoiceItem,
   type CockpitQuoteOption,
 } from "@/components/cockpit/CockpitInvoiceDropzone";
+import { CockpitQuoteDropzone } from "@/components/cockpit/CockpitQuoteDropzone";
 import { UpcomingTasksCard } from "@/components/cockpit/UpcomingTasksCard";
 import {
   buildVisibleInvoicesWhere,
@@ -643,6 +644,22 @@ export default async function CommandCenterPage({
                   budgetLines={cockpitBudgetLines}
                   quotes={cockpitQuotes}
                   initialPendingInvoices={cockpitPendingInvoices}
+                />
+                <CockpitQuoteDropzone
+                  key={`quote-dropzone-${activeProject.id}`}
+                  project={{
+                    id: activeProject.id,
+                    codeProjet: activeProject.codeProjet,
+                    client: activeProject.client,
+                    nomJeu: activeProject.nomJeu,
+                  }}
+                  allProjects={projects.map((p) => ({
+                    id: p.id,
+                    codeProjet: p.codeProjet,
+                    client: p.client,
+                    nomJeu: p.nomJeu,
+                  }))}
+                  budgetLines={cockpitBudgetLines}
                 />
                 <Link
                   href="/retroplanning"

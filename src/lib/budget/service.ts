@@ -107,7 +107,7 @@ export async function ensureProjectFolderNode(
   prisma: PrismaClient,
   gateway: GoogleWorkspacePort,
   projectId: string,
-  code: "001.1" | "001.3"
+  code: "001.1" | "001.2" | "001.3"
 ): Promise<{ id: string; driveFileId: string }> {
   let node = await prisma.driveNode.findFirst({
     where: { projectId, code },

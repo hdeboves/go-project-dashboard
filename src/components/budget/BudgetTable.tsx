@@ -5,6 +5,7 @@ import {
   Calculator,
   ChevronDown,
   ChevronRight,
+  Copy,
   Download,
   ExternalLink,
   Eye,
@@ -12,6 +13,7 @@ import {
   Plus,
   Receipt,
   Search,
+  SlidersHorizontal,
   Trash2,
   X,
 } from "lucide-react";
@@ -51,7 +53,6 @@ interface BudgetTableProps {
 
 type EditableField =
   | "objet"
-  | "realisePar"
   | "saleQty"
   | "saleDays"
   | "marginPct"
@@ -61,7 +62,6 @@ type EditableField =
 
 const SIMPLE_TAB_ORDER: readonly EditableField[] = [
   "objet",
-  "marginPct",
   "saleTotalHt",
   "preOpTotalHt",
   "postOpTotalHt",
@@ -69,7 +69,6 @@ const SIMPLE_TAB_ORDER: readonly EditableField[] = [
 
 const DETAILED_TAB_ORDER: readonly EditableField[] = [
   "objet",
-  "realisePar",
   "saleQty",
   "saleDays",
   "marginPct",
@@ -77,6 +76,58 @@ const DETAILED_TAB_ORDER: readonly EditableField[] = [
   "preOpTotalHt",
   "postOpTotalHt",
 ];
+
+/**
+ * Evaluates simple Excel-style numeric expressions like "1500", "=500*3", "1200+300", "2500/2".
+ */
+function parseSpreadsheetNumber(raw: string): number {
+  const cleaned = raw.trim().replace(/^=/, "").replace(/,/g, ".").replace(/\s+/g, "");
+  if (!cleaned) return 0;
+  if (/^-?\d+(?:\.\d+)?$/.test(cleaned)) {
+    return round2(Math.max(0, Number(cleaned) || 0));
+  }
+  if (/^[\d.+\-*/()]+$/.test(cleaned)) {
+    // Simple safe arithmetic evaluator (no eval/Function)
+    const tokens = cleaned.match(/\d+(?:\.\d+)?|[+\-*/()]/g);
+    if (!tokens) return 0;
+    let pos = 0;
+    const parseExpr = (): number => {
+      let left = parseTerm();
+      while (pos < tokens.length && (tokens[pos] === "+" || tokens[pos] === "-")) {
+        const op = tokens[pos++];
+        const right = parseTerm();
+        left = op === "+" ? left + right : left - right;
+      }
+      return left;
+    };
+    const parseTerm = (): number => {
+      let left = parseFactor();
+      while (pos < tokens.length && (tokens[pos] === "*" || tokens[pos] === "/")) {
+        const op = tokens[pos++];
+        const right = parseFactor();
+        left = op === "*" ? left * right : right === 0 ? 0 : left / right;
+      }
+      return left;
+    };
+    const parseFactor = (): number => {
+      if (tokens[pos] === "(") {
+        pos++;
+        const v = parseExpr();
+        if (tokens[pos] === ")") pos++;
+        return v;
+      }
+      if (tokens[pos] === "-") {
+        pos++;
+        return -parseFactor();
+      }
+      const n = Number(tokens[pos++]);
+      return Number.isFinite(n) ? n : 0;
+    };
+    const res = parseExpr();
+    return Number.isFinite(res) ? round2(Math.max(0, res)) : 0;
+  }
+  return round2(Math.max(0, Number(cleaned) || 0));
+}
 
 function resourceSelectStyle(resource: ResourceTypeOption): string {
   if (resource === "Interne") {
@@ -92,8 +143,6 @@ function getFieldInitialValue(line: BudgetLineDto, field: EditableField): string
   switch (field) {
     case "objet":
       return line.objet;
-    case "realisePar":
-      return line.realisePar ?? "";
     case "saleQty":
       return String(line.saleQty);
     case "saleDays":
@@ -142,9 +191,10 @@ export function BudgetTable({
     value: string;
   } | null>(null);
   const [savingLineId, setSavingLineId] = useState<string | null>(null);
+  const [insertingBelowId, setInsertingBelowId] = useState<string | null>(null);
   const commitLockRef = useRef(false);
 
-  // Quick-add row directly at bottom of spreadsheet
+  // Quick-add row for creating a new category or adding at bottom
   const [quickAddOpen, setQuickAddOpen] = useState(false);
   const [qaCategory, setQaCategory] = useState("PRODUCTION");
   const [qaObjet, setQaObjet] = useState("");
@@ -193,7 +243,7 @@ export function BudgetTable({
       }
       if (q) {
         const hay =
-          `${cat} ${line.objet} ${line.realisePar ?? ""} ${line.expenseType} ${toResourceTypeOption(line.expenseType)} ${line.invoiceNumbersNote ?? ""}`.toLowerCase();
+          `${cat} ${line.objet} ${line.expenseType} ${toResourceTypeOption(line.expenseType)} ${line.invoiceNumbersNote ?? ""}`.toLowerCase();
         if (!hay.includes(q)) return false;
       }
       return true;
@@ -254,6 +304,7 @@ export function BudgetTable({
     );
   }, [filteredLines]);
 
+  const grandDiff = round2(grandTotals.postOp - grandTotals.preOp);
   const grandMarginPct =
     grandTotals.sold > 0
       ? round2(((grandTotals.sold - grandTotals.preOp) / grandTotals.sold) * 100)
@@ -282,7 +333,6 @@ export function BudgetTable({
     patch: Partial<{
       category: string;
       objet: string;
-      realisePar: string | null;
       expenseType: string;
       saleQty: number;
       saleDays: number;
@@ -300,7 +350,10 @@ export function BudgetTable({
   ): Promise<boolean> {
     setSavingLineId(line.id);
     try {
-      const safeQty = Math.max(0.01, patch.saleQty ?? (line.saleQty > 0 ? line.saleQty : 1));
+      const safeQty = Math.max(
+        0.01,
+        patch.saleQty ?? (line.saleQty > 0 ? line.saleQty : 1)
+      );
       const safeDays = Math.max(
         0.01,
         patch.saleDays ?? (line.saleDays > 0 ? line.saleDays : 1)
@@ -317,19 +370,18 @@ export function BudgetTable({
           id: line.id,
           category: (patch.category ?? line.category).trim() || "AUTRES",
           objet: (patch.objet ?? line.objet).trim() || line.objet,
-          realisePar:
-            patch.realisePar !== undefined ? patch.realisePar : line.realisePar,
+          realisePar: line.realisePar,
           expenseType: patch.expenseType ?? line.expenseType,
           saleQty: safeQty,
           saleDays: safeDays,
-          saleUnitPrice:
-            patch.saleUnitPrice ?? round2(nextSaleTotal / denom),
+          saleUnitPrice: patch.saleUnitPrice ?? round2(nextSaleTotal / denom),
           saleTotalHt: nextSaleTotal,
-          preOpUnitCost:
-            patch.preOpUnitCost ?? round2(nextPreOpTotal / denom),
+          preOpUnitCost: patch.preOpUnitCost ?? round2(nextPreOpTotal / denom),
           preOpTotalHt: nextPreOpTotal,
-          postOpQty: patch.postOpQty ?? (nextPostOpTotal > 0 ? 1 : line.postOpQty),
-          postOpDays: patch.postOpDays ?? (nextPostOpTotal > 0 ? 1 : line.postOpDays),
+          postOpQty:
+            patch.postOpQty ?? (nextPostOpTotal > 0 ? 1 : line.postOpQty),
+          postOpDays:
+            patch.postOpDays ?? (nextPostOpTotal > 0 ? 1 : line.postOpDays),
           postOpUnitCost:
             patch.postOpUnitCost ??
             (nextPostOpTotal > 0 ? nextPostOpTotal : line.postOpUnitCost),
@@ -353,6 +405,93 @@ export function BudgetTable({
       return true;
     } finally {
       setSavingLineId(null);
+    }
+  }
+
+  /**
+   * Notion/Sheets-style instant row insertion directly from any row or category footer.
+   * Creates a new row immediately in DB and focuses its Poste name cell for instant typing.
+   */
+  async function handleInsertRow(params: {
+    category: string;
+    anchorId?: string;
+    cloneFrom?: BudgetLineDto;
+  }) {
+    const { category, anchorId, cloneFrom } = params;
+    setInsertingBelowId(anchorId ?? `cat:${category}`);
+    try {
+      const payload = cloneFrom
+        ? {
+            category: cloneFrom.category,
+            objet: `${cloneFrom.objet} (copie)`,
+            expenseType: toResourceTypeOption(cloneFrom.expenseType),
+            saleQty: cloneFrom.saleQty,
+            saleDays: cloneFrom.saleDays,
+            saleUnitPrice: cloneFrom.saleUnitPrice,
+            saleTotalHt: cloneFrom.saleTotalHt,
+            preOpUnitCost: cloneFrom.preOpUnitCost,
+            preOpTotalHt: cloneFrom.preOpTotalHt,
+            postOpQty: 0,
+            postOpDays: 0,
+            postOpUnitCost: 0,
+            postOpTotalHt: 0,
+            marginPct: resolveLineMarginPct(cloneFrom),
+          }
+        : {
+            category,
+            objet: "Nouveau poste",
+            expenseType: "Externe",
+            saleQty: 1,
+            saleDays: 1,
+            saleUnitPrice: 0,
+            saleTotalHt: 0,
+            preOpUnitCost: 0,
+            preOpTotalHt: 0,
+            postOpQty: 0,
+            postOpDays: 0,
+            postOpUnitCost: 0,
+            postOpTotalHt: 0,
+            marginPct: defaultMarginFactor,
+          };
+
+      const res = await fetch(`/api/projects/${projectId}/budget`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const json = (await res.json().catch(() => ({}))) as {
+        line?: BudgetLineDto;
+        error?: string;
+        code?: string;
+      };
+      if (!res.ok) {
+        onError(res.status, json);
+        return;
+      }
+
+      // Ensure category is expanded so the new row is visible immediately
+      setCollapsedCategories((prev) => {
+        if (!prev.has(category)) return prev;
+        const next = new Set(prev);
+        next.delete(category);
+        return next;
+      });
+
+      await onLineSaved();
+      if (json.line?.id) {
+        setInlineEdit({
+          lineId: json.line.id,
+          field: "objet",
+          value: json.line.objet,
+        });
+      }
+      showToast(
+        cloneFrom
+          ? `Ligne « ${cloneFrom.objet} » dupliquée.`
+          : `Nouvelle ligne ajoutée dans ${category}.`
+      );
+    } finally {
+      setInsertingBelowId(null);
     }
   }
 
@@ -393,13 +532,14 @@ export function BudgetTable({
   function focusAdjacentCell(
     line: BudgetLineDto,
     field: EditableField,
-    nav: "nextCol" | "prevCol" | "nextRow"
+    nav: "nextCol" | "prevCol" | "nextRow" | "prevRow"
   ) {
     const order = detailedView ? DETAILED_TAB_ORDER : SIMPLE_TAB_ORDER;
-    if (nav === "nextRow") {
+    if (nav === "nextRow" || nav === "prevRow") {
       const rowIdx = visibleOrderedRows.findIndex((r) => r.id === line.id);
-      if (rowIdx >= 0 && rowIdx + 1 < visibleOrderedRows.length) {
-        const nextLine = visibleOrderedRows[rowIdx + 1];
+      const targetIdx = nav === "nextRow" ? rowIdx + 1 : rowIdx - 1;
+      if (rowIdx >= 0 && targetIdx >= 0 && targetIdx < visibleOrderedRows.length) {
+        const nextLine = visibleOrderedRows[targetIdx];
         setInlineEdit({
           lineId: nextLine.id,
           field,
@@ -429,7 +569,7 @@ export function BudgetTable({
     line: BudgetLineDto,
     field: EditableField,
     rawValue: string,
-    nav?: "nextCol" | "prevCol" | "nextRow"
+    nav?: "nextCol" | "prevCol" | "nextRow" | "prevRow"
   ) {
     if (commitLockRef.current) return;
     commitLockRef.current = true;
@@ -450,27 +590,15 @@ export function BudgetTable({
         return;
       }
 
-      if (field === "realisePar") {
-        const clean = rawValue.trim() || null;
-        if (clean === (line.realisePar ?? null)) {
-          if (nav) focusAdjacentCell(line, field, nav);
-          else setInlineEdit(null);
-          return;
-        }
-        const ok = await persistLineUpdate(line, { realisePar: clean });
-        if (ok) {
-          if (nav) focusAdjacentCell({ ...line, realisePar: clean }, field, nav);
-          else setInlineEdit(null);
-        }
-        return;
-      }
-
-      const parsed = round2(Math.max(0, Number(rawValue.replace(",", ".")) || 0));
+      const parsed = parseSpreadsheetNumber(rawValue);
 
       if (field === "marginPct") {
         const clamped = Math.min(95, parsed);
         const currentMargin = resolveLineMarginPct(line);
-        if (Math.abs(clamped - currentMargin) < 0.01 && line.marginPct === clamped) {
+        if (
+          Math.abs(clamped - currentMargin) < 0.01 &&
+          line.marginPct === clamped
+        ) {
           if (nav) focusAdjacentCell(line, field, nav);
           else setInlineEdit(null);
           return;
@@ -503,7 +631,12 @@ export function BudgetTable({
         }
         const impliedMargin =
           parsed > 0
-            ? round2(Math.max(0, Math.min(95, ((parsed - line.preOpTotalHt) / parsed) * 100)))
+            ? round2(
+                Math.max(
+                  0,
+                  Math.min(95, ((parsed - line.preOpTotalHt) / parsed) * 100)
+                )
+              )
             : 0;
         const ok = await persistLineUpdate(line, {
           saleTotalHt: parsed,
@@ -527,7 +660,6 @@ export function BudgetTable({
           else setInlineEdit(null);
           return;
         }
-        // Auto-recompute Prix de vente HT using the line's margin rate (43% default or 0% unmarged or custom %)
         const activeMargin = resolveLineMarginPct(line);
         const nextSale = computeSaleFromCostAndMargin(parsed, activeMargin);
         const ok = await persistLineUpdate(line, {
@@ -568,8 +700,10 @@ export function BudgetTable({
       }
 
       if (field === "saleQty" || field === "saleDays") {
-        const nextQty = field === "saleQty" ? Math.max(0.01, parsed) : line.saleQty;
-        const nextDays = field === "saleDays" ? Math.max(0.01, parsed) : line.saleDays;
+        const nextQty =
+          field === "saleQty" ? Math.max(0.01, parsed) : line.saleQty;
+        const nextDays =
+          field === "saleDays" ? Math.max(0.01, parsed) : line.saleDays;
         const nextPreOp = round2(line.preOpUnitCost * nextQty * nextDays);
         const nextSale = round2(line.saleUnitPrice * nextQty * nextDays);
         const ok = await persistLineUpdate(line, {
@@ -611,12 +745,12 @@ export function BudgetTable({
     }
   }
 
-  const qaPreOpNum = round2(Math.max(0, Number(qaPreOp.replace(",", ".")) || 0));
+  const qaPreOpNum = parseSpreadsheetNumber(qaPreOp);
   const qaMarginNum = qaMarged ? defaultMarginFactor : 0;
   const qaComputedSale = computeSaleFromCostAndMargin(qaPreOpNum, qaMarginNum);
   const qaEffectiveSale =
     qaSaleOverride !== null
-      ? round2(Math.max(0, Number(qaSaleOverride.replace(",", ".")) || 0))
+      ? parseSpreadsheetNumber(qaSaleOverride)
       : qaComputedSale;
 
   async function handleQuickAddSubmit(e?: React.FormEvent) {
@@ -628,9 +762,7 @@ export function BudgetTable({
     }
     setQaSaving(true);
     try {
-      const postOpNum = round2(
-        Math.max(0, Number(qaPostOp.replace(",", ".")) || 0)
-      );
+      const postOpNum = parseSpreadsheetNumber(qaPostOp);
       const res = await fetch(`/api/projects/${projectId}/budget`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -670,35 +802,32 @@ export function BudgetTable({
     }
   }
 
-  function openQuickAddForCategory(cat: string) {
-    setQaCategory(cat);
-    setQuickAddOpen(true);
-  }
-
-  const colCount = detailedView ? 12 : 8;
+  // Simple view: 6 crisp columns (ZERO horizontal scroll!)
+  // Detailed view: 10 columns (adds Qté, Jours, Marge, Coût/u pré)
+  const colCount = detailedView ? 10 : 6;
 
   return (
     <section
       id="budget-spreadsheet"
-      className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-[0_1px_2px_rgba(15,23,42,0.04)] dark:border-slate-800 dark:bg-[#111827]"
+      className="rounded-2xl border border-slate-200/80 bg-white p-4 shadow-[0_1px_2px_rgba(15,23,42,0.04)] sm:p-5 dark:border-slate-800 dark:bg-[#111827]"
     >
       {/* Spreadsheet Toolbar */}
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+      <div className="mb-3.5 flex flex-wrap items-center justify-between gap-2.5">
         <div className="flex flex-wrap items-center gap-2">
           <div className="relative">
-            <Search className="pointer-events-none absolute top-1/2 left-3 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
+            <Search className="pointer-events-none absolute top-1/2 left-2.5 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
             <input
               type="text"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="Rechercher un poste..."
-              className="w-48 rounded-xl border border-slate-200 bg-slate-50/70 py-1.5 pr-7 pl-8 text-xs text-slate-900 placeholder:text-slate-400 focus:border-indigo-500 focus:bg-white focus:outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 dark:focus:bg-slate-900"
+              className="w-44 rounded-xl border border-slate-200 bg-slate-50/70 py-1.5 pr-6 pl-8 text-xs text-slate-900 placeholder:text-slate-400 focus:border-indigo-500 focus:bg-white focus:outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 dark:focus:bg-slate-900"
             />
             {search && (
               <button
                 type="button"
                 onClick={() => setSearch("")}
-                className="absolute top-1/2 right-2.5 -translate-y-1/2 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200"
+                className="absolute top-1/2 right-2 -translate-y-1/2 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200"
               >
                 <X className="h-3.5 w-3.5" />
               </button>
@@ -709,9 +838,9 @@ export function BudgetTable({
             aria-label="Filtrer par catégorie"
             value={selectedCategory ?? ""}
             onChange={(e) => onSelectCategory?.(e.target.value || null)}
-            className="max-w-44 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-700 focus:border-indigo-500 focus:outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+            className="max-w-40 rounded-xl border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-700 focus:border-indigo-500 focus:outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
           >
-            <option value="">Toutes les catégories</option>
+            <option value="">Toutes catégories</option>
             {allCategories.map((cat) => (
               <option key={cat} value={cat}>
                 {cat}
@@ -722,10 +851,10 @@ export function BudgetTable({
           <button
             type="button"
             onClick={() => onToggleOverrunsOnly?.(!overrunsOnly)}
-            className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-xs font-medium transition-colors ${
+            className={`inline-flex items-center gap-1 rounded-xl border px-2.5 py-1.5 text-xs font-medium transition-colors ${
               overrunsOnly
                 ? "border-rose-300 bg-rose-50 text-rose-700 dark:border-rose-500/40 dark:bg-rose-500/15 dark:text-rose-300"
-                : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-800/70"
+                : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300"
             }`}
           >
             <AlertCircle className="h-3.5 w-3.5 text-rose-500" />
@@ -734,11 +863,11 @@ export function BudgetTable({
 
           {/* Default Agency Margin Factor (43%) */}
           <div
-            title="Facteur de marge par défaut appliqué quand vous activez la marge sur un poste (Prix de vente = Coût pré-op / (1 - marge))"
-            className="inline-flex items-center gap-1.5 rounded-xl border border-indigo-200/80 bg-indigo-50/50 px-2.5 py-1 text-xs text-indigo-800 dark:border-indigo-500/30 dark:bg-indigo-500/10 dark:text-indigo-200"
+            title="Facteur de marge par défaut appliqué sur les postes margés (Prix de vente = Coût pré-op / (1 - marge))"
+            className="inline-flex items-center gap-1 rounded-xl border border-indigo-200/80 bg-indigo-50/50 px-2.5 py-1 text-xs text-indigo-800 dark:border-indigo-500/30 dark:bg-indigo-500/10 dark:text-indigo-200"
           >
             <Percent className="h-3.5 w-3.5 text-indigo-600 dark:text-indigo-400" />
-            <span className="font-medium">Facteur marge :</span>
+            <span className="font-medium">Marge :</span>
             <input
               type="number"
               min="0"
@@ -752,7 +881,7 @@ export function BudgetTable({
                   setDefaultMarginFactor(Math.max(0, Math.min(90, Math.round(n))));
                 }
               }}
-              className="w-11 rounded-md border border-indigo-200 bg-white px-1.5 py-0.5 text-right font-mono text-xs font-bold text-indigo-700 focus:border-indigo-500 focus:outline-none dark:border-indigo-500/40 dark:bg-slate-900 dark:text-indigo-300"
+              className="w-10 rounded-md border border-indigo-200 bg-white px-1 py-0.5 text-right font-mono text-xs font-bold text-indigo-700 focus:border-indigo-500 focus:outline-none dark:border-indigo-500/40 dark:bg-slate-900 dark:text-indigo-300"
             />
             <span className="font-mono font-bold">%</span>
           </div>
@@ -799,7 +928,7 @@ export function BudgetTable({
               URL.revokeObjectURL(url);
               showToast("Budget exporté en CSV.");
             }}
-            className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50 hover:text-slate-900 disabled:opacity-40 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:text-white"
+            className="inline-flex items-center gap-1 rounded-xl border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50 hover:text-slate-900 disabled:opacity-40 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:text-white"
           >
             <Download className="h-3.5 w-3.5 text-indigo-600 dark:text-indigo-400" />
             CSV
@@ -808,46 +937,89 @@ export function BudgetTable({
           <button
             type="button"
             onClick={() => setDetailedView((v) => !v)}
-            className="rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50 hover:text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:text-white dark:hover:bg-slate-800/70"
+            className={`inline-flex items-center gap-1.5 rounded-xl border px-2.5 py-1.5 text-xs font-medium transition-colors ${
+              detailedView
+                ? "border-indigo-300 bg-indigo-50 text-indigo-700 dark:border-indigo-500/40 dark:bg-indigo-500/15 dark:text-indigo-200"
+                : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50 hover:text-slate-900 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:text-white"
+            }`}
           >
-            {detailedView ? "Vue tableur standard" : "Plus de colonnes"}
+            <SlidersHorizontal className="h-3.5 w-3.5" />
+            {detailedView ? "Vue simplifiée" : "Marge & Détails"}
           </button>
 
           <button
             type="button"
             onClick={() => {
               setQaCategory(selectedCategory ?? allCategories[0] ?? "PRODUCTION");
-              setQuickAddOpen(true);
+              setQuickAddOpen((v) => !v);
             }}
-            className="inline-flex items-center gap-1.5 rounded-xl bg-indigo-600 px-3.5 py-1.5 text-xs font-semibold text-white hover:bg-indigo-700"
+            className="inline-flex items-center gap-1 rounded-xl bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-indigo-700"
           >
             <Plus className="h-3.5 w-3.5" />
-            Ajouter un poste
+            Nouvelle catégorie / ligne
           </button>
         </div>
       </div>
 
       <p className="mb-2.5 text-[11px] text-slate-400 dark:text-slate-500">
-        Astuce tableur : cliquez directement sur n&apos;importe quelle cellule (poste, ressource, marge, montants) pour éditer · <kbd className="rounded border border-slate-200 bg-slate-50 px-1 py-0.5 font-mono text-[10px] dark:border-slate-700 dark:bg-slate-800">Tab</kbd> cellule suivante · <kbd className="rounded border border-slate-200 bg-slate-50 px-1 py-0.5 font-mono text-[10px] dark:border-slate-700 dark:bg-slate-800">Entrée</kbd> ligne suivante · cliquez sur le badge <strong>Marge</strong> pour basculer <strong>{defaultMarginFactor}% ↔ 0%</strong>.
+        Tableur interactif : cliquez sur une cellule pour éditer (formules acceptées ex. <code className="font-mono">=500*3</code>) · <kbd className="rounded border border-slate-200 bg-slate-50 px-1 font-mono text-[10px] dark:border-slate-700 dark:bg-slate-800">Tab</kbd> droite · <kbd className="rounded border border-slate-200 bg-slate-50 px-1 font-mono text-[10px] dark:border-slate-700 dark:bg-slate-800">Entrée</kbd> / <kbd className="rounded border border-slate-200 bg-slate-50 px-1 font-mono text-[10px] dark:border-slate-700 dark:bg-slate-800">↑↓</kbd> lignes · bouton <strong className="font-semibold">+</strong> sur chaque ligne pour insérer en dessous.
       </p>
 
-      {/* Excel-Style Responsive Spreadsheet */}
-      <div className="max-h-[620px] overflow-auto rounded-xl border border-slate-200 dark:border-slate-800">
-        <table className="w-full border-collapse text-left text-xs">
+      {/* Zero-Horizontal-Scroll Adaptive Spreadsheet (Notion / Excel / Google Sheets) */}
+      <div
+        className={`max-h-[640px] rounded-xl border border-slate-200 dark:border-slate-800 ${
+          detailedView ? "overflow-auto" : "overflow-y-auto overflow-x-hidden"
+        }`}
+      >
+        <table
+          className={`w-full border-collapse text-left text-xs ${
+            detailedView ? "min-w-[920px]" : "table-fixed"
+          }`}
+        >
           <thead className="sticky top-0 z-10 bg-slate-50 text-[11px] font-semibold text-slate-600 shadow-[0_1px_0_#e2e8f0] dark:bg-slate-900 dark:text-slate-300 dark:shadow-[0_1px_0_#1e293b]">
             <tr className="divide-x divide-slate-200/70 dark:divide-slate-800">
-              <th className="min-w-[230px] px-3 py-2.5">Poste de dépense</th>
-              {detailedView && <th className="min-w-[130px] px-2.5 py-2.5">Réalisé par</th>}
+              <th className={detailedView ? "min-w-[230px] px-3 py-2.5" : "w-[36%] px-2.5 py-2.5"}>
+                Poste de dépense
+              </th>
               {detailedView && <th className="w-16 px-2 py-2.5 text-right">Qté</th>}
               {detailedView && <th className="w-16 px-2 py-2.5 text-right">Jours</th>}
-              <th className="w-36 px-2.5 py-2.5">Ressource</th>
-              <th className="w-32 px-2.5 py-2.5 text-center">Marge</th>
-              <th className="w-36 px-3 py-2.5 text-right">Prix de vente HT</th>
-              <th className="w-36 px-3 py-2.5 text-right">Coût réel pré-op</th>
-              <th className="w-36 px-3 py-2.5 text-right">Coût réel post-op</th>
-              {!detailedView && <th className="w-28 px-3 py-2.5 text-right">Écart</th>}
-              {detailedView && <th className="w-24 px-2 py-2.5 text-right">Coût/u pré</th>}
-              <th className="w-16 px-2 py-2.5 text-center" />
+              <th className={detailedView ? "w-32 px-2 py-2.5" : "w-[15%] px-2 py-2.5"}>
+                Ressource
+              </th>
+              {detailedView && (
+                <th className="w-32 px-2 py-2.5 text-center">Marge</th>
+              )}
+              <th
+                className={
+                  detailedView
+                    ? "w-32 px-2.5 py-2.5 text-right"
+                    : "w-[15%] px-2 py-2.5 text-right"
+                }
+              >
+                Prix de vente HT
+              </th>
+              <th
+                className={
+                  detailedView
+                    ? "w-32 px-2.5 py-2.5 text-right"
+                    : "w-[14%] px-2 py-2.5 text-right"
+                }
+              >
+                Coût réel pré-op
+              </th>
+              <th
+                className={
+                  detailedView
+                    ? "w-32 px-2.5 py-2.5 text-right"
+                    : "w-[13%] px-2 py-2.5 text-right"
+                }
+              >
+                Coût réel post-op
+              </th>
+              {detailedView && (
+                <th className="w-24 px-2 py-2.5 text-right">Coût/u pré</th>
+              )}
+              <th className={detailedView ? "w-20 px-1.5 py-2.5" : "w-[7%] px-1 py-2.5"} />
             </tr>
           </thead>
 
@@ -859,7 +1031,7 @@ export function BudgetTable({
                   className="px-4 py-10 text-center text-sm text-slate-500 dark:text-slate-400"
                 >
                   {lines.length === 0
-                    ? "Aucun poste budgétaire pour le moment. Cliquez sur « Ajouter un poste »."
+                    ? "Aucun poste budgétaire pour le moment. Cliquez sur « Nouvelle catégorie / ligne »."
                     : "Aucun poste ne correspond à votre recherche."}
                 </td>
               </tr>
@@ -871,7 +1043,8 @@ export function BudgetTable({
                 const catMarginPct =
                   group.soldTotal > 0
                     ? round2(
-                        ((group.soldTotal - group.preOpTotal) / group.soldTotal) * 100
+                        ((group.soldTotal - group.preOpTotal) / group.soldTotal) *
+                          100
                       )
                     : 0;
 
@@ -895,6 +1068,7 @@ export function BudgetTable({
                     quoteById={quoteById}
                     inlineEdit={inlineEdit}
                     savingLineId={savingLineId}
+                    insertingBelowId={insertingBelowId}
                     confirmDeleteId={confirmDeleteId}
                     deletingId={deletingId}
                     onToggleExpandLine={toggleExpandLine}
@@ -909,19 +1083,32 @@ export function BudgetTable({
                     onCancelInline={() => setInlineEdit(null)}
                     onResourceChange={handleResourceChange}
                     onToggleMargin={handleToggleLineMargin}
+                    onInsertRowBelow={(line) =>
+                      void handleInsertRow({
+                        category: line.category,
+                        anchorId: line.id,
+                      })
+                    }
+                    onDuplicateRow={(line) =>
+                      void handleInsertRow({
+                        category: line.category,
+                        anchorId: line.id,
+                        cloneFrom: line,
+                      })
+                    }
                     onRequestDelete={(id) => setConfirmDeleteId(id)}
                     onConfirmDelete={handleDeleteLine}
                     onCancelDelete={() => setConfirmDeleteId(null)}
                     onToggle={() => toggleCategory(group.category)}
-                    onQuickAddInCategory={() =>
-                      openQuickAddForCategory(group.category)
+                    onInsertInCategory={() =>
+                      void handleInsertRow({ category: group.category })
                     }
                   />
                 );
               })
             )}
 
-            {/* Quick Inline Add Row (Excel-style) */}
+            {/* Quick-Add New Category / Custom Row */}
             {quickAddOpen && (
               <tr
                 data-testid="budget-quick-add-row"
@@ -929,21 +1116,19 @@ export function BudgetTable({
               >
                 <td className="px-2 py-2">
                   <div className="flex flex-col gap-1">
-                    <div className="flex items-center gap-1">
-                      <input
-                        list="budget-categories-datalist"
-                        type="text"
-                        value={qaCategory}
-                        onChange={(e) => setQaCategory(e.target.value)}
-                        placeholder="Catégorie..."
-                        className="w-28 rounded-md border border-indigo-200 bg-white px-2 py-1 text-[10px] font-bold tracking-wide text-indigo-700 uppercase focus:border-indigo-500 focus:outline-none dark:border-indigo-500/30 dark:bg-slate-900 dark:text-indigo-300"
-                      />
-                      <datalist id="budget-categories-datalist">
-                        {allCategories.map((cat) => (
-                          <option key={cat} value={cat} />
-                        ))}
-                      </datalist>
-                    </div>
+                    <input
+                      list="budget-categories-datalist"
+                      type="text"
+                      value={qaCategory}
+                      onChange={(e) => setQaCategory(e.target.value)}
+                      placeholder="Catégorie..."
+                      className="w-full rounded-md border border-indigo-200 bg-white px-2 py-0.5 text-[10px] font-bold tracking-wide text-indigo-700 uppercase focus:border-indigo-500 focus:outline-none dark:border-indigo-500/30 dark:bg-slate-900 dark:text-indigo-300"
+                    />
+                    <datalist id="budget-categories-datalist">
+                      {allCategories.map((cat) => (
+                        <option key={cat} value={cat} />
+                      ))}
+                    </datalist>
                     <input
                       type="text"
                       autoFocus
@@ -964,19 +1149,18 @@ export function BudgetTable({
                 </td>
                 {detailedView && (
                   <>
-                    <td className="px-2 py-2 text-slate-400">—</td>
                     <td className="px-2 py-2 text-right font-mono text-slate-400">1</td>
                     <td className="px-2 py-2 text-right font-mono text-slate-400">1</td>
                   </>
                 )}
-                <td className="px-2 py-2">
+                <td className="px-1.5 py-2">
                   <select
                     aria-label="Ressource nouveau poste"
                     value={qaResource}
                     onChange={(e) =>
                       setQaResource(e.target.value as ResourceTypeOption)
                     }
-                    className={`w-full rounded-lg border px-2 py-1 text-[11px] font-semibold focus:outline-none ${resourceSelectStyle(qaResource)}`}
+                    className={`w-full rounded-lg border px-1.5 py-1 text-[11px] font-semibold focus:outline-none ${resourceSelectStyle(qaResource)}`}
                   >
                     {RESOURCE_TYPE_OPTIONS.map((opt) => (
                       <option key={opt} value={opt}>
@@ -985,27 +1169,28 @@ export function BudgetTable({
                     ))}
                   </select>
                 </td>
-                <td className="px-2 py-2 text-center">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setQaMarged((prev) => !prev);
-                      setQaSaleOverride(null);
-                    }}
-                    className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 font-mono text-[11px] font-bold transition-colors ${
-                      qaMarged
-                        ? "bg-indigo-100 text-indigo-700 hover:bg-indigo-200 dark:bg-indigo-500/20 dark:text-indigo-300"
-                        : "bg-slate-200 text-slate-600 hover:bg-slate-300 dark:bg-slate-700 dark:text-slate-300"
-                    }`}
-                  >
-                    {qaMarged ? `${defaultMarginFactor}%` : "0%"}
-                  </button>
-                </td>
-                <td className="px-2 py-2 text-right">
+                {detailedView && (
+                  <td className="px-2 py-2 text-center">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setQaMarged((prev) => !prev);
+                        setQaSaleOverride(null);
+                      }}
+                      className={`rounded-full px-2 py-0.5 font-mono text-[11px] font-bold ${
+                        qaMarged
+                          ? "bg-indigo-100 text-indigo-700 dark:bg-indigo-500/20 dark:text-indigo-300"
+                          : "bg-slate-200 text-slate-600 dark:bg-slate-700 dark:text-slate-300"
+                      }`}
+                    >
+                      {qaMarged ? `${defaultMarginFactor}%` : "0%"}
+                    </button>
+                  </td>
+                )}
+                <td className="px-1.5 py-2 text-right">
                   <input
-                    type="number"
-                    step="0.01"
-                    min="0"
+                    type="text"
+                    inputMode="decimal"
                     aria-label="Prix de vente HT"
                     value={
                       qaSaleOverride !== null
@@ -1022,14 +1207,13 @@ export function BudgetTable({
                         void handleQuickAddSubmit();
                       }
                     }}
-                    className="w-24 rounded-md border border-indigo-200 bg-white px-2 py-1 text-right font-mono text-xs text-slate-900 focus:border-indigo-500 focus:outline-none dark:border-indigo-500/30 dark:bg-slate-900 dark:text-white"
+                    className="w-full rounded-md border border-indigo-200 bg-white px-1.5 py-1 text-right font-mono text-xs text-slate-900 focus:border-indigo-500 focus:outline-none dark:border-indigo-500/30 dark:bg-slate-900 dark:text-white"
                   />
                 </td>
-                <td className="px-2 py-2 text-right">
+                <td className="px-1.5 py-2 text-right">
                   <input
-                    type="number"
-                    step="0.01"
-                    min="0"
+                    type="text"
+                    inputMode="decimal"
                     aria-label="Coût réel pré-op"
                     value={qaPreOp}
                     placeholder="0,00"
@@ -1043,14 +1227,13 @@ export function BudgetTable({
                         void handleQuickAddSubmit();
                       }
                     }}
-                    className="w-24 rounded-md border border-indigo-200 bg-white px-2 py-1 text-right font-mono text-xs text-slate-900 focus:border-indigo-500 focus:outline-none dark:border-indigo-500/30 dark:bg-slate-900 dark:text-white"
+                    className="w-full rounded-md border border-indigo-200 bg-white px-1.5 py-1 text-right font-mono text-xs text-slate-900 focus:border-indigo-500 focus:outline-none dark:border-indigo-500/30 dark:bg-slate-900 dark:text-white"
                   />
                 </td>
-                <td className="px-2 py-2 text-right">
+                <td className="px-1.5 py-2 text-right">
                   <input
-                    type="number"
-                    step="0.01"
-                    min="0"
+                    type="text"
+                    inputMode="decimal"
                     aria-label="Coût réel post-op"
                     value={qaPostOp}
                     onChange={(e) => setQaPostOp(e.target.value)}
@@ -1060,30 +1243,25 @@ export function BudgetTable({
                         void handleQuickAddSubmit();
                       }
                     }}
-                    className="w-24 rounded-md border border-indigo-200 bg-white px-2 py-1 text-right font-mono text-xs text-slate-900 focus:border-indigo-500 focus:outline-none dark:border-indigo-500/30 dark:bg-slate-900 dark:text-white"
+                    className="w-full rounded-md border border-indigo-200 bg-white px-1.5 py-1 text-right font-mono text-xs text-slate-900 focus:border-indigo-500 focus:outline-none dark:border-indigo-500/30 dark:bg-slate-900 dark:text-white"
                   />
                 </td>
-                {!detailedView && (
-                  <td className="px-2 py-2 text-right font-mono text-[11px] text-slate-400">
-                    —
-                  </td>
-                )}
                 {detailedView && <td />}
-                <td className="px-2 py-2 text-center">
-                  <div className="flex items-center justify-center gap-1">
+                <td className="px-1 py-2 text-center">
+                  <div className="flex items-center justify-center gap-0.5">
                     <button
                       type="button"
                       disabled={qaSaving}
                       onClick={() => void handleQuickAddSubmit()}
-                      className="rounded-lg bg-indigo-600 px-2 py-1 text-[11px] font-semibold text-white hover:bg-indigo-700 disabled:opacity-50"
+                      className="rounded bg-indigo-600 px-1.5 py-1 text-[10px] font-semibold text-white hover:bg-indigo-700 disabled:opacity-50"
                     >
-                      {qaSaving ? "..." : "OK"}
+                      {qaSaving ? "…" : "OK"}
                     </button>
                     <button
                       type="button"
                       onClick={() => setQuickAddOpen(false)}
                       aria-label="Annuler l'ajout"
-                      className="rounded-lg p-1 text-slate-400 hover:bg-slate-200/70 hover:text-slate-700"
+                      className="rounded p-0.5 text-slate-400 hover:bg-slate-200/70 hover:text-slate-700"
                     >
                       <X className="h-3.5 w-3.5" />
                     </button>
@@ -1097,35 +1275,40 @@ export function BudgetTable({
             <tfoot className="sticky bottom-0 z-10 border-t-2 border-slate-200 bg-slate-50 font-mono text-xs font-bold text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-white">
               <tr className="divide-x divide-slate-200/70 dark:divide-slate-800">
                 <td
-                  colSpan={detailedView ? 5 : 2}
-                  className="px-3 py-3 font-sans text-xs font-bold text-slate-800 dark:text-white"
+                  colSpan={detailedView ? 4 : 2}
+                  className="px-2.5 py-2.5 font-sans text-xs font-bold text-slate-800 dark:text-white"
                 >
-                  Total ({filteredLines.length} postes)
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span>Total ({filteredLines.length} postes)</span>
+                    <span className="rounded-full bg-indigo-50 px-2 py-0.5 font-mono text-[10px] font-bold text-indigo-700 dark:bg-indigo-500/15 dark:text-indigo-300">
+                      Marge {grandMarginPct.toFixed(1)}%
+                    </span>
+                    <span
+                      className={`rounded-full px-2 py-0.5 font-mono text-[10px] font-bold ${
+                        grandDiff > 0
+                          ? "bg-rose-100 text-rose-700 dark:bg-rose-500/20 dark:text-rose-300"
+                          : "bg-emerald-50 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300"
+                      }`}
+                    >
+                      Écart {grandDiff > 0 ? "+" : ""}
+                      {formatEur(grandDiff)}
+                    </span>
+                  </div>
                 </td>
-                <td className="px-2.5 py-3 text-center font-mono text-xs font-bold text-indigo-700 dark:text-indigo-300">
-                  {grandMarginPct.toFixed(1)}%
-                </td>
-                <td className="px-3 py-3 text-right text-slate-800 dark:text-slate-200">
-                  {formatEur(grandTotals.sold)}
-                </td>
-                <td className="px-3 py-3 text-right text-slate-800 dark:text-slate-200">
-                  {formatEur(grandTotals.preOp)}
-                </td>
-                <td className="px-3 py-3 text-right text-slate-900 dark:text-white">
-                  {formatEur(grandTotals.postOp)}
-                </td>
-                {!detailedView && (
-                  <td
-                    className={`px-3 py-3 text-right ${
-                      grandTotals.postOp > grandTotals.preOp
-                        ? "text-rose-600 dark:text-rose-400"
-                        : "text-emerald-700 dark:text-emerald-400"
-                    }`}
-                  >
-                    {grandTotals.postOp > grandTotals.preOp ? "+" : ""}
-                    {formatEur(grandTotals.postOp - grandTotals.preOp)}
+                {detailedView && (
+                  <td className="px-2 py-2.5 text-center font-mono text-xs font-bold text-indigo-700 dark:text-indigo-300">
+                    {grandMarginPct.toFixed(1)}%
                   </td>
                 )}
+                <td className="px-2 py-2.5 text-right text-slate-800 dark:text-slate-200">
+                  {formatEur(grandTotals.sold)}
+                </td>
+                <td className="px-2 py-2.5 text-right text-slate-800 dark:text-slate-200">
+                  {formatEur(grandTotals.preOp)}
+                </td>
+                <td className="px-2 py-2.5 text-right text-slate-900 dark:text-white">
+                  {formatEur(grandTotals.postOp)}
+                </td>
                 {detailedView && <td />}
                 <td />
               </tr>
@@ -1181,6 +1364,7 @@ function CategoryRows({
   quoteById,
   inlineEdit,
   savingLineId,
+  insertingBelowId,
   confirmDeleteId,
   deletingId,
   onToggleExpandLine,
@@ -1191,11 +1375,13 @@ function CategoryRows({
   onCancelInline,
   onResourceChange,
   onToggleMargin,
+  onInsertRowBelow,
+  onDuplicateRow,
   onRequestDelete,
   onConfirmDelete,
   onCancelDelete,
   onToggle,
-  onQuickAddInCategory,
+  onInsertInCategory,
 }: {
   category: string;
   rows: BudgetLineDto[];
@@ -1218,6 +1404,7 @@ function CategoryRows({
     value: string;
   } | null;
   savingLineId: string | null;
+  insertingBelowId: string | null;
   confirmDeleteId: string | null;
   deletingId: string | null;
   onToggleExpandLine: (lineId: string) => void;
@@ -1228,7 +1415,7 @@ function CategoryRows({
     line: BudgetLineDto,
     field: EditableField,
     value: string,
-    nav?: "nextCol" | "prevCol" | "nextRow"
+    nav?: "nextCol" | "prevCol" | "nextRow" | "prevRow"
   ) => Promise<void>;
   onCancelInline: () => void;
   onResourceChange: (
@@ -1236,11 +1423,13 @@ function CategoryRows({
     next: ResourceTypeOption
   ) => Promise<void>;
   onToggleMargin: (line: BudgetLineDto) => Promise<void>;
+  onInsertRowBelow: (line: BudgetLineDto) => void;
+  onDuplicateRow: (line: BudgetLineDto) => void;
   onRequestDelete: (id: string) => void;
   onConfirmDelete: (line: BudgetLineDto) => Promise<void>;
   onCancelDelete: () => void;
   onToggle: () => void;
-  onQuickAddInCategory: () => void;
+  onInsertInCategory: () => void;
 }) {
   return (
     <>
@@ -1249,56 +1438,65 @@ function CategoryRows({
         className="cursor-pointer divide-x divide-slate-200/70 border-b border-slate-200 bg-slate-100/80 transition-colors hover:bg-slate-100 dark:divide-slate-800 dark:border-slate-800 dark:bg-slate-800/70 dark:hover:bg-slate-800"
       >
         <td
-          colSpan={detailedView ? 5 : 2}
-          className="px-3 py-2 text-[11px] font-bold tracking-wide text-slate-700 uppercase dark:text-slate-200"
+          colSpan={detailedView ? 4 : 2}
+          className="px-2.5 py-2 text-[11px] font-bold tracking-wide text-slate-700 uppercase dark:text-slate-200"
         >
           <div className="flex items-center justify-between gap-2">
-            <div className="flex items-center gap-1.5">
+            <div className="flex min-w-0 items-center gap-1.5">
               {collapsed ? (
                 <ChevronRight className="h-3.5 w-3.5 shrink-0 text-slate-400" />
               ) : (
                 <ChevronDown className="h-3.5 w-3.5 shrink-0 text-slate-400" />
               )}
-              <span>{category}</span>
+              <span className="truncate">{category}</span>
               <span className="font-normal text-slate-400">({rows.length})</span>
+              {preOpTotal > 0 && (
+                <span
+                  className={`rounded-full px-1.5 py-0.5 font-mono text-[10px] font-semibold normal-case ${
+                    catOverrun
+                      ? "bg-rose-100 text-rose-700 dark:bg-rose-500/20 dark:text-rose-300"
+                      : catDiff === 0
+                        ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300"
+                        : "bg-slate-200/70 text-slate-600 dark:bg-slate-700 dark:text-slate-300"
+                  }`}
+                >
+                  {catOverrun
+                    ? `+${formatEur(catDiff)}`
+                    : catDiff === 0
+                      ? "0 € · Soldé"
+                      : formatEur(catDiff)}
+                </span>
+              )}
             </div>
             <button
               type="button"
+              disabled={insertingBelowId === `cat:${category}`}
               onClick={(e) => {
                 e.stopPropagation();
-                onQuickAddInCategory();
+                onInsertInCategory();
               }}
-              title={`Ajouter un poste dans ${category}`}
-              className="inline-flex items-center gap-0.5 rounded-md px-1.5 py-0.5 text-[10px] font-semibold text-indigo-600 normal-case hover:bg-indigo-100/70 dark:text-indigo-300 dark:hover:bg-indigo-500/20"
+              title={`Ajouter une ligne dans ${category}`}
+              className="inline-flex shrink-0 items-center gap-0.5 rounded-md px-1.5 py-0.5 text-[10px] font-semibold text-indigo-600 normal-case hover:bg-indigo-100/70 disabled:opacity-50 dark:text-indigo-300 dark:hover:bg-indigo-500/20"
             >
               <Plus className="h-3 w-3" />
               Ligne
             </button>
           </div>
         </td>
-        <td className="px-2.5 py-2 text-center font-mono text-[11px] font-semibold text-indigo-700 dark:text-indigo-300">
-          {catMarginPct.toFixed(0)}%
-        </td>
-        <td className="px-3 py-2 text-right font-mono text-[11px] font-semibold text-slate-700 dark:text-slate-200">
-          {formatEur(soldTotal)}
-        </td>
-        <td className="px-3 py-2 text-right font-mono text-[11px] font-semibold text-slate-700 dark:text-slate-200">
-          {formatEur(preOpTotal)}
-        </td>
-        <td className="px-3 py-2 text-right font-mono text-[11px] font-semibold text-slate-900 dark:text-white">
-          {formatEur(postOpTotal)}
-        </td>
-        {!detailedView && (
-          <td
-            className={`px-3 py-2 text-right font-mono text-[11px] font-semibold ${
-              catOverrun
-                ? "text-rose-600 dark:text-rose-400"
-                : "text-slate-500 dark:text-slate-400"
-            }`}
-          >
-            {catOverrun ? `+${formatEur(catDiff)}` : formatEur(catDiff)}
+        {detailedView && (
+          <td className="px-2 py-2 text-center font-mono text-[11px] font-semibold text-indigo-700 dark:text-indigo-300">
+            {catMarginPct.toFixed(0)}%
           </td>
         )}
+        <td className="px-2 py-2 text-right font-mono text-[11px] font-semibold text-slate-700 dark:text-slate-200">
+          {formatEur(soldTotal)}
+        </td>
+        <td className="px-2 py-2 text-right font-mono text-[11px] font-semibold text-slate-700 dark:text-slate-200">
+          {formatEur(preOpTotal)}
+        </td>
+        <td className="px-2 py-2 text-right font-mono text-[11px] font-semibold text-slate-900 dark:text-white">
+          {formatEur(postOpTotal)}
+        </td>
         {detailedView && <td />}
         <td />
       </tr>
@@ -1326,7 +1524,6 @@ function CategoryRows({
               line={line}
               diff={diff}
               isOverrun={isOverrun}
-              ratio={ratio}
               isWarning90={isWarning90}
               isExactSold={isExactSold}
               lineInvoices={lineInvoices}
@@ -1339,6 +1536,7 @@ function CategoryRows({
               quoteById={quoteById}
               inlineEdit={inlineEdit}
               isSavingRow={savingLineId === line.id}
+              isInsertingBelow={insertingBelowId === line.id}
               confirmingDelete={confirmDeleteId === line.id}
               isDeleting={deletingId === line.id}
               onToggleExpand={() => onToggleExpandLine(line.id)}
@@ -1349,12 +1547,31 @@ function CategoryRows({
               onCancelInline={onCancelInline}
               onResourceChange={onResourceChange}
               onToggleMargin={onToggleMargin}
+              onInsertRowBelow={() => onInsertRowBelow(line)}
+              onDuplicateRow={() => onDuplicateRow(line)}
               onRequestDelete={() => onRequestDelete(line.id)}
               onConfirmDelete={() => onConfirmDelete(line)}
               onCancelDelete={onCancelDelete}
             />
           );
         })}
+
+      {/* Notion-style group footer "+ Nouvelle ligne" */}
+      {!collapsed && (
+        <tr className="border-b border-slate-200/70 bg-white dark:border-slate-800 dark:bg-[#111827]">
+          <td colSpan={colCount} className="px-2.5 py-1">
+            <button
+              type="button"
+              disabled={insertingBelowId === `cat:${category}`}
+              onClick={onInsertInCategory}
+              className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-[11px] font-medium text-slate-400 transition-colors hover:bg-indigo-50/70 hover:text-indigo-600 disabled:opacity-50 dark:text-slate-500 dark:hover:bg-indigo-500/15 dark:hover:text-indigo-300"
+            >
+              <Plus className="h-3 w-3" />
+              Ajouter une ligne dans {category}
+            </button>
+          </td>
+        </tr>
+      )}
     </>
   );
 }
@@ -1363,7 +1580,6 @@ function LineRowWithDetail({
   line,
   diff,
   isOverrun,
-  ratio,
   isWarning90,
   isExactSold,
   lineInvoices,
@@ -1376,6 +1592,7 @@ function LineRowWithDetail({
   quoteById,
   inlineEdit,
   isSavingRow,
+  isInsertingBelow,
   confirmingDelete,
   isDeleting,
   onToggleExpand,
@@ -1386,6 +1603,8 @@ function LineRowWithDetail({
   onCancelInline,
   onResourceChange,
   onToggleMargin,
+  onInsertRowBelow,
+  onDuplicateRow,
   onRequestDelete,
   onConfirmDelete,
   onCancelDelete,
@@ -1393,7 +1612,6 @@ function LineRowWithDetail({
   line: BudgetLineDto;
   diff: number;
   isOverrun: boolean;
-  ratio: number;
   isWarning90: boolean;
   isExactSold: boolean;
   lineInvoices: InvoiceDto[];
@@ -1410,6 +1628,7 @@ function LineRowWithDetail({
     value: string;
   } | null;
   isSavingRow: boolean;
+  isInsertingBelow: boolean;
   confirmingDelete: boolean;
   isDeleting: boolean;
   onToggleExpand: () => void;
@@ -1420,7 +1639,7 @@ function LineRowWithDetail({
     line: BudgetLineDto,
     field: EditableField,
     value: string,
-    nav?: "nextCol" | "prevCol" | "nextRow"
+    nav?: "nextCol" | "prevCol" | "nextRow" | "prevRow"
   ) => Promise<void>;
   onCancelInline: () => void;
   onResourceChange: (
@@ -1428,6 +1647,8 @@ function LineRowWithDetail({
     next: ResourceTypeOption
   ) => Promise<void>;
   onToggleMargin: (line: BudgetLineDto) => Promise<void>;
+  onInsertRowBelow: () => void;
+  onDuplicateRow: () => void;
   onRequestDelete: () => void;
   onConfirmDelete: () => Promise<void>;
   onCancelDelete: () => void;
@@ -1446,6 +1667,12 @@ function LineRowWithDetail({
     if (e.key === "Enter") {
       e.preventDefault();
       void onCommitInline(line, field, inlineEdit?.value ?? "", "nextRow");
+    } else if (e.key === "ArrowDown") {
+      e.preventDefault();
+      void onCommitInline(line, field, inlineEdit?.value ?? "", "nextRow");
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      void onCommitInline(line, field, inlineEdit?.value ?? "", "prevRow");
     } else if (e.key === "Tab") {
       e.preventDefault();
       void onCommitInline(
@@ -1463,7 +1690,7 @@ function LineRowWithDetail({
   return (
     <>
       <tr
-        className={`divide-x divide-slate-100 border-b border-slate-100 transition-colors dark:divide-slate-800/70 dark:border-slate-800/70 ${
+        className={`group divide-x divide-slate-100 border-b border-slate-100 transition-colors dark:divide-slate-800/70 dark:border-slate-800/70 ${
           isSavingRow ? "opacity-75" : ""
         } ${
           isOverrun
@@ -1473,9 +1700,21 @@ function LineRowWithDetail({
               : "bg-white hover:bg-slate-50/70 dark:bg-[#111827] dark:hover:bg-slate-800/40"
         }`}
       >
-        {/* 1. POSTE DE DÉPENSE (Free-text editable cell) */}
-        <td className="px-2.5 py-2 text-[13px] font-medium text-slate-800 dark:text-slate-100">
-          <div className="flex items-center gap-1.5">
+        {/* 1. POSTE DE DÉPENSE (Notion + row button, expand chevron, free-text edit, Écart badge replacing Soldé) */}
+        <td className="px-2 py-2 text-[12.5px] font-medium text-slate-800 dark:text-slate-100">
+          <div className="flex items-center gap-1">
+            {/* Notion-style '+' button right on the row to add a line immediately */}
+            <button
+              type="button"
+              disabled={isInsertingBelow}
+              onClick={onInsertRowBelow}
+              title="Ajouter une ligne en dessous"
+              aria-label={`Ajouter une ligne sous ${line.objet}`}
+              className="shrink-0 rounded p-0.5 text-slate-300 opacity-50 transition-all hover:bg-indigo-100 hover:text-indigo-700 group-hover:opacity-100 focus:opacity-100 disabled:opacity-30 dark:text-slate-600 dark:hover:bg-indigo-500/20 dark:hover:text-indigo-300"
+            >
+              <Plus className="h-3.5 w-3.5" />
+            </button>
+
             <button
               type="button"
               onClick={onToggleExpand}
@@ -1508,7 +1747,7 @@ function LineRowWithDetail({
                   type="button"
                   title="Cliquer pour renommer ce poste de dépense"
                   onClick={() => onStartInline(line.id, "objet", line.objet)}
-                  className="w-full truncate rounded px-1.5 py-0.5 text-left transition-colors hover:bg-indigo-50 hover:text-indigo-800 dark:hover:bg-indigo-500/15 dark:hover:text-indigo-200"
+                  className="w-full truncate rounded px-1 py-0.5 text-left transition-colors hover:bg-indigo-50 hover:text-indigo-800 dark:hover:bg-indigo-500/15 dark:hover:text-indigo-200"
                 >
                   {line.objet}
                 </button>
@@ -1520,36 +1759,50 @@ function LineRowWithDetail({
                 type="button"
                 onClick={onToggleExpand}
                 data-testid={`line-invoices-toggle-${line.id}`}
-                className="inline-flex shrink-0 items-center gap-1 rounded-full bg-indigo-50 px-2 py-0.5 text-[10px] font-semibold text-indigo-700 hover:bg-indigo-100 dark:bg-indigo-500/15 dark:text-indigo-300"
+                title={`${lineInvoices.length} facture(s) reliée(s)`}
+                className="inline-flex shrink-0 items-center gap-0.5 rounded-full bg-indigo-50 px-1.5 py-0.5 text-[10px] font-semibold text-indigo-700 hover:bg-indigo-100 dark:bg-indigo-500/15 dark:text-indigo-300"
               >
                 <Receipt className="h-2.5 w-2.5" />
                 {lineInvoices.length}
               </button>
             )}
-            {isOverrun && (
+
+            {/* Écart inline badge (replaces dedicated Écart column & old Soldé badge!) */}
+            {isOverrun ? (
               <span
                 data-testid="budget-alert-badge"
+                title={`Écart post-op vs pré-op : +${formatEur(diff)} (dépassement)`}
                 className="shrink-0 rounded-full bg-rose-100 px-1.5 py-0.5 font-mono text-[10px] font-bold text-rose-700 dark:bg-rose-500/20 dark:text-rose-300"
               >
                 +{formatEur(diff)}
               </span>
-            )}
-            {isWarning90 && (
-              <span className="shrink-0 rounded-full bg-amber-100 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-amber-800 dark:bg-amber-500/20 dark:text-amber-300">
-                {Math.round(ratio * 100)}%
+            ) : isExactSold ? (
+              <span
+                title="Écart : 0 € (budget exactement consommé)"
+                className="shrink-0 rounded-full bg-emerald-50 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300"
+              >
+                0 €
               </span>
-            )}
-            {isExactSold && (
-              <span className="shrink-0 rounded-full bg-emerald-50 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300">
-                Soldé
+            ) : line.preOpTotalHt > 0 && diff < 0 ? (
+              <span
+                title={`Écart post-op vs pré-op : ${formatEur(diff)} (reste disponible)`}
+                className={`shrink-0 rounded-full px-1.5 py-0.5 font-mono text-[10px] font-semibold ${
+                  isWarning90
+                    ? "bg-amber-100 text-amber-800 dark:bg-amber-500/20 dark:text-amber-300"
+                    : "bg-emerald-50/80 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300"
+                }`}
+              >
+                {formatEur(diff)}
               </span>
-            )}
+            ) : null}
           </div>
 
           {validatedLineInvoices.length > 0 && (
-            <div className="mt-1 flex flex-wrap items-center gap-1 pl-6 font-mono text-[10px] text-indigo-600 dark:text-indigo-400">
+            <div className="mt-1 flex flex-wrap items-center gap-1 pl-9 font-mono text-[10px] text-indigo-600 dark:text-indigo-400">
               <span>
-                {validatedLineInvoices.map((i) => formatEur(i.amountHt)).join(" + ")}
+                {validatedLineInvoices
+                  .map((i) => formatEur(i.amountHt))
+                  .join(" + ")}
                 {" = "}
                 {formatEur(sumInvoicesHt)}
               </span>
@@ -1568,46 +1821,13 @@ function LineRowWithDetail({
           )}
         </td>
 
-        {/* Detailed-only columns */}
+        {/* Detailed-only Qté & Jours */}
         {detailedView && (
-          <td className="px-2 py-2 text-slate-600 dark:text-slate-300">
-            {isEditing("realisePar") ? (
-              <input
-                type="text"
-                autoFocus
-                value={inlineEdit?.value ?? ""}
-                onFocus={(e) => e.currentTarget.select()}
-                onChange={(e) => onChangeInline(e.target.value)}
-                onBlur={() =>
-                  void onCommitInline(
-                    line,
-                    "realisePar",
-                    inlineEdit?.value ?? ""
-                  )
-                }
-                onKeyDown={(e) => handleCellKeyDown(e, "realisePar")}
-                className="w-full rounded-md border border-indigo-500 bg-white px-2 py-0.5 text-xs text-slate-900 focus:outline-none dark:bg-slate-900 dark:text-white"
-              />
-            ) : (
-              <button
-                type="button"
-                onClick={() =>
-                  onStartInline(line.id, "realisePar", line.realisePar ?? "")
-                }
-                className="w-full truncate rounded px-1.5 py-0.5 text-left hover:bg-indigo-50 dark:hover:bg-indigo-500/15"
-              >
-                {line.realisePar || "—"}
-              </button>
-            )}
-          </td>
-        )}
-        {detailedView && (
-          <td className="px-2 py-2 text-right font-mono text-slate-600 dark:text-slate-300">
+          <td className="px-1.5 py-2 text-right font-mono text-slate-600 dark:text-slate-300">
             {isEditing("saleQty") ? (
               <input
-                type="number"
-                step="0.5"
-                min="0"
+                type="text"
+                inputMode="decimal"
                 autoFocus
                 value={inlineEdit?.value ?? ""}
                 onFocus={(e) => e.currentTarget.select()}
@@ -1616,7 +1836,7 @@ function LineRowWithDetail({
                   void onCommitInline(line, "saleQty", inlineEdit?.value ?? "")
                 }
                 onKeyDown={(e) => handleCellKeyDown(e, "saleQty")}
-                className="w-14 rounded-md border border-indigo-500 bg-white px-1.5 py-0.5 text-right font-mono text-xs text-slate-900 focus:outline-none dark:bg-slate-900 dark:text-white"
+                className="w-12 rounded-md border border-indigo-500 bg-white px-1 py-0.5 text-right font-mono text-xs text-slate-900 focus:outline-none dark:bg-slate-900 dark:text-white"
               />
             ) : (
               <button
@@ -1624,7 +1844,7 @@ function LineRowWithDetail({
                 onClick={() =>
                   onStartInline(line.id, "saleQty", String(line.saleQty))
                 }
-                className="rounded px-1.5 py-0.5 hover:bg-indigo-50 dark:hover:bg-indigo-500/15"
+                className="rounded px-1 py-0.5 hover:bg-indigo-50 dark:hover:bg-indigo-500/15"
               >
                 {line.saleQty}
               </button>
@@ -1632,12 +1852,11 @@ function LineRowWithDetail({
           </td>
         )}
         {detailedView && (
-          <td className="px-2 py-2 text-right font-mono text-slate-600 dark:text-slate-300">
+          <td className="px-1.5 py-2 text-right font-mono text-slate-600 dark:text-slate-300">
             {isEditing("saleDays") ? (
               <input
-                type="number"
-                step="0.5"
-                min="0"
+                type="text"
+                inputMode="decimal"
                 autoFocus
                 value={inlineEdit?.value ?? ""}
                 onFocus={(e) => e.currentTarget.select()}
@@ -1646,7 +1865,7 @@ function LineRowWithDetail({
                   void onCommitInline(line, "saleDays", inlineEdit?.value ?? "")
                 }
                 onKeyDown={(e) => handleCellKeyDown(e, "saleDays")}
-                className="w-14 rounded-md border border-indigo-500 bg-white px-1.5 py-0.5 text-right font-mono text-xs text-slate-900 focus:outline-none dark:bg-slate-900 dark:text-white"
+                className="w-12 rounded-md border border-indigo-500 bg-white px-1 py-0.5 text-right font-mono text-xs text-slate-900 focus:outline-none dark:bg-slate-900 dark:text-white"
               />
             ) : (
               <button
@@ -1654,7 +1873,7 @@ function LineRowWithDetail({
                 onClick={() =>
                   onStartInline(line.id, "saleDays", String(line.saleDays))
                 }
-                className="rounded px-1.5 py-0.5 hover:bg-indigo-50 dark:hover:bg-indigo-500/15"
+                className="rounded px-1 py-0.5 hover:bg-indigo-50 dark:hover:bg-indigo-500/15"
               >
                 {line.saleDays}
               </button>
@@ -1663,7 +1882,7 @@ function LineRowWithDetail({
         )}
 
         {/* 2. RESSOURCE (Direct inline dropdown: Interne / Externe / Amortissement) */}
-        <td className="px-2 py-2">
+        <td className="px-1.5 py-2">
           <select
             aria-label={`Type de ressource pour ${line.objet}`}
             value={resourceVal}
@@ -1671,7 +1890,7 @@ function LineRowWithDetail({
             onChange={(e) =>
               void onResourceChange(line, e.target.value as ResourceTypeOption)
             }
-            className={`w-full cursor-pointer rounded-lg border px-2 py-1 text-[11px] font-semibold transition-colors focus:border-indigo-500 focus:outline-none disabled:opacity-50 ${resourceSelectStyle(resourceVal)}`}
+            className={`w-full cursor-pointer rounded-lg border px-1.5 py-1 text-[11px] font-semibold transition-colors focus:border-indigo-500 focus:outline-none disabled:opacity-50 ${resourceSelectStyle(resourceVal)}`}
           >
             {RESOURCE_TYPE_OPTIONS.map((opt) => (
               <option key={opt} value={opt}>
@@ -1681,81 +1900,81 @@ function LineRowWithDetail({
           </select>
         </td>
 
-        {/* 3. MARGE (1-click toggle 43% <-> 0% + inline custom % editor) */}
-        <td className="px-2 py-2 text-center">
-          {isEditing("marginPct") ? (
-            <div className="inline-flex items-center gap-0.5">
-              <input
-                type="number"
-                step="1"
-                min="0"
-                max="95"
-                autoFocus
-                value={inlineEdit?.value ?? ""}
-                onFocus={(e) => e.currentTarget.select()}
-                onChange={(e) => onChangeInline(e.target.value)}
-                onBlur={() =>
-                  void onCommitInline(
-                    line,
-                    "marginPct",
-                    inlineEdit?.value ?? ""
-                  )
-                }
-                onKeyDown={(e) => handleCellKeyDown(e, "marginPct")}
-                className="w-14 rounded-md border border-indigo-500 bg-white px-1.5 py-0.5 text-right font-mono text-xs text-slate-900 focus:outline-none dark:bg-slate-900 dark:text-white"
-              />
-              <span className="font-mono text-[11px] text-slate-500">%</span>
-            </div>
-          ) : (
-            <div className="inline-flex items-center gap-1">
-              <button
-                type="button"
-                disabled={isSavingRow}
-                onClick={() => void onToggleMargin(line)}
-                title={
-                  isMarged
-                    ? "Cliquer pour passer ce poste sans marge (0%)"
-                    : `Cliquer pour appliquer la marge par défaut (${defaultMarginFactor}%)`
-                }
-                className={`rounded-full px-2 py-0.5 text-[10px] font-bold transition-colors disabled:opacity-50 ${
-                  isMarged
-                    ? "bg-indigo-100 text-indigo-700 hover:bg-indigo-200 dark:bg-indigo-500/20 dark:text-indigo-300"
-                    : "bg-slate-100 text-slate-500 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-400"
-                }`}
-              >
-                {isMarged ? "Margé" : "0%"}
-              </button>
-              <button
-                type="button"
-                title="Cliquer pour saisir un % de marge personnalisé"
-                onClick={() =>
-                  onStartInline(
-                    line.id,
-                    "marginPct",
-                    String(round2(effectiveMarginPct))
-                  )
-                }
-                className="rounded px-1 py-0.5 font-mono text-[11px] font-semibold text-slate-600 hover:bg-indigo-50 hover:text-indigo-700 dark:text-slate-300 dark:hover:bg-indigo-500/15"
-              >
-                {effectiveMarginPct.toFixed(
-                  Math.abs(effectiveMarginPct - Math.round(effectiveMarginPct)) <
-                    0.05
-                    ? 0
-                    : 1
-                )}
-                %
-              </button>
-            </div>
-          )}
-        </td>
+        {/* Detailed-only dedicated MARGE column (hidden in simplified view for zero horizontal scroll!) */}
+        {detailedView && (
+          <td className="px-1.5 py-2 text-center">
+            {isEditing("marginPct") ? (
+              <div className="inline-flex items-center gap-0.5">
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  autoFocus
+                  value={inlineEdit?.value ?? ""}
+                  onFocus={(e) => e.currentTarget.select()}
+                  onChange={(e) => onChangeInline(e.target.value)}
+                  onBlur={() =>
+                    void onCommitInline(
+                      line,
+                      "marginPct",
+                      inlineEdit?.value ?? ""
+                    )
+                  }
+                  onKeyDown={(e) => handleCellKeyDown(e, "marginPct")}
+                  className="w-12 rounded-md border border-indigo-500 bg-white px-1 py-0.5 text-right font-mono text-xs text-slate-900 focus:outline-none dark:bg-slate-900 dark:text-white"
+                />
+                <span className="font-mono text-[11px] text-slate-500">%</span>
+              </div>
+            ) : (
+              <div className="inline-flex items-center gap-1">
+                <button
+                  type="button"
+                  disabled={isSavingRow}
+                  onClick={() => void onToggleMargin(line)}
+                  title={
+                    isMarged
+                      ? "Cliquer pour passer ce poste sans marge (0%)"
+                      : `Cliquer pour appliquer la marge par défaut (${defaultMarginFactor}%)`
+                  }
+                  className={`rounded-full px-1.5 py-0.5 text-[10px] font-bold transition-colors disabled:opacity-50 ${
+                    isMarged
+                      ? "bg-indigo-100 text-indigo-700 hover:bg-indigo-200 dark:bg-indigo-500/20 dark:text-indigo-300"
+                      : "bg-slate-100 text-slate-500 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-400"
+                  }`}
+                >
+                  {isMarged ? "Margé" : "0%"}
+                </button>
+                <button
+                  type="button"
+                  title="Cliquer pour saisir un % de marge personnalisé"
+                  onClick={() =>
+                    onStartInline(
+                      line.id,
+                      "marginPct",
+                      String(round2(effectiveMarginPct))
+                    )
+                  }
+                  className="rounded px-1 py-0.5 font-mono text-[11px] font-semibold text-slate-600 hover:bg-indigo-50 hover:text-indigo-700 dark:text-slate-300 dark:hover:bg-indigo-500/15"
+                >
+                  {effectiveMarginPct.toFixed(
+                    Math.abs(
+                      effectiveMarginPct - Math.round(effectiveMarginPct)
+                    ) < 0.05
+                      ? 0
+                      : 1
+                  )}
+                  %
+                </button>
+              </div>
+            )}
+          </td>
+        )}
 
-        {/* 4. PRIX DE VENTE HT */}
-        <td className="px-2.5 py-2 text-right font-mono text-slate-700 dark:text-slate-200">
+        {/* 3. PRIX DE VENTE HT (with discreet 1-click margin toggle micro-badge in simplified view!) */}
+        <td className="px-2 py-2 text-right font-mono text-slate-700 dark:text-slate-200">
           {isEditing("saleTotalHt") ? (
             <input
-              type="number"
-              step="0.01"
-              min="0"
+              type="text"
+              inputMode="decimal"
               autoFocus
               value={inlineEdit?.value ?? ""}
               onFocus={(e) => e.currentTarget.select()}
@@ -1768,29 +1987,49 @@ function LineRowWithDetail({
                 )
               }
               onKeyDown={(e) => handleCellKeyDown(e, "saleTotalHt")}
-              className="w-24 rounded-md border border-indigo-500 bg-white px-2 py-0.5 text-right font-mono text-xs text-slate-900 focus:outline-none dark:bg-slate-900 dark:text-white"
+              className="w-full rounded-md border border-indigo-500 bg-white px-1.5 py-0.5 text-right font-mono text-xs text-slate-900 focus:outline-none dark:bg-slate-900 dark:text-white"
             />
           ) : (
-            <button
-              type="button"
-              title="Cliquer pour modifier le prix de vente HT"
-              onClick={() =>
-                onStartInline(line.id, "saleTotalHt", String(line.saleTotalHt))
-              }
-              className="w-full rounded px-1.5 py-0.5 text-right transition-colors hover:bg-indigo-50 hover:text-indigo-700 dark:hover:bg-indigo-500/15 dark:hover:text-indigo-300"
-            >
-              {formatEur(line.saleTotalHt)}
-            </button>
+            <div className="flex flex-col items-end">
+              <button
+                type="button"
+                title="Cliquer pour modifier le prix de vente HT (formules acceptées ex. =500*2)"
+                onClick={() =>
+                  onStartInline(line.id, "saleTotalHt", String(line.saleTotalHt))
+                }
+                className="w-full truncate rounded px-1 py-0.5 text-right transition-colors hover:bg-indigo-50 hover:text-indigo-700 dark:hover:bg-indigo-500/15 dark:hover:text-indigo-300"
+              >
+                {formatEur(line.saleTotalHt)}
+              </button>
+              {!detailedView && (
+                <button
+                  type="button"
+                  disabled={isSavingRow}
+                  onClick={() => void onToggleMargin(line)}
+                  title={
+                    isMarged
+                      ? `Marge actuelle ${effectiveMarginPct.toFixed(0)}% — cliquer pour passer à 0% (sans marge)`
+                      : `Sans marge (0%) — cliquer pour appliquer ${defaultMarginFactor}%`
+                  }
+                  className={`mt-0.5 rounded px-1 text-[9.5px] font-semibold transition-colors ${
+                    isMarged
+                      ? "text-indigo-500 hover:bg-indigo-50 hover:text-indigo-700 dark:text-indigo-400 dark:hover:bg-indigo-500/20"
+                      : "text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:text-slate-500 dark:hover:bg-slate-800"
+                  }`}
+                >
+                  {isMarged ? `${effectiveMarginPct.toFixed(0)}%` : "0% (sans marge)"}
+                </button>
+              )}
+            </div>
           )}
         </td>
 
-        {/* 5. COÛT RÉEL PRÉ-OP */}
-        <td className="px-2.5 py-2 text-right font-mono text-slate-800 dark:text-slate-100">
+        {/* 4. COÛT RÉEL PRÉ-OP */}
+        <td className="px-2 py-2 text-right font-mono text-slate-800 dark:text-slate-100">
           {isEditing("preOpTotalHt") ? (
             <input
-              type="number"
-              step="0.01"
-              min="0"
+              type="text"
+              inputMode="decimal"
               autoFocus
               value={inlineEdit?.value ?? ""}
               onFocus={(e) => e.currentTarget.select()}
@@ -1803,7 +2042,7 @@ function LineRowWithDetail({
                 )
               }
               onKeyDown={(e) => handleCellKeyDown(e, "preOpTotalHt")}
-              className="w-24 rounded-md border border-indigo-500 bg-white px-2 py-0.5 text-right font-mono text-xs text-slate-900 focus:outline-none dark:bg-slate-900 dark:text-white"
+              className="w-full rounded-md border border-indigo-500 bg-white px-1.5 py-0.5 text-right font-mono text-xs text-slate-900 focus:outline-none dark:bg-slate-900 dark:text-white"
             />
           ) : (
             <button
@@ -1816,16 +2055,16 @@ function LineRowWithDetail({
                   String(line.preOpTotalHt)
                 )
               }
-              className="w-full rounded px-1.5 py-0.5 text-right transition-colors hover:bg-indigo-50 hover:text-indigo-700 dark:hover:bg-indigo-500/15 dark:hover:text-indigo-300"
+              className="w-full truncate rounded px-1 py-0.5 text-right transition-colors hover:bg-indigo-50 hover:text-indigo-700 dark:hover:bg-indigo-500/15 dark:hover:text-indigo-300"
             >
               {formatEur(line.preOpTotalHt)}
             </button>
           )}
         </td>
 
-        {/* 6. COÛT RÉEL POST-OP */}
+        {/* 5. COÛT RÉEL POST-OP */}
         <td
-          className={`px-2.5 py-2 text-right font-mono font-semibold ${
+          className={`px-2 py-2 text-right font-mono font-semibold ${
             isOverrun
               ? "text-rose-600 dark:text-rose-400"
               : "text-slate-900 dark:text-white"
@@ -1833,9 +2072,8 @@ function LineRowWithDetail({
         >
           {isEditing("postOpTotalHt") ? (
             <input
-              type="number"
-              step="0.01"
-              min="0"
+              type="text"
+              inputMode="decimal"
               autoFocus
               value={inlineEdit?.value ?? ""}
               onFocus={(e) => e.currentTarget.select()}
@@ -1848,7 +2086,7 @@ function LineRowWithDetail({
                 )
               }
               onKeyDown={(e) => handleCellKeyDown(e, "postOpTotalHt")}
-              className="w-24 rounded-md border border-indigo-500 bg-white px-2 py-0.5 text-right font-mono text-xs text-slate-900 focus:outline-none dark:bg-slate-900 dark:text-white"
+              className="w-full rounded-md border border-indigo-500 bg-white px-1.5 py-0.5 text-right font-mono text-xs text-slate-900 focus:outline-none dark:bg-slate-900 dark:text-white"
             />
           ) : (
             <button
@@ -1861,69 +2099,68 @@ function LineRowWithDetail({
                   String(line.postOpTotalHt)
                 )
               }
-              className="w-full rounded px-1.5 py-0.5 text-right transition-colors hover:bg-indigo-50 hover:text-indigo-700 dark:hover:bg-indigo-500/15 dark:hover:text-indigo-300"
+              className="w-full truncate rounded px-1 py-0.5 text-right transition-colors hover:bg-indigo-50 hover:text-indigo-700 dark:hover:bg-indigo-500/15 dark:hover:text-indigo-300"
             >
               {formatEur(line.postOpTotalHt)}
             </button>
           )}
         </td>
 
-        {/* 7. ÉCART (Standard view) OR Coût/u pré-op (Detailed view) */}
-        {!detailedView && (
-          <td
-            className={`px-3 py-2 text-right font-mono font-semibold ${
-              isOverrun
-                ? "text-rose-600 dark:text-rose-400"
-                : diff < 0
-                  ? "text-emerald-600 dark:text-emerald-400"
-                  : "text-slate-400"
-            }`}
-          >
-            {isOverrun ? `+${formatEur(diff)}` : formatEur(diff)}
-          </td>
-        )}
+        {/* Detailed-only Coût/u pré-op */}
         {detailedView && (
           <td className="px-2 py-2 text-right font-mono text-[11px] text-slate-500 dark:text-slate-400">
             {formatEur(line.preOpUnitCost)}
           </td>
         )}
 
-        {/* 8. DELETE ACTION (Inline confirm) */}
-        <td className="px-2 py-2 text-center">
+        {/* 6. ROW ACTIONS (Duplicate + Delete with inline confirm) */}
+        <td className="px-1 py-2 text-center">
           {confirmingDelete ? (
-            <div className="inline-flex items-center gap-1">
+            <div className="inline-flex items-center gap-0.5">
               <button
                 type="button"
                 disabled={isDeleting}
                 onClick={() => void onConfirmDelete()}
                 className="rounded bg-rose-600 px-1.5 py-0.5 text-[10px] font-bold text-white hover:bg-rose-700 disabled:opacity-50"
               >
-                {isDeleting ? "..." : "Oui"}
+                {isDeleting ? "…" : "Oui"}
               </button>
               <button
                 type="button"
                 disabled={isDeleting}
                 onClick={onCancelDelete}
-                className="rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300"
+                className="rounded border border-slate-200 bg-white px-1 py-0.5 text-[10px] text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300"
               >
                 Non
               </button>
             </div>
           ) : (
-            <button
-              type="button"
-              disabled={lineInvoices.length > 0}
-              onClick={onRequestDelete}
-              title={
-                lineInvoices.length > 0
-                  ? "Impossible de supprimer : des factures sont reliées à ce poste"
-                  : "Supprimer ce poste"
-              }
-              aria-label={`Supprimer ${line.objet}`}
-              className="rounded-lg p-1 text-slate-400 transition-colors hover:bg-rose-50 hover:text-rose-600 disabled:cursor-not-allowed disabled:opacity-30 dark:hover:bg-rose-500/15 dark:hover:text-rose-400"
-            >
-              <Trash2 className="h-3.5 w-3.5" />
-            </button>
+            <div className="inline-flex items-center justify-center gap-0.5">
+              <button
+                type="button"
+                disabled={isInsertingBelow}
+                onClick={onDuplicateRow}
+                title="Dupliquer cette ligne"
+                aria-label={`Dupliquer ${line.objet}`}
+                className="rounded p-1 text-slate-300 opacity-50 transition-all hover:bg-indigo-50 hover:text-indigo-600 group-hover:opacity-100 focus:opacity-100 disabled:opacity-30 dark:text-slate-600 dark:hover:bg-indigo-500/15 dark:hover:text-indigo-300"
+              >
+                <Copy className="h-3 w-3" />
+              </button>
+              <button
+                type="button"
+                disabled={lineInvoices.length > 0}
+                onClick={onRequestDelete}
+                title={
+                  lineInvoices.length > 0
+                    ? "Impossible de supprimer : des factures sont reliées à ce poste"
+                    : "Supprimer cette ligne"
+                }
+                aria-label={`Supprimer ${line.objet}`}
+                className="rounded p-1 text-slate-300 opacity-50 transition-all hover:bg-rose-50 hover:text-rose-600 group-hover:opacity-100 focus:opacity-100 disabled:cursor-not-allowed disabled:opacity-20 dark:text-slate-600 dark:hover:bg-rose-500/15 dark:hover:text-rose-400"
+              >
+                <Trash2 className="h-3 w-3" />
+              </button>
+            </div>
           )}
         </td>
       </tr>

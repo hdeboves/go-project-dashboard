@@ -3,12 +3,20 @@ import { toErrorResponse } from "@/lib/api-error";
 import { assertProjectAccess, getCurrentUser } from "@/lib/auth/session";
 import { getServices } from "@/lib/container";
 import { AppHttpError } from "@/lib/errors";
-import { extractInvoiceFieldsFromText } from "@/lib/invoices/local-extractor";
+import { normalizeProjectCodesList } from "@/lib/invoices/accounting-email";
+import {
+  extractInvoiceFieldsFromText,
+  isOwnCompanyName,
+} from "@/lib/invoices/local-extractor";
+import { resolveDriveQuoteBaseSequence } from "@/lib/invoices/numbering";
 import {
   extractRichTextFromPdfBuffer,
   validatePdfBuffer,
 } from "@/lib/invoices/pdf-text";
+import { checkCodeProjetConflict } from "@/lib/isolation/cp-guard";
 import { prisma } from "@/lib/prisma";
+import { getParisTodayIso } from "@/lib/shared/dates";
+import { findValidVendorVigilance } from "@/lib/vendors/vendor-service";
 
 export async function POST(
   req: NextRequest,
@@ -34,38 +42,67 @@ export async function POST(
       );
     }
 
+    const batchOffsetRaw = Number(formData.get("batchOffset") ?? "0");
+    const batchOffset =
+      Number.isFinite(batchOffsetRaw) && batchOffsetRaw > 0
+        ? Math.floor(batchOffsetRaw)
+        : 0;
+
     const pdfBuffer = Buffer.from(await file.arrayBuffer());
     validatePdfBuffer(pdfBuffer, file.type, file.name);
 
-    const budgetLines = await prisma.budgetLine.findMany({
-      where: { projectId: id },
-      select: {
-        id: true,
-        category: true,
-        objet: true,
-        realisePar: true,
-        preOpTotalHt: true,
-      },
-    });
+    const { getGeminiClient, getGoogleGateway } = getServices();
+
+    const [budgetLines, agencyProjects, driveSeq] = await Promise.all([
+      prisma.budgetLine.findMany({
+        where: { projectId: id },
+        select: {
+          id: true,
+          category: true,
+          objet: true,
+          realisePar: true,
+          preOpTotalHt: true,
+        },
+      }),
+      prisma.project.findMany({
+        where: { isArchived: false },
+        select: { codeProjet: true },
+      }),
+      resolveDriveQuoteBaseSequence({
+        prisma,
+        projectId: id,
+        getGoogleGateway,
+      }),
+    ]);
+
+    const knownProjectCodes = Array.from(
+      new Set(agencyProjects.map((p) => p.codeProjet).filter(Boolean))
+    );
 
     const extractedText = await extractRichTextFromPdfBuffer(pdfBuffer);
     const local = extractInvoiceFieldsFromText({
       pdfText: extractedText,
       filename: file.name,
       activeCodeProjet: project.codeProjet,
+      knownProjectCodes,
       budgetLines,
     });
 
-    let vendorName = local.prestataire ?? "";
-    let quoteNumber = local.numeroFacture ?? "";
-    let issueDate = local.dateFacture || new Date().toISOString().slice(0, 10);
+    let vendorName =
+      local.prestataire &&
+      local.prestataire !== "Prestataire à vérifier" &&
+      !isOwnCompanyName(local.prestataire)
+        ? local.prestataire
+        : "";
+    let supplierQuoteRef = local.numeroFacture ?? "";
+    let issueDate = local.dateFacture || getParisTodayIso();
     let amountHt = local.montantHT ?? 0;
     let description = local.prestationSummary ?? "";
     let suggestedBudgetLineId = local.suggestedBudgetLineId ?? null;
+    let aiDetectedCodes: string[] = [];
 
-    if (!vendorName || !amountHt || !quoteNumber) {
+    if (!vendorName || !amountHt || !supplierQuoteRef) {
       try {
-        const { getGeminiClient } = getServices();
         const gemini = await getGeminiClient();
         const ai = await gemini.extractInvoiceFromPdf({
           pdfBuffer,
@@ -75,41 +112,101 @@ export async function POST(
             client: project.client,
             nomJeu: project.nomJeu,
           },
+          allProjectCodes: knownProjectCodes,
           budgetLines,
         });
-        if (!vendorName && ai.prestataire) vendorName = ai.prestataire;
-        if (!quoteNumber && ai.numeroFacture) quoteNumber = ai.numeroFacture;
+        if (
+          !vendorName &&
+          ai.prestataire &&
+          !isOwnCompanyName(ai.prestataire) &&
+          ai.prestataire !== "Prestataire à vérifier"
+        ) {
+          vendorName = ai.prestataire.trim();
+        }
+        if (!supplierQuoteRef && ai.numeroFacture) {
+          supplierQuoteRef = ai.numeroFacture.trim();
+        }
         if (ai.dateFacture) issueDate = ai.dateFacture;
         if (!amountHt && ai.montantHT > 0) amountHt = ai.montantHT;
-        if (!description && ai.prestationSummary) {
-          description = ai.prestationSummary;
+        if (
+          (!description || description === "Prestation") &&
+          ai.prestationSummary
+        ) {
+          description = ai.prestationSummary.trim();
         }
         if (!suggestedBudgetLineId && ai.suggestedBudgetLineId) {
           suggestedBudgetLineId = ai.suggestedBudgetLineId;
         }
+        aiDetectedCodes = [
+          ...(ai.detectedProjectCodes ?? []),
+          ...(ai.codeProjetDetecte ? [ai.codeProjetDetecte] : []),
+        ];
       } catch {
         // Local extraction fallback is already populated
       }
     }
 
-    if (!quoteNumber) {
+    if (!supplierQuoteRef) {
       const m = `${file.name} ${extractedText}`.match(
         /\b(?:DEVIS|DEV|D|Q)[-_/\s#]?(\d{2,6}(?:[-/]\d{1,5})?)\b/i
       );
-      if (m) quoteNumber = m[0].replace(/\s+/g, "-").toUpperCase();
+      if (m) supplierQuoteRef = m[0].replace(/\s+/g, "-").toUpperCase();
     }
+
+    // Multi-CP & CP conflict detection (exact parity with invoice flow)
+    const combinedText = [
+      file.name,
+      extractedText,
+      vendorName,
+      supplierQuoteRef,
+      description,
+    ]
+      .filter(Boolean)
+      .join("\n");
+
+    const cpCheck = checkCodeProjetConflict(
+      project.codeProjet,
+      local.codeProjetDetecte,
+      combinedText
+    );
+    const detectedProjectCodes = normalizeProjectCodesList(
+      [
+        ...cpCheck.detectedCps,
+        ...aiDetectedCodes,
+        ...local.detectedProjectCodes,
+      ],
+      project.codeProjet
+    );
+
+    const sequentialQuoteNumber = String(driveSeq.baseSeq + 1 + batchOffset);
+
+    // Check Vendor URSSAF Vault (< 6 months valid attestation)
+    const validVendorVigilance = vendorName
+      ? await findValidVendorVigilance(prisma, vendorName).catch(() => null)
+      : null;
 
     return NextResponse.json({
       ok: true,
       extracted: {
-        quoteNumber:
-          quoteNumber ||
-          `DEV-${new Date().getFullYear()}-${Math.floor(100 + Math.random() * 900)}`,
+        quoteNumber: sequentialQuoteNumber,
+        supplierQuoteRef: supplierQuoteRef || null,
         vendorName,
         issueDate,
         amountHt,
-        description,
-        suggestedBudgetLineId,
+        description: description || "Prestation",
+        suggestedBudgetLineId:
+          suggestedBudgetLineId ??
+          (budgetLines.length === 1 ? budgetLines[0].id : null),
+        detectedProjectCodes,
+        cpConflict: cpCheck.hasConflict,
+        conflictingCps: cpCheck.conflictingCps,
+        driveBaseSeq: driveSeq.baseSeq,
+        vigilanceVault: validVendorVigilance
+          ? {
+              driveFileId: validVendorVigilance.vigilanceDriveFileId,
+              filename: validVendorVigilance.vigilanceFilename,
+            }
+          : null,
       },
     });
   } catch (err) {

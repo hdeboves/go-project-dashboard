@@ -85,6 +85,59 @@ export function computeDriveBaseSequence(
   return Math.max(maxExplicit, invoiceFiles.length);
 }
 
+export async function resolveDriveQuoteBaseSequence(params: {
+  prisma: PrismaClient;
+  projectId: string;
+  getGoogleGateway?: (projectId?: string) => Promise<GoogleWorkspacePort>;
+}): Promise<{ baseSeq: number; source: "drive" | "db_fallback" }> {
+  const { prisma, projectId, getGoogleGateway } = params;
+
+  const node0012 = await prisma.driveNode.findFirst({
+    where: { projectId, code: "001.2" },
+    select: { driveFileId: true },
+  });
+
+  if (node0012?.driveFileId && getGoogleGateway) {
+    try {
+      const gateway = await getGoogleGateway(projectId);
+      const children = await gateway.drive.listChildren(node0012.driveFileId);
+      return {
+        baseSeq: computeDriveBaseSequence(children),
+        source: "drive",
+      };
+    } catch {
+      // Fallback to existing DB quotes with driveFileId
+    }
+  }
+
+  const existingQuotes = await prisma.quote.findMany({
+    where: { projectId },
+    select: { quoteNumber: true, originalFilename: true, driveFileId: true },
+  });
+
+  const driveSyncedQuotes = existingQuotes.filter((q) => Boolean(q.driveFileId));
+  const pool = driveSyncedQuotes.length > 0 ? driveSyncedQuotes : existingQuotes;
+  if (pool.length === 0) {
+    return { baseSeq: 0, source: "db_fallback" };
+  }
+
+  const fromNumbers =
+    Number.parseInt(
+      computeNextSequentialInvoiceNumber(pool.map((q) => q.quoteNumber)),
+      10
+    ) - 1;
+  let fromFilenames = 0;
+  for (const q of pool) {
+    const seq = extractInvoiceSequenceFromFilename(q.originalFilename);
+    if (seq !== null && seq > fromFilenames) fromFilenames = seq;
+  }
+
+  return {
+    baseSeq: Math.max(0, fromNumbers, fromFilenames, pool.length),
+    source: "db_fallback",
+  };
+}
+
 /**
  * Resolves the highest already-filed invoice number for a project:
  * 1. Primary source of truth: actual files in Google Drive folder "001.3 Factures".
