@@ -2,7 +2,6 @@
 
 import {
   AlertTriangle,
-  CheckCircle2,
   Copy,
   ExternalLink,
   FileSpreadsheet,
@@ -17,7 +16,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { BudgetTable } from "@/components/budget/BudgetTable";
 import { CategoryChart } from "@/components/budget/CategoryChart";
 import { InvoicePipelinePanel } from "@/components/budget/InvoicePipelinePanel";
@@ -337,30 +336,6 @@ export function BudgetDashboardClient() {
     }
   }
 
-  const overrunAlerts = useMemo(() => {
-    const raw = budget?.alerts ?? [];
-    return raw
-      .filter((a) => a.postOpTotalHt > a.preOpTotalHt)
-      .map((a) => ({
-        ...a,
-        overrunAmount:
-          Math.round((a.postOpTotalHt - a.preOpTotalHt) * 100) / 100,
-      }))
-      .sort((a, b) => b.overrunAmount - a.overrunAmount);
-  }, [budget?.alerts]);
-
-  const warning90Alerts = useMemo(() => {
-    const raw = budget?.alerts ?? [];
-    return raw.filter(
-      (a) => a.level === "WARNING" && a.postOpTotalHt < a.preOpTotalHt
-    );
-  }, [budget?.alerts]);
-
-  const totalOverrunHt = useMemo(
-    () => overrunAlerts.reduce((s, a) => s + a.overrunAmount, 0),
-    [overrunAlerts]
-  );
-
   const blockedInvoices = invoices.filter(
     (inv) => inv.cpConflict || inv.status === "CONFLICT_BLOCKED"
   );
@@ -422,27 +397,6 @@ export function BudgetDashboardClient() {
             >
               {PROJECT_CATEGORY_META[projectCategory].label}
             </span>
-            {overrunAlerts.length === 0 ? (
-              <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2.5 py-0.5 text-xs font-semibold text-emerald-700 ring-1 ring-emerald-600/20 dark:bg-emerald-500/15 dark:text-emerald-300">
-                <CheckCircle2 className="h-3.5 w-3.5" />
-                Dans le budget
-              </span>
-            ) : (
-              <button
-                type="button"
-                onClick={() => {
-                  setOverrunsOnly(true);
-                  setSelectedCategory(null);
-                  setActiveTab("table");
-                }}
-                className="inline-flex items-center gap-1 rounded-full bg-rose-50 px-2.5 py-0.5 text-xs font-semibold text-rose-700 ring-1 ring-rose-600/20 hover:bg-rose-100 dark:bg-rose-500/15 dark:text-rose-300"
-              >
-                <AlertTriangle className="h-3.5 w-3.5" />
-                {overrunAlerts.length} dépassement
-                {overrunAlerts.length > 1 ? "s" : ""} (+
-                {formatEur(totalOverrunHt)})
-              </button>
-            )}
           </div>
           {projectLabel && (
             <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
@@ -457,7 +411,7 @@ export function BudgetDashboardClient() {
             disabled={syncing || importing}
             onClick={() => void handleSmartSync("auto")}
             data-testid="budget-smart-sync-btn"
-            title="Synchronisation bidirectionnelle automatique : détecte si le site ou le Google Sheet a les modifications les plus récentes"
+            title="Synchronise le tableur du site avec le Google Sheet du budget sur le Drive : détecte automatiquement lequel des deux a reçu les dernières modifications et met l'autre à jour."
             className={`inline-flex items-center gap-1.5 rounded-xl border px-3.5 py-2 text-xs font-semibold shadow-2xs transition-colors disabled:opacity-50 ${
               budget?.syncMeta?.hasPendingLocalChanges
                 ? "border-indigo-300 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 dark:border-indigo-500/40 dark:bg-indigo-500/15 dark:text-indigo-200"
@@ -776,109 +730,6 @@ export function BudgetDashboardClient() {
       {/* TAB 1: Overview */}
       {activeTab === "overview" && (
         <div className="space-y-5">
-          {overrunAlerts.length > 0 && (
-            <section className="rounded-2xl border border-rose-200 bg-rose-50/50 p-5 dark:border-rose-500/30 dark:bg-rose-950/20">
-              <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-                <div className="flex items-center gap-2">
-                  <AlertTriangle className="h-4 w-4 text-rose-600 dark:text-rose-400" />
-                  <h2 className="text-sm font-semibold text-rose-950 dark:text-rose-200">
-                    Postes en dépassement ({overrunAlerts.length})
-                  </h2>
-                  <span className="rounded-full bg-rose-100 px-2 py-0.5 font-mono text-xs font-semibold text-rose-700 dark:bg-rose-500/20 dark:text-rose-300">
-                    +{formatEur(totalOverrunHt)}
-                  </span>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setOverrunsOnly(true);
-                    setSelectedCategory(null);
-                    setActiveTab("table");
-                  }}
-                  className="text-xs font-semibold text-rose-700 hover:text-rose-900 dark:text-rose-300"
-                >
-                  Ouvrir dans le tableau →
-                </button>
-              </div>
-
-              <div className="grid gap-2.5 sm:grid-cols-2 lg:grid-cols-3">
-                {overrunAlerts.map((alert) => (
-                  <button
-                    key={alert.budgetLineId}
-                    type="button"
-                    data-testid="budget-alert-badge"
-                    onClick={() => {
-                      setSelectedCategory(alert.category);
-                      setOverrunsOnly(true);
-                      setActiveTab("table");
-                    }}
-                    className="flex min-w-0 items-center justify-between gap-2 overflow-hidden rounded-xl border border-rose-200/80 bg-white px-3.5 py-2.5 text-left shadow-2xs transition-colors hover:border-rose-300 dark:border-rose-500/30 dark:bg-[#111827]"
-                  >
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-xs font-semibold text-slate-900 dark:text-white">
-                        {alert.objet}
-                      </p>
-                      <p className="truncate text-[11px] text-slate-500 dark:text-slate-400">
-                        {alert.category} ·{" "}
-                        {alert.unbudgeted
-                          ? "Hors budget"
-                          : `${formatEur(alert.preOpTotalHt)} → ${formatEur(alert.postOpTotalHt)}`}
-                      </p>
-                    </div>
-                    <span className="shrink-0 whitespace-nowrap font-mono text-xs font-bold text-rose-600 dark:text-rose-400">
-                      +{formatEur(alert.overrunAmount)}
-                    </span>
-                  </button>
-                ))}
-              </div>
-            </section>
-          )}
-
-          {warning90Alerts.length > 0 && (
-            <section className="rounded-2xl border border-amber-200/90 bg-amber-50/70 p-4 dark:border-amber-500/30 dark:bg-amber-500/10">
-              <div className="mb-2.5 flex flex-wrap items-center justify-between gap-2">
-                <p className="flex items-center gap-1.5 text-xs font-semibold text-amber-900 dark:text-amber-200">
-                  <AlertTriangle className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400" />
-                  Vigilance budget (≥ 90% consommé) —{" "}
-                  {warning90Alerts.length} poste
-                  {warning90Alerts.length > 1 ? "s" : ""} proche
-                  {warning90Alerts.length > 1 ? "s" : ""} du plafond
-                </p>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setOverrunsOnly(false);
-                    setActiveTab("table");
-                  }}
-                  className="text-xs font-semibold text-amber-800 hover:underline dark:text-amber-300"
-                >
-                  Voir dans le tableau →
-                </button>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                {warning90Alerts.map((w) => (
-                  <button
-                    key={w.budgetLineId}
-                    type="button"
-                    onClick={() => {
-                      setSelectedCategory(w.category);
-                      setOverrunsOnly(false);
-                      setActiveTab("table");
-                    }}
-                    className="inline-flex items-center gap-2 rounded-xl border border-amber-200 bg-white px-3 py-1.5 text-xs text-slate-700 hover:border-amber-400 dark:border-amber-500/30 dark:bg-[#111827] dark:text-slate-200"
-                  >
-                    <span className="max-w-[180px] truncate font-medium">
-                      {w.objet}
-                    </span>
-                    <span className="font-mono text-[11px] font-bold text-amber-700 dark:text-amber-400">
-                      {w.ratioPct.toFixed(0)}%
-                    </span>
-                  </button>
-                ))}
-              </div>
-            </section>
-          )}
-
           {(budget?.lines.length ?? 0) === 0 ? (
             <section className="rounded-2xl border border-dashed border-slate-300 bg-white p-10 text-center dark:border-slate-700 dark:bg-[#111827]">
               <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-indigo-50 text-indigo-600 dark:bg-indigo-500/15 dark:text-indigo-400">

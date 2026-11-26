@@ -1,10 +1,11 @@
 "use client";
 
 import {
-  AlertCircle,
   Calculator,
   ChevronDown,
   ChevronRight,
+  ChevronsDownUp,
+  ChevronsUpDown,
   Copy,
   Download,
   ExternalLink,
@@ -12,7 +13,6 @@ import {
   Percent,
   Plus,
   Receipt,
-  Search,
   SlidersHorizontal,
   Trash2,
   X,
@@ -166,11 +166,9 @@ export function BudgetTable({
   selectedCategory = null,
   onSelectCategory,
   overrunsOnly = false,
-  onToggleOverrunsOnly,
   onLineSaved,
   onError,
 }: BudgetTableProps) {
-  const [search, setSearch] = useState("");
   const [detailedView, setDetailedView] = useState(false);
   const [defaultMarginFactor, setDefaultMarginFactor] =
     useState<number>(DEFAULT_MARGIN_PCT);
@@ -222,11 +220,6 @@ export function BudgetTable({
     return map;
   }, [quotes]);
 
-  const overrunCount = useMemo(
-    () => lines.filter((l) => l.postOpTotalHt > l.preOpTotalHt).length,
-    [lines]
-  );
-
   const allCategories = useMemo(() => {
     const set = new Set<string>();
     for (const l of lines) set.add(l.category.trim() || "AUTRES");
@@ -234,21 +227,15 @@ export function BudgetTable({
   }, [lines]);
 
   const filteredLines = useMemo(() => {
-    const q = search.trim().toLowerCase();
     return lines.filter((line) => {
       const cat = line.category.trim() || "AUTRES";
       if (selectedCategory && cat !== selectedCategory) return false;
       if (overrunsOnly && !(line.postOpTotalHt > line.preOpTotalHt)) {
         return false;
       }
-      if (q) {
-        const hay =
-          `${cat} ${line.objet} ${line.expenseType} ${toResourceTypeOption(line.expenseType)} ${line.invoiceNumbersNote ?? ""}`.toLowerCase();
-        if (!hay.includes(q)) return false;
-      }
       return true;
     });
-  }, [lines, selectedCategory, overrunsOnly, search]);
+  }, [lines, selectedCategory, overrunsOnly]);
 
   const grouped = useMemo(() => {
     const groups: Array<{
@@ -814,52 +801,40 @@ export function BudgetTable({
       {/* Spreadsheet Toolbar */}
       <div className="mb-3.5 flex flex-wrap items-center justify-between gap-2.5">
         <div className="flex flex-wrap items-center gap-2">
-          <div className="relative">
-            <Search className="pointer-events-none absolute top-1/2 left-2.5 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
-            <input
-              type="text"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Rechercher un poste..."
-              className="w-44 rounded-xl border border-slate-200 bg-slate-50/70 py-1.5 pr-6 pl-8 text-xs text-slate-900 placeholder:text-slate-400 focus:border-indigo-500 focus:bg-white focus:outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 dark:focus:bg-slate-900"
-            />
-            {search && (
-              <button
-                type="button"
-                onClick={() => setSearch("")}
-                className="absolute top-1/2 right-2 -translate-y-1/2 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200"
-              >
-                <X className="h-3.5 w-3.5" />
-              </button>
-            )}
-          </div>
-
-          <select
-            aria-label="Filtrer par catégorie"
-            value={selectedCategory ?? ""}
-            onChange={(e) => onSelectCategory?.(e.target.value || null)}
-            className="max-w-40 rounded-xl border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-700 focus:border-indigo-500 focus:outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+          <button
+            type="button"
+            onClick={() => setCollapsedCategories(new Set())}
+            disabled={grouped.length === 0 || collapsedCategories.size === 0}
+            className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-600 transition-colors hover:bg-slate-50 hover:text-slate-900 disabled:opacity-40 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:text-white"
           >
-            <option value="">Toutes catégories</option>
-            {allCategories.map((cat) => (
-              <option key={cat} value={cat}>
-                {cat}
-              </option>
-            ))}
-          </select>
+            <ChevronsUpDown className="h-3.5 w-3.5 text-indigo-600 dark:text-indigo-400" />
+            Tout dérouler
+          </button>
 
           <button
             type="button"
-            onClick={() => onToggleOverrunsOnly?.(!overrunsOnly)}
-            className={`inline-flex items-center gap-1 rounded-xl border px-2.5 py-1.5 text-xs font-medium transition-colors ${
-              overrunsOnly
-                ? "border-rose-300 bg-rose-50 text-rose-700 dark:border-rose-500/40 dark:bg-rose-500/15 dark:text-rose-300"
-                : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300"
-            }`}
+            onClick={() =>
+              setCollapsedCategories(new Set(grouped.map((g) => g.category)))
+            }
+            disabled={
+              grouped.length === 0 || collapsedCategories.size >= grouped.length
+            }
+            className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-600 transition-colors hover:bg-slate-50 hover:text-slate-900 disabled:opacity-40 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:text-white"
           >
-            <AlertCircle className="h-3.5 w-3.5 text-rose-500" />
-            Dépassements ({overrunCount})
+            <ChevronsDownUp className="h-3.5 w-3.5 text-slate-500 dark:text-slate-400" />
+            Tout enrouler
           </button>
+
+          {selectedCategory && (
+            <button
+              type="button"
+              onClick={() => onSelectCategory?.(null)}
+              className="inline-flex items-center gap-1 rounded-xl border border-indigo-200 bg-indigo-50 px-2.5 py-1.5 text-xs font-semibold text-indigo-700 hover:bg-indigo-100 dark:border-indigo-500/30 dark:bg-indigo-500/15 dark:text-indigo-300"
+            >
+              <span>{selectedCategory}</span>
+              <X className="h-3 w-3" />
+            </button>
+          )}
 
           {/* Default Agency Margin Factor (43%) */}
           <div
