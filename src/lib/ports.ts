@@ -265,11 +265,20 @@ export interface InvoiceExtractionInput {
     client: string;
     nomJeu: string;
   };
+  allProjectCodes?: string[];
   budgetLines: Array<{
     id: string;
     category: string;
     objet: string;
+    realisePar?: string | null;
     preOpTotalHt: number;
+  }>;
+  quotes?: Array<{
+    id: string;
+    quoteNumber: string;
+    vendorName: string;
+    amountHt: number;
+    budgetLineId?: string | null;
   }>;
 }
 
@@ -282,9 +291,11 @@ export interface InvoiceExtractionOutput {
   montantTTC: number;
   typeFacture: "ACOMPTE" | "SOLDE" | "UNIQUE";
   codeProjetDetecte: string | null;
+  detectedProjectCodes?: string[];
   prestationSummary: string;
   suggestedBudgetLineId: string | null;
   suggestedBudgetLineLabel: string | null;
+  suggestedQuoteId?: string | null;
   confidence: number;
   rawWarnings: string[];
   extractedRawTextSnippet: string;

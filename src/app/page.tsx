@@ -154,6 +154,7 @@ export default async function CommandCenterPage({
         select: {
           id: true,
           originalFilename: true,
+          renamedFilename: true,
           vendorName: true,
           invoiceNumber: true,
           invoiceDate: true,

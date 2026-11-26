@@ -11,9 +11,16 @@ import {
 } from "@/lib/isolation/cp-guard";
 import type { GeminiPort, InvoiceExtractionOutput } from "@/lib/ports";
 import {
-  extractTextFromPdfBuffer,
+  extractInvoiceFieldsFromText,
+  isOwnCompanyName,
+  matchQuoteForInvoice,
+} from "@/lib/invoices/local-extractor";
+import { normalizeProjectCodesList } from "@/lib/invoices/accounting-email";
+import {
+  extractRichTextFromPdfBuffer,
   validatePdfBuffer,
 } from "@/lib/invoices/pdf-text";
+import { buildValidatedInvoiceFilename } from "@/lib/shared/filenames";
 
 export class InvoiceCpConflictError extends CpConflictError {
   readonly invoice: Invoice;
@@ -144,67 +151,74 @@ export async function readStagedInvoicePdf(
   return null;
 }
 
-function buildFallbackExtractionFromLocalPdf(
-  localPdfText: string,
-  filename: string,
-  activeCodeProjet: string,
-  warningReason: string
-): InvoiceExtractionOutput {
-  const baseName = filename.replace(/\.pdf$/i, "").replace(/[_-]+/g, " ").trim();
+function sanitizeAndEnrichExtraction(params: {
+  geminiOutput: InvoiceExtractionOutput;
+  localOutput: ReturnType<typeof extractInvoiceFieldsFromText>;
+}): InvoiceExtractionOutput {
+  const { geminiOutput, localOutput } = params;
+  const warnings = [...(geminiOutput.rawWarnings ?? [])];
 
-  // Try to detect an ISO or FR date in PDF text or filename
-  let dateFacture = new Date().toISOString().slice(0, 10);
-  const isoMatch = /\b(20\d{2})-(\d{2})-(\d{2})\b/.exec(localPdfText) ??
-    /\b(20\d{2})-(\d{2})-(\d{2})\b/.exec(filename);
-  const frMatch = /\b(\d{2})\/(\d{2})\/(20\d{2})\b/.exec(localPdfText);
-  if (isoMatch) {
-    dateFacture = `${isoMatch[1]}-${isoMatch[2]}-${isoMatch[3]}`;
-  } else if (frMatch) {
-    dateFacture = `${frMatch[3]}-${frMatch[2]}-${frMatch[1]}`;
+  // Never allow our own buyer identity (GamersOrigin / L'Intrus) as the vendor/prestataire!
+  let prestataire = (geminiOutput.prestataire ?? "").trim();
+  if (
+    !prestataire ||
+    isOwnCompanyName(prestataire) ||
+    /^prestataire(?:\s+[àa]\s+v[ée]rifier)?$/i.test(prestataire)
+  ) {
+    if (
+      localOutput.prestataire &&
+      !isOwnCompanyName(localOutput.prestataire) &&
+      localOutput.prestataire !== "Prestataire à vérifier"
+    ) {
+      prestataire = localOutput.prestataire;
+    } else if (isOwnCompanyName(prestataire)) {
+      prestataire = "";
+      warnings.push(
+        "Le nom détecté correspondait à GamersOrigin / L'Intrus (client) : vérifiez le nom du prestataire."
+      );
+    }
   }
 
-  // Try to detect an invoice number (e.g. FAC-2026-042, F2026-01, INV-123)
-  const numMatch =
-    /(?:facture|invoice|n[°o]\s*[:#]?)\s*([A-Z0-9][A-Z0-9/_-]{2,20})/i.exec(
-      localPdfText
-    ) ??
-    /\b(FAC[-_ ]?\d{2,10}|INV[-_ ]?\d{2,10}|FA[-_ ]?\d{2,10})\b/i.exec(
-      `${filename} ${localPdfText}`
-    );
-
-  // Try to detect HT / TTC amount from text
-  const parseAmt = (raw: string | undefined): number => {
-    if (!raw) return 0;
-    const n = Number(raw.replace(/\s+/g, "").replace(",", "."));
-    return Number.isFinite(n) && n >= 0 ? round2(n) : 0;
-  };
-  const htMatch =
-    /(?:total\s*ht|montant\s*ht|sous[- ]total\s*ht)\s*[:=]?\s*([\d\s]+[.,]\d{2}|\d[\d\s]*)/i.exec(
-      localPdfText
-    );
-  const ttcMatch =
-    /(?:total\s*ttc|net\s*[àa]\s*payer|montant\s*ttc)\s*[:=]?\s*([\d\s]+[.,]\d{2}|\d[\d\s]*)/i.exec(
-      localPdfText
-    );
-  const montantHT = parseAmt(htMatch?.[1]);
+  const numeroFacture =
+    (geminiOutput.numeroFacture ?? "").trim() || localOutput.numeroFacture;
+  const dateFacture =
+    (geminiOutput.dateFacture ?? "").trim() || localOutput.dateFacture;
+  const montantHT =
+    geminiOutput.montantHT > 0 ? geminiOutput.montantHT : localOutput.montantHT;
   const montantTTC =
-    parseAmt(ttcMatch?.[1]) || (montantHT > 0 ? round2(montantHT * 1.2) : 0);
+    geminiOutput.montantTTC > 0
+      ? geminiOutput.montantTTC
+      : localOutput.montantTTC;
+  const tvaRate =
+    geminiOutput.montantHT > 0 ? geminiOutput.tvaRate : localOutput.tvaRate;
+  const prestationSummary =
+    geminiOutput.prestationSummary &&
+    geminiOutput.prestationSummary.trim() !== "" &&
+    geminiOutput.prestationSummary.trim().toLowerCase() !== "prestation"
+      ? geminiOutput.prestationSummary.trim()
+      : localOutput.prestationSummary;
+
+  const mergedCodes = normalizeProjectCodesList([
+    geminiOutput.codeProjetDetecte,
+    ...(geminiOutput.detectedProjectCodes ?? []),
+    ...localOutput.detectedProjectCodes,
+  ]);
 
   return {
-    prestataire: baseName.slice(0, 60) || "Prestataire à vérifier",
-    numeroFacture: numMatch?.[1]?.trim() || "",
+    ...geminiOutput,
+    prestataire: prestataire || "Prestataire à vérifier",
+    numeroFacture,
     dateFacture,
     montantHT,
-    tvaRate: 20,
+    tvaRate,
     montantTTC,
-    typeFacture: "UNIQUE",
-    codeProjetDetecte: activeCodeProjet,
-    prestationSummary: "Prestation",
-    suggestedBudgetLineId: null,
-    suggestedBudgetLineLabel: null,
-    confidence: 0.4,
-    extractedRawTextSnippet: localPdfText.slice(0, 500),
-    rawWarnings: [warningReason],
+    prestationSummary,
+    codeProjetDetecte:
+      geminiOutput.codeProjetDetecte ?? localOutput.codeProjetDetecte,
+    detectedProjectCodes: mergedCodes,
+    suggestedQuoteId:
+      geminiOutput.suggestedQuoteId ?? localOutput.suggestedQuoteId,
+    rawWarnings: warnings,
   };
 }
 
@@ -315,13 +329,45 @@ export async function processInvoicePdfIngestion(params: {
   // 1. Validate PDF MIME & magic bytes / structure BEFORE any DB writes
   validatePdfBuffer(pdfBuffer, mimeType, filename);
 
-  // 2. Deterministic local PDF text extraction
-  const localPdfText = extractTextFromPdfBuffer(pdfBuffer);
+  // 2. Rich layout-preserving PDF text extraction (unpdf + deterministic fallback)
+  const localPdfText = await extractRichTextFromPdfBuffer(pdfBuffer);
 
-  // 3. Fetch project budget lines for Gemini context & suggestion
-  const budgetLines = await prisma.budgetLine.findMany({
-    where: { projectId: project.id },
-    orderBy: [{ sheetRowIndex: "asc" }, { createdAt: "asc" }],
+  // 3. Fetch project budget lines, quotes, and agency project codes for extraction & matching
+  const [budgetLines, quotes, agencyProjects] = await Promise.all([
+    prisma.budgetLine.findMany({
+      where: { projectId: project.id },
+      orderBy: [{ sheetRowIndex: "asc" }, { createdAt: "asc" }],
+    }),
+    prisma.quote.findMany({
+      where: { projectId: project.id },
+      orderBy: { createdAt: "desc" },
+      select: {
+        id: true,
+        quoteNumber: true,
+        vendorName: true,
+        amountHt: true,
+        budgetLineId: true,
+      },
+    }),
+    prisma.project.findMany({
+      where: { isArchived: false },
+      select: { codeProjet: true },
+    }),
+  ]);
+
+  const knownProjectCodes = Array.from(
+    new Set(agencyProjects.map((p) => p.codeProjet).filter(Boolean))
+  );
+
+  const localExtraction = extractInvoiceFieldsFromText({
+    pdfText: localPdfText,
+    filename,
+    activeCodeProjet: project.codeProjet,
+    knownProjectCodes,
+    budgetLines,
+    quotes,
+    warningReason:
+      "Extraction locale effectuée (IA Gemini indisponible) : vérifiez les champs pré-remplis.",
   });
 
   if (requestedBudgetLineId) {
@@ -335,52 +381,45 @@ export async function processInvoicePdfIngestion(params: {
     }
   }
 
-  // 4. Gemini multimodal extraction (with safe manual fallback on interactive uploads!)
+  // 4. Gemini multimodal extraction (with rich local extraction merge & safe fallback!)
+  const geminiInput = {
+    pdfBuffer,
+    filename,
+    emailSubject: emailSubject ?? undefined,
+    projectContext: {
+      codeProjet: project.codeProjet,
+      client: project.client,
+      nomJeu: project.nomJeu,
+    },
+    allProjectCodes: knownProjectCodes,
+    budgetLines: budgetLines.map((l) => ({
+      id: l.id,
+      category: l.category,
+      objet: l.objet,
+      realisePar: l.realisePar,
+      preOpTotalHt: l.preOpTotalHt,
+    })),
+    quotes,
+  };
+
   let extracted: InvoiceExtractionOutput;
   if (allowManualFallback) {
     try {
       const gemini = await getGeminiClient();
-      extracted = await gemini.extractInvoiceFromPdf({
-        pdfBuffer,
-        filename,
-        emailSubject: emailSubject ?? undefined,
-        projectContext: {
-          codeProjet: project.codeProjet,
-          client: project.client,
-          nomJeu: project.nomJeu,
-        },
-        budgetLines: budgetLines.map((l) => ({
-          id: l.id,
-          category: l.category,
-          objet: l.objet,
-          preOpTotalHt: l.preOpTotalHt,
-        })),
+      const geminiRaw = await gemini.extractInvoiceFromPdf(geminiInput);
+      extracted = sanitizeAndEnrichExtraction({
+        geminiOutput: geminiRaw,
+        localOutput: localExtraction,
       });
     } catch {
-      extracted = buildFallbackExtractionFromLocalPdf(
-        localPdfText,
-        filename,
-        project.codeProjet,
-        "Extraction IA indisponible : vérifiez et complétez les champs à l'aide de la visionneuse PDF."
-      );
+      extracted = localExtraction;
     }
   } else {
     const gemini = await getGeminiClient();
-    extracted = await gemini.extractInvoiceFromPdf({
-      pdfBuffer,
-      filename,
-      emailSubject: emailSubject ?? undefined,
-      projectContext: {
-        codeProjet: project.codeProjet,
-        client: project.client,
-        nomJeu: project.nomJeu,
-      },
-      budgetLines: budgetLines.map((l) => ({
-        id: l.id,
-        category: l.category,
-        objet: l.objet,
-        preOpTotalHt: l.preOpTotalHt,
-      })),
+    const geminiRaw = await gemini.extractInvoiceFromPdf(geminiInput);
+    extracted = sanitizeAndEnrichExtraction({
+      geminiOutput: geminiRaw,
+      localOutput: localExtraction,
     });
   }
 
@@ -396,6 +435,15 @@ export async function processInvoicePdfIngestion(params: {
     extracted.montantTTC > 0
       ? round2(extracted.montantTTC)
       : round2(amountHt + tvaAmount);
+
+  // Auto-match Quote from PDF text / vendor / HT amount
+  const matchedQuote = matchQuoteForInvoice(quotes, {
+    pdfText: `${localPdfText}\n${extracted.extractedRawTextSnippet ?? ""}`,
+    vendorName: extracted.prestataire,
+    amountHt,
+  });
+  const suggestedQuoteId =
+    extracted.suggestedQuoteId ?? matchedQuote?.id ?? null;
 
   // 6. Deterministic Zero-Mix CP Conflict Guardrail
   const combinedText = [
@@ -417,13 +465,32 @@ export async function processInvoicePdfIngestion(params: {
     combinedText
   );
 
+  const detectedProjectCodes = normalizeProjectCodesList(
+    [
+      ...cpCheck.detectedCps,
+      ...(extracted.detectedProjectCodes ?? []),
+      extracted.codeProjetDetecte,
+    ],
+    project.codeProjet
+  );
+
+  const autoRenamedFilename = buildValidatedInvoiceFilename({
+    invoiceNumber: extracted.numeroFacture,
+    invoiceDate: extracted.dateFacture,
+    codeProjet: detectedProjectCodes.join("-"),
+    vendorName: extracted.prestataire,
+    amountHt,
+  });
+
   if (cpCheck.hasConflict) {
     const blocked = await prisma.invoice.create({
       data: {
         projectId: project.id,
-        budgetLineId: null,
+        budgetLineId: matchedQuote?.budgetLineId ?? null,
+        quoteId: suggestedQuoteId,
         gmailMessageId: gmailMessageId ?? null,
         originalFilename: filename,
+        renamedFilename: autoRenamedFilename,
         vendorName: extracted.prestataire,
         invoiceNumber: extracted.numeroFacture,
         invoiceDate: extracted.dateFacture,
@@ -434,6 +501,7 @@ export async function processInvoicePdfIngestion(params: {
         prestationLabel: extracted.prestationSummary,
         detectedCodeProjet:
           cpCheck.conflictingCps[0] ?? extracted.codeProjetDetecte ?? null,
+        projectCodesJson: JSON.stringify(detectedProjectCodes),
         cpConflict: true,
         status: "CONFLICT_BLOCKED",
         extractedJson: JSON.stringify({
@@ -510,23 +578,26 @@ export async function processInvoicePdfIngestion(params: {
     );
   }
 
-  // 8. Suggest BudgetLine
-  const suggestedBudgetLineId = suggestBudgetLineForInvoice(budgetLines, {
-    requestedBudgetLineId,
-    geminiSuggestedId: extracted.suggestedBudgetLineId,
-    geminiSuggestedLabel: extracted.suggestedBudgetLineLabel,
-    vendorName: extracted.prestataire,
-    prestationSummary: extracted.prestationSummary,
-    filename,
-  });
+  // 8. Suggest BudgetLine (prioritize requested, quote-linked, Gemini, vendor/keyword match, or single line)
+  const suggestedBudgetLineId =
+    suggestBudgetLineForInvoice(budgetLines, {
+      requestedBudgetLineId: requestedBudgetLineId ?? matchedQuote?.budgetLineId,
+      geminiSuggestedId: extracted.suggestedBudgetLineId,
+      geminiSuggestedLabel: extracted.suggestedBudgetLineLabel,
+      vendorName: extracted.prestataire,
+      prestationSummary: extracted.prestationSummary,
+      filename,
+    }) ?? (budgetLines.length === 1 ? budgetLines[0].id : null);
 
-  // 9. Create Invoice first, then stage PDF bytes in .data/invoices/<projectId>/<invoiceId>.pdf
+  // 9. Create Invoice with auto-renamed nomenclature filename, then stage PDF bytes
   const created = await prisma.invoice.create({
     data: {
       projectId: project.id,
       budgetLineId: suggestedBudgetLineId,
+      quoteId: suggestedQuoteId,
       gmailMessageId: gmailMessageId ?? null,
       originalFilename: filename,
+      renamedFilename: autoRenamedFilename,
       vendorName: extracted.prestataire,
       invoiceNumber: extracted.numeroFacture,
       invoiceDate: extracted.dateFacture,
@@ -538,6 +609,7 @@ export async function processInvoicePdfIngestion(params: {
       detectedCodeProjet:
         extracted.codeProjetDetecte ??
         (cpCheck.detectedCps[0] || project.codeProjet),
+      projectCodesJson: JSON.stringify(detectedProjectCodes),
       cpConflict: false,
       status: "PENDING_VALIDATION",
       extractedJson: JSON.stringify({

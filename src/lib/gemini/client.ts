@@ -227,20 +227,41 @@ export class GeminiClient implements GeminiPort {
     const budgetLinesText = input.budgetLines
       .map(
         (b) =>
-          `- id=${b.id} | cat=${b.category} | objet=${b.objet} | preOpHT=${b.preOpTotalHt}`
+          `- id=${b.id} | cat=${b.category} | objet=${b.objet}${b.realisePar ? ` | realisePar=${b.realisePar}` : ""} | preOpHT=${b.preOpTotalHt}`
+      )
+      .join("\n");
+
+    const quotesText = (input.quotes ?? [])
+      .map(
+        (q) =>
+          `- id=${q.id} | num=${q.quoteNumber} | presta=${q.vendorName} | ht=${q.amountHt}`
       )
       .join("\n");
 
     const prompt = [
-      "Tu es l'assistant comptable automatisé de GamersOrigin (GO Project Hub).",
+      "Tu es l'assistant comptable automatisé de GamersOrigin / L'Intrus (GO Project Hub).",
+      "RÈGLE CRITIQUE — IDENTITÉ DE L'ACHETEUR (CLIENT) :",
+      "- Nous sommes 'GamersOrigin' (GO) ou 'L'Intrus'.",
+      "- 'GamersOrigin' et 'L'Intrus' sont TOUJOURS le CLIENT / DESTINATAIRE facturé, JAMAIS le prestataire !",
+      "- Dans 'prestataire', retourne OBLIGATOIREMENT le véritable émetteur / fournisseur / studio / freelance de la facture (en-tête émetteur, pied de page légal, raison sociale ou titulaire RIB hors GamersOrigin et L'Intrus).",
       `Projet actif : CP ${input.projectContext.codeProjet} | Client: ${input.projectContext.client} | Jeu: ${input.projectContext.nomJeu}.`,
+      input.allProjectCodes && input.allProjectCodes.length > 0
+        ? `Codes projet connus de l'agence : ${input.allProjectCodes.join(", ")}`
+        : "",
       input.filename ? `Nom de fichier : ${input.filename}` : "",
       input.emailSubject ? `Objet mail : ${input.emailSubject}` : "",
-      "Lignes budgétaires disponibles :",
+      "Lignes budgétaires disponibles (choisis le meilleur suggestedBudgetLineId correspondant à la prestation ou au prestataire) :",
       budgetLinesText || "(aucune ligne importée)",
-      "Extrais strictement les informations de cette facture PDF en JSON.",
-      "Important : Si un code projet différent apparaît (ex: 326018, 326xxx, etc.), indique-le exactement dans codeProjetDetecte et inclus les lignes de texte contenant les références/codes dans extractedRawTextSnippet.",
-      "Date au format YYYY-MM-DD.",
+      quotesText ? `Devis existants du projet :\n${quotesText}` : "",
+      "Extrais TOUTES les informations de cette facture PDF en JSON afin de pré-remplir automatiquement tous les champs :",
+      "- prestataire : nom propre et exact du fournisseur (JAMAIS GamersOrigin ni L'Intrus)",
+      "- numeroFacture : numéro exact de la facture",
+      "- dateFacture : date d'ÉMISSION au format YYYY-MM-DD (ne pas confondre avec la date d'échéance !)",
+      "- montantHT, tvaRate (0 si TVA non applicable / art. 293 B), montantTTC",
+      "- typeFacture : ACOMPTE, SOLDE ou UNIQUE",
+      "- codeProjetDetecte : code projet principal détecté (si plusieurs codes projet apparaissent, indique-les tous dans extractedRawTextSnippet)",
+      "- prestationSummary : intitulé synthétique et clair de la prestation facturée",
+      "- suggestedBudgetLineId : ID de la ligne budgétaire la plus pertinente parmi la liste ci-dessus (ou null)",
     ]
       .filter(Boolean)
       .join("\n");

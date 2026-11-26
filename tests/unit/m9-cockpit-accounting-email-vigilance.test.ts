@@ -13,6 +13,11 @@ import {
   getAccountingToAddress,
   requiresVigilanceAttestation,
 } from "@/lib/invoices/accounting-email";
+import {
+  extractInvoiceFieldsFromText,
+  isOwnCompanyName,
+} from "@/lib/invoices/local-extractor";
+import { buildValidatedInvoiceFilename } from "@/lib/shared/filenames";
 
 describe("M9 Cockpit Invoice Dropzone, Vigilance >3k€, Multi-CP, Roles & Accounting Drafts", () => {
   it("enforces mandatory Pennylane To address and mandatory Accounting CC addresses", () => {
@@ -135,5 +140,100 @@ describe("M9 Cockpit Invoice Dropzone, Vigilance >3k€, Multi-CP, Roles & Accou
     expect(normalizeUserRole("COMPTA")).toBe("COMPTA");
     expect(normalizeUserRole("ADMIN")).toBe("ADMIN");
     expect(normalizeUserRole("unknown")).toBe("MEMBER");
+  });
+
+  it("excludes GamersOrigin and L'Intrus as buyer and auto-fills all invoice fields + nomenclature", () => {
+    expect(isOwnCompanyName("GamersOrigin")).toBe(true);
+    expect(isOwnCompanyName("SAS Gamers Origin")).toBe(true);
+    expect(isOwnCompanyName("L'Intrus")).toBe(true);
+    expect(isOwnCompanyName("SAS L'INTRUS")).toBe(true);
+    expect(isOwnCompanyName("Studio Vertigo SAS")).toBe(false);
+
+    // Case 1: Two-column French invoice billed to GamersOrigin with multi-CP & quote
+    const invoiceTextGo = [
+      "Studio Vertigo SAS  |  Facturé à : GamersOrigin SAS",
+      "12 rue de la Paix  |  45 rue du Faubourg Saint-Denis",
+      "75002 Paris  |  75010 Paris",
+      "FACTURE N° FA-2026-042",
+      "Date d'émission : 14/11/2026",
+      "Date d'échéance : 14/12/2026",
+      "Référence devis : DEV-2026-11",
+      "Objet : Production Map Fortnite CP 326027 / CP 326018",
+      "Désignation | Qté | Prix HT | Total HT",
+      "Développement niveau principal | 1 | 3 500,00 € | 3 500,00 €",
+      "Total HT : 3 500,00 €",
+      "TVA (20%) : 700,00 €",
+      "Net à payer TTC : 4 200,00 €",
+    ].join("\n");
+
+    const resGo = extractInvoiceFieldsFromText({
+      pdfText: invoiceTextGo,
+      filename: "scan_upload_001.pdf",
+      activeCodeProjet: "326027",
+      knownProjectCodes: ["326027", "326018", "326099"],
+      quotes: [
+        {
+          id: "quote-11",
+          quoteNumber: "DEV-2026-11",
+          vendorName: "Studio Vertigo SAS",
+          amountHt: 3500,
+          budgetLineId: "line-prod-1",
+        },
+      ],
+    });
+
+    expect(resGo.prestataire).toBe("Studio Vertigo SAS");
+    expect(resGo.numeroFacture).toBe("FA-2026-042");
+    expect(resGo.dateFacture).toBe("2026-11-14");
+    expect(resGo.montantHT).toBe(3500);
+    expect(resGo.tvaRate).toBe(20);
+    expect(resGo.montantTTC).toBe(4200);
+    expect(resGo.detectedProjectCodes).toEqual(["326027", "326018"]);
+    expect(resGo.suggestedQuoteId).toBe("quote-11");
+    expect(resGo.suggestedBudgetLineId).toBe("line-prod-1");
+    expect(resGo.prestationSummary).toContain("Production Map Fortnite");
+
+    const autoName = buildValidatedInvoiceFilename({
+      invoiceNumber: resGo.numeroFacture,
+      invoiceDate: resGo.dateFacture,
+      codeProjet: resGo.detectedProjectCodes.join("-"),
+      vendorName: resGo.prestataire,
+    });
+    expect(autoName).toBe(
+      "FA-2026-042_326027-326018_StudioVertigoSAS_2026-11-14.pdf"
+    );
+
+    // Case 2: Freelance invoice billed to L'Intrus with TVA non applicable (art. 293 B) and French month date
+    const invoiceTextIntrus = [
+      "Facturé à :",
+      "L'Intrus",
+      "10 rue de Lyon",
+      "75012 Paris",
+      "",
+      "Émetteur : Maxime Laurent Creative",
+      "Facture n° F2026-088",
+      "Émise le 15 octobre 2026",
+      "Échéance : 15 novembre 2026",
+      "Prestation : Montage Reels campagne lancement",
+      "Total : 1 250,00 €",
+      "TVA non applicable, art. 293 B du CGI",
+    ].join("\n");
+
+    const resIntrus = extractInvoiceFieldsFromText({
+      pdfText: invoiceTextIntrus,
+      filename: "facture_octobre.pdf",
+      activeCodeProjet: "326050",
+      knownProjectCodes: ["326050"],
+    });
+
+    expect(resIntrus.prestataire).toBe("Maxime Laurent Creative");
+    expect(resIntrus.numeroFacture).toBe("F2026-088");
+    expect(resIntrus.dateFacture).toBe("2026-10-15");
+    expect(resIntrus.montantHT).toBe(1250);
+    expect(resIntrus.tvaRate).toBe(0);
+    expect(resIntrus.montantTTC).toBe(1250);
+    expect(resIntrus.prestationSummary).toBe(
+      "Montage Reels campagne lancement"
+    );
   });
 });

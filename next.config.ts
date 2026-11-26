@@ -51,7 +51,7 @@ const appEnvLabel =
       : "Local";
 
 const nextConfig: NextConfig = {
-  serverExternalPackages: ["@prisma/client", "exceljs"],
+  serverExternalPackages: ["@prisma/client", "exceljs", "unpdf"],
   images: {
     unoptimized: true,
   },

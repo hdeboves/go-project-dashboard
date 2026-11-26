@@ -503,7 +503,15 @@ export function InvoicePipelinePanel({
                 <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="text-sm font-semibold text-slate-900 dark:text-white">
-                      {inv.renamedFilename ?? inv.originalFilename}
+                      {isValidated
+                        ? (inv.renamedFilename ?? inv.originalFilename)
+                        : buildValidatedInvoiceFilename({
+                            invoiceNumber: edits.invoiceNumber,
+                            invoiceDate: edits.invoiceDate,
+                            codeProjet: projectCode,
+                            vendorName: edits.vendorName,
+                            amountHt: Number(edits.amountHt) || 0,
+                          })}
                     </span>
                     <span
                       className={`rounded-full px-2.5 py-0.5 text-[11px] font-semibold ${

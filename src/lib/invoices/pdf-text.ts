@@ -250,3 +250,105 @@ export function extractTextFromPdfBuffer(buffer: Buffer): string {
     .replace(/\s+/g, " ")
     .trim();
 }
+
+interface PdfTextItemLike {
+  str?: string;
+  transform?: number[];
+  hasEOL?: boolean;
+}
+
+/**
+ * Rich layout-preserving PDF text extraction powered by unpdf (Mozilla PDF.js
+ * serverless build) — handles CID/Type0 fonts, ToUnicode CMaps, UTF-8 French
+ * accents, FlateDecode streams, and preserves visual lines & columns.
+ * Falls back safely to deterministic extractTextFromPdfBuffer() on minimal/synthetic PDFs.
+ */
+export async function extractRichTextFromPdfBuffer(
+  buffer: Buffer
+): Promise<string> {
+  if (!buffer || buffer.length === 0) return "";
+
+  try {
+    const { getDocumentProxy } = await import("unpdf");
+    const pdf = await getDocumentProxy(new Uint8Array(buffer));
+    const pageTexts: string[] = [];
+    const maxPages = Math.min(pdf.numPages ?? 0, 12);
+
+    for (let pageNum = 1; pageNum <= maxPages; pageNum++) {
+      const page = await pdf.getPage(pageNum);
+      const content = await page.getTextContent();
+      const rawItems = (content.items ?? []) as PdfTextItemLike[];
+
+      // Group text items into visual rows using Y coordinate (tolerance 3pt)
+      const rows: Array<{
+        y: number;
+        items: Array<{ x: number; text: string }>;
+      }> = [];
+
+      for (const item of rawItems) {
+        const text = (item.str ?? "").replace(/\u00A0/g, " ");
+        if (!text.trim()) continue;
+        const x =
+          Array.isArray(item.transform) && typeof item.transform[4] === "number"
+            ? item.transform[4]
+            : 0;
+        const y =
+          Array.isArray(item.transform) && typeof item.transform[5] === "number"
+            ? item.transform[5]
+            : 0;
+
+        let targetRow = rows.find((r) => Math.abs(r.y - y) <= 3.5);
+        if (!targetRow) {
+          targetRow = { y, items: [] };
+          rows.push(targetRow);
+        }
+        targetRow.items.push({ x, text });
+      }
+
+      // PDF coordinates have Y increasing bottom-to-top -> sort descending Y
+      rows.sort((a, b) => b.y - a.y);
+
+      const lines: string[] = [];
+      for (const row of rows) {
+        row.items.sort((a, b) => a.x - b.x);
+        let line = "";
+        let prevX: number | null = null;
+        for (const piece of row.items) {
+          const clean = piece.text.trim();
+          if (!clean) continue;
+          if (prevX !== null) {
+            const gap = piece.x - prevX;
+            // Large horizontal gap indicates a separate column (e.g. left issuer vs right client)
+            line += gap > 85 ? "  |  " : " ";
+          }
+          line += clean;
+          prevX = piece.x + clean.length * 4.5;
+        }
+        if (line.trim()) lines.push(line.trim());
+      }
+
+      if (lines.length > 0) {
+        pageTexts.push(lines.join("\n"));
+      }
+    }
+
+    const destroyable = pdf as unknown as {
+      destroy?: () => Promise<void>;
+      cleanup?: () => Promise<void>;
+    };
+    if (typeof destroyable.destroy === "function") {
+      await destroyable.destroy().catch(() => undefined);
+    } else if (typeof destroyable.cleanup === "function") {
+      await destroyable.cleanup().catch(() => undefined);
+    }
+
+    const combined = pageTexts.join("\n\n").trim();
+    if (combined.length > 0) {
+      return combined;
+    }
+  } catch {
+    // Fall back safely to lightweight buffer extractor below
+  }
+
+  return extractTextFromPdfBuffer(buffer);
+}

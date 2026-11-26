@@ -143,6 +143,26 @@ export async function POST(
       amountHt,
     });
 
+    // Automatically persist updated nomenclature filename & verified fields before Step 2
+    if (invoice.status !== "VALIDATED") {
+      await prisma.invoice
+        .update({
+          where: { id: invoice.id },
+          data: {
+            vendorName: vendorName || invoice.vendorName,
+            invoiceNumber: invoiceNumber || invoice.invoiceNumber,
+            invoiceDate: invoiceDate || invoice.invoiceDate,
+            amountHt,
+            amountTtc,
+            tvaAmount: Math.max(0, Math.round((amountTtc - amountHt) * 100) / 100),
+            budgetLineId: budgetLineId || invoice.budgetLineId,
+            projectCodesJson: JSON.stringify(projectCodes),
+            renamedFilename: attachmentFilename,
+          },
+        })
+        .catch(() => undefined);
+    }
+
     return NextResponse.json({
       to: getAccountingToAddress(),
       ccEntries,
@@ -156,6 +176,7 @@ export async function POST(
         vendorName,
       }),
       attachmentFilename,
+      renamedFilename: attachmentFilename,
       projectCodes,
       hasVigilanceAttestation: Boolean(invoice.vigilanceDriveFileId),
       vigilanceFilename: invoice.vigilanceFilename ?? null,

@@ -12,6 +12,8 @@ import {
   Plus,
   Receipt,
   ShieldAlert,
+  Sparkles,
+  Trash2,
   Upload,
   X,
 } from "lucide-react";
@@ -30,6 +32,7 @@ import { showToast } from "@/lib/toast";
 export interface CockpitInvoiceItem {
   id: string;
   originalFilename: string;
+  renamedFilename?: string | null;
   vendorName: string | null;
   invoiceNumber: string | null;
   invoiceDate: string | null;
@@ -168,6 +171,8 @@ export function CockpitInvoiceDropzone({
   const [emailSubject, setEmailSubject] = useState("");
   const [emailBody, setEmailBody] = useState("");
   const [submittingDraft, setSubmittingDraft] = useState(false);
+  const [deletingInvoice, setDeletingInvoice] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const [modalError, setModalError] = useState<string | null>(null);
 
   const currentInvoice = queue[queueIdx] ?? null;
@@ -177,7 +182,12 @@ export function CockpitInvoiceDropzone({
     setModalError(null);
     setEmailPreview(null);
     setAcknowledgeWarnings(false);
-    setVendorName(inv.vendorName ?? "");
+    setConfirmDelete(false);
+    setVendorName(
+      inv.vendorName && inv.vendorName !== "Prestataire à vérifier"
+        ? inv.vendorName
+        : ""
+    );
     setInvoiceNumber(inv.invoiceNumber ?? "");
     setInvoiceDate(
       normalizeIsoDate(inv.invoiceDate) ?? new Date().toISOString().slice(0, 10)
@@ -191,7 +201,9 @@ export function CockpitInvoiceDropzone({
       )
     );
     setPrestationLabel(inv.prestationLabel ?? "Prestation");
-    setBudgetLineId(inv.budgetLineId ?? "");
+    setBudgetLineId(
+      inv.budgetLineId ?? (budgetLines.length === 1 ? budgetLines[0].id : "")
+    );
     setQuoteId(inv.quoteId ?? "");
     const codes = parseInitialCodes(inv, project.codeProjet);
     setProjectCodes(codes);
@@ -207,12 +219,104 @@ export function CockpitInvoiceDropzone({
     hydrateStep1(items[startIndex]);
   }
 
-  function closeModal() {
+  function closeModal(persistCurrentDraft = false) {
+    if (persistCurrentDraft && currentInvoice) {
+      const nextRenamed = buildValidatedInvoiceFilename({
+        invoiceNumber,
+        invoiceDate,
+        codeProjet: projectCodes.join("-"),
+        vendorName: vendorName || currentInvoice.vendorName || "Prestataire",
+        amountHt: Number(amountHt) || 0,
+      });
+      const updatedItem: CockpitInvoiceItem = {
+        ...currentInvoice,
+        vendorName: vendorName.trim() || currentInvoice.vendorName,
+        invoiceNumber: invoiceNumber.trim() || currentInvoice.invoiceNumber,
+        invoiceDate: invoiceDate.trim() || currentInvoice.invoiceDate,
+        amountHt: Number(amountHt) || 0,
+        amountTtc: Number(amountTtc) || 0,
+        prestationLabel: prestationLabel.trim() || currentInvoice.prestationLabel,
+        budgetLineId: budgetLineId || null,
+        quoteId: quoteId || null,
+        projectCodesJson: JSON.stringify(projectCodes),
+        renamedFilename: nextRenamed,
+      };
+      setPendingList((prev) =>
+        prev.map((item) => (item.id === currentInvoice.id ? updatedItem : item))
+      );
+      void fetch(`/api/projects/${project.id}/invoices/${currentInvoice.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          vendorName: vendorName.trim(),
+          invoiceNumber: invoiceNumber.trim(),
+          invoiceDate: invoiceDate.trim(),
+          amountHt: Number(amountHt) || 0,
+          amountTtc: Number(amountTtc) || 0,
+          prestationLabel: prestationLabel.trim(),
+          budgetLineId: budgetLineId || null,
+          quoteId: quoteId || null,
+          projectCodes,
+        }),
+      }).catch(() => undefined);
+    }
     setQueue([]);
     setQueueIdx(0);
     setStep(1);
+    setConfirmDelete(false);
     setModalError(null);
     setEmailPreview(null);
+  }
+
+  async function handleDeleteCurrentInvoice() {
+    if (!currentInvoice) return;
+    setDeletingInvoice(true);
+    setModalError(null);
+    try {
+      const targetId = currentInvoice.id;
+      const res = await fetch(
+        `/api/projects/${project.id}/invoices/${targetId}`,
+        { method: "DELETE" }
+      );
+      const json = (await res.json().catch(() => ({}))) as { error?: string };
+      if (!res.ok) {
+        setModalError(
+          json.error ?? "Impossible de supprimer cette facture."
+        );
+        return;
+      }
+
+      // Clean up local blob URL if created in this session
+      const blobToRevoke = localBlobUrls[targetId];
+      if (blobToRevoke) {
+        URL.revokeObjectURL(blobToRevoke);
+        setLocalBlobUrls((prev) => {
+          const next = { ...prev };
+          delete next[targetId];
+          return next;
+        });
+      }
+
+      const remainingPending = pendingList.filter((p) => p.id !== targetId);
+      setPendingList(remainingPending);
+
+      const remainingQueue = queue.filter((q) => q.id !== targetId);
+      setConfirmDelete(false);
+      showToast("Facture supprimée.");
+      window.dispatchEvent(new CustomEvent("go:shell-refresh"));
+      router.refresh();
+
+      if (remainingQueue.length === 0) {
+        closeModal(false);
+      } else {
+        const nextIdx = Math.min(queueIdx, remainingQueue.length - 1);
+        setQueue(remainingQueue);
+        setQueueIdx(nextIdx);
+        hydrateStep1(remainingQueue[nextIdx]);
+      }
+    } finally {
+      setDeletingInvoice(false);
+    }
   }
 
   async function handleFilesUpload(fileList: FileList | File[]) {
@@ -446,6 +550,28 @@ export function CockpitInvoiceDropzone({
       setCcEntries(json.ccEntries ?? []);
       setEmailSubject(json.subject);
       setEmailBody(json.body);
+
+      // Sync auto-updated nomenclature filename & verified fields locally
+      const syncedItem: CockpitInvoiceItem = {
+        ...currentInvoice,
+        vendorName: vendorName.trim(),
+        invoiceNumber: invoiceNumber.trim(),
+        invoiceDate: invoiceDate.trim(),
+        amountHt: parsedHt,
+        amountTtc: parsedTtc,
+        prestationLabel: prestationLabel.trim() || "Prestation",
+        budgetLineId,
+        quoteId: quoteId || null,
+        projectCodesJson: JSON.stringify(projectCodes),
+        renamedFilename: json.attachmentFilename || driveFilenamePreview,
+      };
+      setQueue((prev) =>
+        prev.map((q) => (q.id === currentInvoice.id ? syncedItem : q))
+      );
+      setPendingList((prev) =>
+        prev.map((p) => (p.id === currentInvoice.id ? syncedItem : p))
+      );
+
       setStep(2);
     } finally {
       setLoadingPreview(false);
@@ -668,14 +794,61 @@ export function CockpitInvoiceDropzone({
                       </span>
                     )}
                   </div>
-                  <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                    {currentInvoice.originalFilename} · Projet actif : CP{" "}
-                    {project.codeProjet} ({project.client})
-                  </p>
+                  <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[11px] text-slate-500 dark:text-slate-400">
+                    <span className="inline-flex items-center gap-1 rounded bg-indigo-50 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-indigo-700 dark:bg-indigo-500/20 dark:text-indigo-300">
+                      <Sparkles className="h-2.5 w-2.5" />
+                      {driveFilenamePreview}
+                    </span>
+                    {currentInvoice.originalFilename !== driveFilenamePreview && (
+                      <span className="truncate opacity-75">
+                        (initial : {currentInvoice.originalFilename})
+                      </span>
+                    )}
+                    <span>
+                      · CP {project.codeProjet} ({project.client})
+                    </span>
+                  </div>
                 </div>
               </div>
 
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
+                {confirmDelete ? (
+                  <div
+                    data-testid="confirm-delete-invoice-bar"
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-rose-300 bg-rose-50 px-2.5 py-1 text-xs font-semibold text-rose-800 dark:border-rose-500/40 dark:bg-rose-500/15 dark:text-rose-200"
+                  >
+                    <span>Supprimer cette facture ?</span>
+                    <button
+                      type="button"
+                      disabled={deletingInvoice}
+                      onClick={() => void handleDeleteCurrentInvoice()}
+                      data-testid="confirm-delete-invoice-yes"
+                      className="rounded-md bg-rose-600 px-2 py-0.5 text-[11px] font-semibold text-white hover:bg-rose-700 disabled:opacity-50"
+                    >
+                      {deletingInvoice ? "..." : "Oui"}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={deletingInvoice}
+                      onClick={() => setConfirmDelete(false)}
+                      className="rounded-md border border-rose-300 bg-white px-2 py-0.5 text-[11px] font-medium text-rose-700 hover:bg-rose-100 dark:border-rose-500/40 dark:bg-slate-900 dark:text-rose-200"
+                    >
+                      Non
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    disabled={deletingInvoice || submittingDraft}
+                    onClick={() => setConfirmDelete(true)}
+                    data-testid="delete-invoice-in-modal-btn"
+                    title="Supprimer cette facture si vous ne souhaitez plus la vérifier"
+                    className="inline-flex items-center gap-1 rounded-lg border border-rose-200 bg-rose-50/70 px-2.5 py-1.5 text-xs font-semibold text-rose-700 hover:bg-rose-100 disabled:opacity-50 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-300 dark:hover:bg-rose-500/20"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                    Supprimer
+                  </button>
+                )}
                 <a
                   href={currentPdfUrl}
                   target="_blank"
@@ -687,7 +860,7 @@ export function CockpitInvoiceDropzone({
                 </a>
                 <button
                   type="button"
-                  onClick={closeModal}
+                  onClick={() => closeModal(true)}
                   aria-label="Fermer"
                   className="rounded-lg p-1.5 text-slate-500 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white"
                 >
@@ -1078,26 +1251,37 @@ export function CockpitInvoiceDropzone({
                     )}
 
                     {/* Step 1 -> Step 2 CTA */}
-                    <div className="flex items-center justify-end gap-2 border-t border-slate-100 pt-3 dark:border-slate-800">
+                    <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 pt-3 dark:border-slate-800">
                       <button
                         type="button"
-                        onClick={closeModal}
-                        className="rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
+                        disabled={deletingInvoice}
+                        onClick={() => setConfirmDelete(true)}
+                        className="inline-flex items-center gap-1 rounded-xl border border-rose-200 bg-white px-3 py-2 text-xs font-medium text-rose-600 hover:bg-rose-50 disabled:opacity-40 dark:border-rose-500/30 dark:bg-slate-800 dark:text-rose-400 dark:hover:bg-rose-500/15"
                       >
-                        Annuler
+                        <Trash2 className="h-3.5 w-3.5" />
+                        Supprimer
                       </button>
-                      <button
-                        type="button"
-                        disabled={loadingPreview || blockingErrors.length > 0}
-                        onClick={() => void handleProceedToStep2()}
-                        data-testid="step1-confirm-verify-btn"
-                        className="inline-flex items-center gap-1.5 rounded-xl bg-rose-600 px-4 py-2 text-xs font-semibold text-white hover:bg-rose-700 disabled:opacity-40"
-                      >
-                        {loadingPreview
-                          ? "Préparation du mail..."
-                          : "Valider vérification & prévisualiser le mail"}
-                        <ArrowRight className="h-3.5 w-3.5" />
-                      </button>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => closeModal(true)}
+                          className="rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
+                        >
+                          Fermer
+                        </button>
+                        <button
+                          type="button"
+                          disabled={loadingPreview || blockingErrors.length > 0}
+                          onClick={() => void handleProceedToStep2()}
+                          data-testid="step1-confirm-verify-btn"
+                          className="inline-flex items-center gap-1.5 rounded-xl bg-rose-600 px-4 py-2 text-xs font-semibold text-white hover:bg-rose-700 disabled:opacity-40"
+                        >
+                          {loadingPreview
+                            ? "Préparation du mail..."
+                            : "Valider vérification & prévisualiser le mail"}
+                          <ArrowRight className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
                     </div>
                   </div>
                 ) : (
