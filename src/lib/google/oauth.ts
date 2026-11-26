@@ -257,7 +257,10 @@ export async function getAuthenticatedOAuth2Client(
   scope: string;
 }> {
   let connection = userId
-    ? await prisma.googleConnection.findUnique({ where: { userId } })
+    ? await prisma.googleConnection.findFirst({
+        where: { userId },
+        orderBy: { updatedAt: "desc" },
+      })
     : null;
   if (!connection) {
     connection = await prisma.googleConnection.findFirst({

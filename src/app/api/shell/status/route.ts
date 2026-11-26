@@ -32,8 +32,9 @@ export async function GET() {
     const isAuthenticatedOrPermissive = Boolean(currentUser) || !authRequired;
 
     const googleConn = currentUser
-      ? (await prisma.googleConnection.findUnique({
+      ? (await prisma.googleConnection.findFirst({
           where: { userId: currentUser.id },
+          orderBy: { updatedAt: "desc" },
           select: { userEmail: true, scope: true, expiresAt: true },
         })) ??
         (await prisma.googleConnection.findFirst({
