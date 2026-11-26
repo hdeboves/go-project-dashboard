@@ -17,6 +17,12 @@ import {
   Sparkles,
 } from "lucide-react";
 import { ACTIVE_PROJECT_COOKIE } from "@/app/api/shell/status/route";
+import {
+  CockpitInvoiceDropzone,
+  type CockpitBudgetLineOption,
+  type CockpitInvoiceItem,
+  type CockpitQuoteOption,
+} from "@/components/cockpit/CockpitInvoiceDropzone";
 import { UpcomingTasksCard } from "@/components/cockpit/UpcomingTasksCard";
 import { buildVisibleProjectsWhere, getCurrentUser } from "@/lib/auth/session";
 import { decryptSecret } from "@/lib/crypto";
@@ -111,11 +117,15 @@ export default async function CommandCenterPage({
     endDate: Date | null;
     status: string;
   }> = [];
+  let cockpitBudgetLines: CockpitBudgetLineOption[] = [];
+  let cockpitQuotes: CockpitQuoteOption[] = [];
+  let cockpitPendingInvoices: CockpitInvoiceItem[] = [];
 
   if (activeProject) {
     const [
       budgetLines,
-      invPending,
+      pendingInvoiceRows,
+      quoteRows,
       drift,
       proposals,
       tasksCount,
@@ -125,10 +135,52 @@ export default async function CommandCenterPage({
     ] = await Promise.all([
       prisma.budgetLine.findMany({
         where: { projectId: activeProject.id },
-        select: { saleTotalHt: true, preOpTotalHt: true, postOpTotalHt: true },
+        orderBy: [{ sheetRowIndex: "asc" }, { createdAt: "asc" }],
+        select: {
+          id: true,
+          category: true,
+          objet: true,
+          saleTotalHt: true,
+          preOpTotalHt: true,
+          postOpTotalHt: true,
+        },
       }),
-      prisma.invoice.count({
-        where: { projectId: activeProject.id, status: "PENDING_VALIDATION" },
+      prisma.invoice.findMany({
+        where: {
+          projectId: activeProject.id,
+          status: { in: ["PENDING_VALIDATION", "CONFLICT_BLOCKED"] },
+        },
+        orderBy: { createdAt: "desc" },
+        select: {
+          id: true,
+          originalFilename: true,
+          vendorName: true,
+          invoiceNumber: true,
+          invoiceDate: true,
+          amountHt: true,
+          tvaAmount: true,
+          amountTtc: true,
+          prestationLabel: true,
+          budgetLineId: true,
+          quoteId: true,
+          detectedCodeProjet: true,
+          projectCodesJson: true,
+          vigilanceDriveFileId: true,
+          vigilanceFilename: true,
+          cpConflict: true,
+          status: true,
+        },
+      }),
+      prisma.quote.findMany({
+        where: { projectId: activeProject.id },
+        orderBy: { createdAt: "desc" },
+        select: {
+          id: true,
+          quoteNumber: true,
+          vendorName: true,
+          amountHt: true,
+          budgetLineId: true,
+        },
       }),
       prisma.syncStatus.count({
         where: { projectId: activeProject.id, driftDetected: true },
@@ -175,7 +227,18 @@ export default async function CommandCenterPage({
     overrunCount = budgetLines.filter(
       (l) => l.postOpTotalHt > l.preOpTotalHt
     ).length;
-    pendingInvoices = invPending;
+    pendingInvoices = pendingInvoiceRows.filter(
+      (i) => i.status === "PENDING_VALIDATION"
+    ).length;
+    cockpitBudgetLines = budgetLines.map((l) => ({
+      id: l.id,
+      category: l.category,
+      objet: l.objet,
+      preOpTotalHt: l.preOpTotalHt,
+      postOpTotalHt: l.postOpTotalHt,
+    }));
+    cockpitQuotes = quoteRows;
+    cockpitPendingInvoices = pendingInvoiceRows;
     extDrift = drift;
     retroProposals = proposals;
     totalTasks = tasksCount;
@@ -472,8 +535,27 @@ export default async function CommandCenterPage({
       {/* 3. ACTIONABLE 2-COLUMN COCKPIT (min-w-0 prevents mobile overflow!) */}
       {activeProject && (
         <div className="grid gap-6 lg:grid-cols-12">
-          {/* LEFT (8 cols): Priorities + Upcoming Tasks */}
+          {/* LEFT (8 cols): Direct Invoice Dropzone + Priorities + Upcoming Tasks */}
           <div className="min-w-0 space-y-6 lg:col-span-8">
+            <CockpitInvoiceDropzone
+              key={`dropzone-${activeProject.id}`}
+              project={{
+                id: activeProject.id,
+                codeProjet: activeProject.codeProjet,
+                client: activeProject.client,
+                nomJeu: activeProject.nomJeu,
+              }}
+              allProjects={projects.map((p) => ({
+                id: p.id,
+                codeProjet: p.codeProjet,
+                client: p.client,
+                nomJeu: p.nomJeu,
+              }))}
+              budgetLines={cockpitBudgetLines}
+              quotes={cockpitQuotes}
+              initialPendingInvoices={cockpitPendingInvoices}
+            />
+
             {/* Attention / Priorities */}
             <section className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-[0_1px_2px_rgba(15,23,42,0.04)] dark:border-slate-800 dark:bg-[#111827]">
               <div className="mb-3 flex items-center justify-between">

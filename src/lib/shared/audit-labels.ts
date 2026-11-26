@@ -16,6 +16,7 @@ const ACTION_LABELS: Record<string, string> = {
   INVOICE_GMAIL_SCANNED: "Factures récupérées depuis Gmail",
   INVOICE_VALIDATED: "Facture validée (Drive + Pennylane)",
   INVOICE_DELETED: "Facture rejetée / supprimée",
+  VIGILANCE_ATTESTATION_UPLOADED: "Attestation de vigilance ajoutée",
   CP_CONFLICT_DETECTED: "Conflit de code projet bloqué",
   CP_CONFLICT_OVERRIDDEN: "Conflit CP levé manuellement",
   QUOTE_CREATED: "Devis créé",
@@ -65,7 +66,13 @@ export function formatAuditDetailsFr(
 
   if (action === "USER_ROLE_UPDATED") {
     const email = String(parsed.email ?? "");
-    const nextRole = parsed.nextRole === "ADMIN" ? "Administrateur" : "Membre";
+    const roleMap: Record<string, string> = {
+      ADMIN: "Administrateur",
+      CHEF_DE_PROJET: "Chef de projet",
+      COMPTA: "Service Comptable",
+      MEMBER: "Collaborateur",
+    };
+    const nextRole = roleMap[String(parsed.nextRole ?? "")] ?? String(parsed.nextRole ?? "Membre");
     return `${email} → ${nextRole}`;
   }
 

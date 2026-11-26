@@ -1,5 +1,10 @@
+import fs from "node:fs";
 import type { Invoice, PrismaClient } from "@prisma/client";
 import { z } from "zod";
+import {
+  MANDATORY_ACCOUNTING_CC,
+  MANDATORY_ACCOUNTING_TO,
+} from "@/lib/auth/roles";
 import {
   computeBudgetMetrics,
   fromCents,
@@ -13,6 +18,12 @@ import {
 import { ensureProjectFolderNode } from "@/lib/budget/service";
 import { decryptSecret } from "@/lib/crypto";
 import { AppHttpError } from "@/lib/errors";
+import {
+  buildAccountingCcEntries,
+  buildAccountingEmailBody,
+  buildAccountingEmailSubject,
+  normalizeProjectCodesList,
+} from "@/lib/invoices/accounting-email";
 import {
   assertNoCpConflict,
   checkCodeProjetConflict,
@@ -28,9 +39,8 @@ import { buildValidatedInvoiceFilename } from "@/lib/shared/filenames";
 
 export { buildValidatedInvoiceFilename };
 
-export const DEFAULT_PENNYLANE_EMAIL =
-  "gamersorigin-8j117x7x@suppliers.pennylane.com";
-export const DEFAULT_CC_RAW = "Souléimane, Louis, Paul";
+export const DEFAULT_PENNYLANE_EMAIL = MANDATORY_ACCOUNTING_TO;
+export const DEFAULT_CC_RAW = MANDATORY_ACCOUNTING_CC.join(", ");
 
 export const ValidateInvoiceSchema = z.object({
   budgetLineId: z.string().min(1).optional(),
@@ -44,6 +54,11 @@ export const ValidateInvoiceSchema = z.object({
   invoiceType: z.enum(["ACOMPTE", "SOLDE", "UNIQUE"]).optional(),
   prestationLabel: z.string().trim().min(1).optional(),
   prestationSummary: z.string().trim().min(1).optional(),
+  projectCodes: z.array(z.string().trim().min(1)).optional(),
+  multiProjectConfirmed: z.boolean().optional(),
+  ccEmails: z.array(z.string().trim().min(1)).optional(),
+  emailSubject: z.string().trim().min(1).optional(),
+  emailBody: z.string().trim().min(1).optional(),
   overrideCpConflict: z.boolean().optional(),
   allowDuplicate: z.boolean().optional(),
 });
@@ -335,10 +350,14 @@ export async function validateInvoicePipeline(params: {
     existingInvoice.status === "CONFLICT_BLOCKED" ||
     cpResult.hasConflict;
 
+  const allowCpOverride = Boolean(
+    input.overrideCpConflict || input.multiProjectConfirmed
+  );
+
   if (
     (existingInvoice.cpConflict ||
       existingInvoice.status === "CONFLICT_BLOCKED") &&
-    !input.overrideCpConflict
+    !allowCpOverride
   ) {
     throw new CpConflictError(
       cpResult.hasConflict
@@ -357,7 +376,7 @@ export async function validateInvoicePipeline(params: {
     );
   }
 
-  if (!input.overrideCpConflict) {
+  if (!allowCpOverride) {
     assertNoCpConflict(
       project.codeProjet,
       existingInvoice.detectedCodeProjet,
@@ -461,10 +480,17 @@ export async function validateInvoicePipeline(params: {
     }
   }
 
+  const projectCodes = normalizeProjectCodesList(
+    input.projectCodes && input.projectCodes.length > 0
+      ? input.projectCodes
+      : [project.codeProjet],
+    project.codeProjet
+  );
+
   const renamedFilename = buildValidatedInvoiceFilename({
     invoiceNumber,
     invoiceDate,
-    codeProjet: project.codeProjet,
+    codeProjet: projectCodes.join("-"),
     vendorName,
     amountHt,
   });
@@ -475,6 +501,7 @@ export async function validateInvoicePipeline(params: {
     data: {
       budgetLineId: targetBudgetLineId,
       ...(input.quoteId !== undefined ? { quoteId: input.quoteId || null } : {}),
+      projectCodesJson: JSON.stringify(projectCodes),
       vendorName,
       invoiceNumber,
       invoiceDate,
@@ -528,6 +555,32 @@ export async function validateInvoicePipeline(params: {
         stepDriveDone: true,
       },
     });
+
+    // If a vigilance attestation was staged locally prior to Google connection, upload it to Drive 001.3 now
+    if (invoice.vigilanceDriveFileId?.startsWith("STAGED:")) {
+      const stagedVigilancePath = invoice.vigilanceDriveFileId.slice(
+        "STAGED:".length
+      );
+      try {
+        if (fs.existsSync(stagedVigilancePath)) {
+          const vigBuf = await fs.promises.readFile(stagedVigilancePath);
+          const vigUploaded = await gateway.drive.createFile({
+            name:
+              invoice.vigilanceFilename ??
+              `AttestationVigilance_${projectCodes.join("-")}_${invoice.id}.pdf`,
+            parentId: folder0013.driveFileId,
+            mimeType: "application/pdf",
+            body: vigBuf,
+          });
+          invoice = await prisma.invoice.update({
+            where: { id: invoice.id },
+            data: { vigilanceDriveFileId: vigUploaded.id },
+          });
+        }
+      } catch {
+        // Non-fatal
+      }
+    }
   }
 
   // STEP 2: Cumulate HT & Invoice Numbers Note in Sheet FIRST, then DB
@@ -594,32 +647,64 @@ export async function validateInvoicePipeline(params: {
     });
   }
 
-  // STEP 3: Create Pennylane Gmail Draft ONLY (never send!)
-  const pennylane = await resolvePennylaneSettings(prisma);
-  const subject = `Facture | ${vendorName} - ${prestationLabel} | CP ${project.codeProjet}`;
+  // STEP 3: Create Pennylane Gmail Draft ONLY (never send! Strictly 1 invoice per email!)
+  const [pennylane, relatedProjects, accountingUsers] = await Promise.all([
+    resolvePennylaneSettings(prisma),
+    prisma.project.findMany({
+      where: { codeProjet: { in: projectCodes } },
+      include: {
+        owner: { select: { email: true, name: true, role: true } },
+        members: {
+          include: { user: { select: { email: true, name: true, role: true } } },
+        },
+      },
+    }),
+    prisma.user.findMany({
+      where: { role: "COMPTA" },
+      select: { email: true, name: true },
+    }),
+  ]);
+
+  const projectCollaborators: Array<{
+    email: string;
+    name?: string | null;
+    role?: string | null;
+  }> = [];
+  for (const rp of relatedProjects) {
+    if (rp.owner) projectCollaborators.push(rp.owner);
+    for (const m of rp.members) {
+      if (m.user) projectCollaborators.push(m.user);
+    }
+  }
+
+  const finalCcEntries = buildAccountingCcEntries({
+    projectCollaborators,
+    accountingUsers,
+    extraCc: [
+      ...pennylane.cc,
+      ...(input.ccEmails ?? []),
+    ],
+  });
+  const finalCc = finalCcEntries.map((c) => c.email);
+
+  const subject =
+    input.emailSubject?.trim() ||
+    buildAccountingEmailSubject({
+      projectCodes,
+      vendorName,
+    });
 
   if (!invoice.stepGmailDone || !invoice.pennylaneDraftId) {
-    const textBody = [
-      `Bonjour,`,
-      ``,
-      `Veuillez trouver ci-joint la facture validée pour transmission Pennylane :`,
-      `- Projet : [${project.codeProjet}] ${project.client} - ${project.nomJeu}`,
-      `- Prestataire : ${vendorName}`,
-      `- N° Facture : ${invoiceNumber}`,
-      `- Date : ${invoiceDate}`,
-      `- Prestation : ${prestationLabel}`,
-      `- Montant HT : ${amountHt.toFixed(2)} €`,
-      `- Montant TTC : ${amountTtc.toFixed(2)} €`,
-      `- Ligne budgétaire : ${budgetLine.category} / ${budgetLine.objet}`,
-      `- Fichier Drive (001.3 Factures) : ${renamedFilename}`,
-      ``,
-      `Cordialement,`,
-      `GamersOrigin`,
-    ].join("\n");
+    const textBody =
+      input.emailBody?.trim() ||
+      buildAccountingEmailBody({
+        projectCodes,
+        vendorName,
+      });
 
     const draft = await gateway.gmail.createDraft({
       to: pennylane.to,
-      cc: pennylane.cc,
+      cc: finalCc,
       subject,
       textBody,
       attachments: [

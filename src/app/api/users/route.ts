@@ -7,7 +7,7 @@ import { prisma } from "@/lib/prisma";
 
 const UpdateUserRoleSchema = z.object({
   userId: z.string().min(1),
-  role: z.enum(["ADMIN", "MEMBER"]),
+  role: z.enum(["ADMIN", "CHEF_DE_PROJET", "COMPTA", "MEMBER"]),
 });
 
 export async function GET() {
@@ -58,7 +58,7 @@ export async function PATCH(req: NextRequest) {
       throw new AppHttpError(404, "USER_NOT_FOUND", "Utilisateur introuvable.");
     }
 
-    if (target.role === "ADMIN" && body.role === "MEMBER") {
+    if (target.role === "ADMIN" && body.role !== "ADMIN") {
       const adminCount = await prisma.user.count({ where: { role: "ADMIN" } });
       if (adminCount <= 1) {
         throw new AppHttpError(

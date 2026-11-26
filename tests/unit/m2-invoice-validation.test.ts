@@ -303,7 +303,7 @@ describe("M2 1-Click Invoice Validation Pipeline (Drive 001.3, Sheet Cumulation 
     });
     expect(drafts[0]).toMatchObject({
       to: "pennylane-test@suppliers.pennylane.com",
-      subject: "Facture | Studio Alpha - Acompte Map | CP 326077",
+      subject: "Facture - 326077 - Studio Alpha",
       attachmentNames: ["F-001_326077_StudioAlpha_2026-09-10.pdf"],
     });
     expect(drafts[0].cc?.join(", ")).toContain("Souleimane <souleimane@gamersorigin.com>");

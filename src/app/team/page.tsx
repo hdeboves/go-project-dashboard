@@ -10,7 +10,6 @@ import {
   History,
   RefreshCw,
   Search,
-  Shield,
   ShieldCheck,
   Sparkles,
   UserCheck,
@@ -18,6 +17,14 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { AvatarDisplay } from "@/components/AvatarDisplay";
+import {
+  MANDATORY_ACCOUNTING_CC,
+  MANDATORY_ACCOUNTING_TO,
+  USER_ROLES,
+  USER_ROLE_META,
+  normalizeUserRole,
+  type UserRole,
+} from "@/lib/auth/roles";
 import {
   formatAuditActionFr,
   formatAuditDetailsFr,
@@ -171,8 +178,8 @@ export default function TeamAndAdminPage() {
     };
   }, [loadAll]);
 
-  async function handleToggleRole(u: DirectoryUser) {
-    const nextRole = u.role === "ADMIN" ? "MEMBER" : "ADMIN";
+  async function handleRoleChange(u: DirectoryUser, nextRole: UserRole) {
+    if (normalizeUserRole(u.role) === nextRole) return;
     setUpdatingRoleId(u.id);
     setFeedback(null);
     try {
@@ -188,7 +195,7 @@ export default function TeamAndAdminPage() {
           text: json.error ?? "Impossible de modifier le rôle.",
         });
       } else {
-        const msg = `${u.name} est désormais ${nextRole === "ADMIN" ? "Administrateur" : "Membre"}.`;
+        const msg = `${u.name} est désormais ${USER_ROLE_META[nextRole].label}.`;
         setFeedback({ type: "success", text: msg });
         showToast(msg);
         await loadAll();
@@ -470,7 +477,6 @@ export default function TeamAndAdminPage() {
             <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
               {filteredUsers.map((u) => {
                 const isSelf = currentUser?.id === u.id;
-                const userIsAdmin = u.role === "ADMIN";
                 return (
                   <div
                     key={u.id}
@@ -511,16 +517,18 @@ export default function TeamAndAdminPage() {
                       </div>
 
                       <div className="mt-4 flex flex-wrap items-center justify-between gap-2 text-[11px]">
-                        {userIsAdmin ? (
-                          <span className="inline-flex items-center gap-1 rounded-full bg-indigo-50 px-2 py-0.5 font-semibold text-indigo-700 dark:bg-indigo-500/20 dark:text-indigo-300">
-                            <Crown className="h-3 w-3" />
-                            Admin
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 font-medium text-slate-600 dark:bg-slate-800 dark:text-slate-300">
-                            Membre
-                          </span>
-                        )}
+                        {(() => {
+                          const r = normalizeUserRole(u.role);
+                          const meta = USER_ROLE_META[r];
+                          return (
+                            <span
+                              className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 font-semibold ${meta.badgeClass}`}
+                            >
+                              {r === "ADMIN" && <Crown className="h-3 w-3" />}
+                              {meta.shortLabel}
+                            </span>
+                          );
+                        })()}
                         <span className="tabular-nums text-slate-500 dark:text-slate-400">
                           {u.ownedProjectsCount} actif
                           {u.ownedProjectsCount > 1 ? "s" : ""} ·{" "}
@@ -530,26 +538,24 @@ export default function TeamAndAdminPage() {
                       </div>
                     </div>
 
-                    <div className="mt-4 flex items-center justify-between border-t border-slate-100 pt-3 text-[11px] text-slate-400 dark:border-slate-800">
+                    <div className="mt-4 flex items-center justify-between gap-2 border-t border-slate-100 pt-3 text-[11px] text-slate-400 dark:border-slate-800">
                       <span>Inscrit le {formatDateFr(u.createdAt)}</span>
                       {canEditRoles && (
-                        <button
-                          type="button"
+                        <select
+                          aria-label={`Rôle de ${u.name}`}
                           disabled={updatingRoleId === u.id}
-                          onClick={() => void handleToggleRole(u)}
-                          className={`inline-flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] font-semibold transition-colors disabled:opacity-50 ${
-                            userIsAdmin
-                              ? "border border-slate-200 text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800"
-                              : "bg-indigo-600 text-white hover:bg-indigo-700"
-                          }`}
+                          value={normalizeUserRole(u.role)}
+                          onChange={(e) =>
+                            void handleRoleChange(u, e.target.value as UserRole)
+                          }
+                          className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-[11px] font-semibold text-slate-700 focus:border-rose-500 focus:outline-none disabled:opacity-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
                         >
-                          <Shield className="h-3 w-3" />
-                          {updatingRoleId === u.id
-                            ? "..."
-                            : userIsAdmin
-                              ? "Passer Membre"
-                              : "Passer Admin"}
-                        </button>
+                          {USER_ROLES.map((r) => (
+                            <option key={r} value={r}>
+                              {USER_ROLE_META[r].label}
+                            </option>
+                          ))}
+                        </select>
                       )}
                     </div>
                   </div>
@@ -558,39 +564,40 @@ export default function TeamAndAdminPage() {
             </div>
           )}
 
-          {/* Admin Role Powers Info Card */}
+          {/* Role System & Accounting Mail Rules Card */}
           <div className="rounded-2xl border border-indigo-200/70 bg-indigo-50/40 p-5 dark:border-indigo-500/20 dark:bg-indigo-500/5">
             <div className="flex items-start gap-3">
               <ShieldCheck className="mt-0.5 h-5 w-5 shrink-0 text-indigo-600 dark:text-indigo-400" />
-              <div className="space-y-1 text-xs text-slate-700 dark:text-slate-300">
+              <div className="space-y-1.5 text-xs text-slate-700 dark:text-slate-300">
                 <p className="font-semibold text-slate-900 dark:text-white">
-                  Pouvoirs du rôle Administrateur
+                  Rôles équipe &amp; règles automatiques des mails comptabilité
                 </p>
-                <ul className="list-disc space-y-0.5 pl-4">
+                <ul className="list-disc space-y-1 pl-4">
                   <li>
-                    <strong>Portefeuille agence global</strong> : activer le
-                    filtre « Vue agence » dans{" "}
-                    <Link href="/projects" className="underline">
-                      Tous les projets
-                    </Link>{" "}
-                    pour superviser tous les projets actifs et archivés de
-                    l&apos;équipe.
+                    <strong>Destinataire compta obligatoire</strong> :{" "}
+                    <code className="font-mono text-[11px]">
+                      {MANDATORY_ACCOUNTING_TO}
+                    </code>
                   </li>
                   <li>
-                    <strong>Gestion des rôles</strong> : promouvoir ou
-                    rétrograder un membre (protection automatique du dernier
-                    administrateur).
+                    <strong>CC compta obligatoires</strong> :{" "}
+                    <code className="font-mono text-[11px]">
+                      {MANDATORY_ACCOUNTING_CC.join(", ")}
+                    </code>
                   </li>
                   <li>
-                    <strong>Centre de backups hebdomadaires</strong> : consulter
-                    les sauvegardes automatiques du lundi 04h00, déclencher un
-                    snapshot à tout moment et télécharger l&apos;export JSON
-                    complet.
+                    <strong>Rôle Service Comptable</strong> : ajouté
+                    automatiquement en CC sur tous les brouillons de factures.
                   </li>
                   <li>
-                    <strong>Journal d&apos;audit global</strong> : suivre les
-                    validations de factures, partages, archivages et changements
-                    de rôles sur toute l&apos;agence.
+                    <strong>Rôle Chef de projet / Collaborateurs projet</strong>{" "}
+                    : tous les collaborateurs rattachés au(x) projet(s) d&apos;une
+                    facture sont ajoutés automatiquement en CC.
+                  </li>
+                  <li>
+                    <strong>Rôle Administrateur</strong> : vue portefeuille
+                    globale, gestion des rôles, centre de backups hebdomadaires
+                    et journal d&apos;audit.
                   </li>
                 </ul>
               </div>

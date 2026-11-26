@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { toErrorResponse } from "@/lib/api-error";
+import { assertProjectAccess, getCurrentUser } from "@/lib/auth/session";
 import { getServices } from "@/lib/container";
 import { validateInvoicePipeline } from "@/lib/invoices/validate";
 
@@ -13,6 +14,9 @@ export async function POST(
     const body = rawText.trim() ? JSON.parse(rawText) : {};
 
     const { prisma, getGoogleGateway } = getServices();
+    const currentUser = await getCurrentUser(prisma);
+    await assertProjectAccess(prisma, id, currentUser, "EDIT");
+
     const result = await validateInvoicePipeline({
       prisma,
       getGoogleGateway,

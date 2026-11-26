@@ -239,9 +239,12 @@ model Invoice {
   tvaAmount          Float    @default(0)
   amountTtc          Float    @default(0)
   invoiceType        String   @default("UNIQUE")
-  prestationLabel    String?
-  detectedCodeProjet String?
-  cpConflict         Boolean  @default(false)
+  prestationLabel      String?
+  detectedCodeProjet   String?
+  projectCodesJson     String   @default("[]")
+  vigilanceDriveFileId String?
+  vigilanceFilename    String?
+  cpConflict           Boolean  @default(false)
   status             String   @default("PENDING_VALIDATION")
   pennylaneDraftId   String?
   extractedJson      String   @default("{}")

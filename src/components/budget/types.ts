@@ -91,6 +91,9 @@ export interface InvoiceDto {
   invoiceType: string;
   prestationLabel: string | null;
   detectedCodeProjet: string | null;
+  projectCodesJson?: string | null;
+  vigilanceDriveFileId?: string | null;
+  vigilanceFilename?: string | null;
   cpConflict: boolean;
   status: string;
   pennylaneDraftId: string | null;
