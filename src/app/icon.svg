@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- Soft warm badge background so the Capybara pops in both light & dark browser tabs -->
+  <rect x="2" y="2" width="60" height="60" rx="18" fill="#FDE68A" />
+  <g transform="translate(0, 2)">
+    <!-- Ears -->
+    <circle cx="17" cy="27" r="5.2" fill="#A16207" stroke="#713F12" stroke-width="2.2" />
+    <circle cx="47" cy="27" r="5.2" fill="#A16207" stroke="#713F12" stroke-width="2.2" />
+    <!-- Head -->
+    <rect x="13" y="22" width="38" height="30" rx="14.5" fill="#CA8A04" stroke="#713F12" stroke-width="2.4" />
+    <!-- Snout -->
+    <ellipse cx="32" cy="41.5" rx="11.5" ry="7.8" fill="#A16207" />
+    <!-- Tangerine on head! -->
+    <circle cx="32" cy="15.5" r="7" fill="#FB923C" stroke="#C2410C" stroke-width="2" />
+    <path d="M32 8.2 Q36.5 5.8 38 9.2 Q34.5 10.6 32 8.2 Z" fill="#22C55E" />
+    <!-- Zen closed eyes -->
+    <path d="M19.5 33 Q23 30.5 26.5 33" fill="none" stroke="#422006" stroke-width="2.4" stroke-linecap="round" />
+    <path d="M37.5 33 Q41 30.5 44.5 33" fill="none" stroke="#422006" stroke-width="2.4" stroke-linecap="round" />
+    <!-- Nose & mouth -->
+    <circle cx="28.8" cy="39.2" r="1.6" fill="#422006" />
+    <circle cx="35.2" cy="39.2" r="1.6" fill="#422006" />
+    <path d="M28.8 43.5 Q32 45.8 35.2 43.5" fill="none" stroke="#422006" stroke-width="2.2" stroke-linecap="round" />
+  </g>
+</svg>
