@@ -27,10 +27,16 @@ const CreateProjectSchema = z.object({
   codeProjet: z.string().min(2),
   client: z.string().min(1),
   nomJeu: z.string().min(1),
-  category: z.enum(["JEU", "YOUTUBE", "EVENEMENT", "SPONSOR"]).optional(),
+  category: z
+    .enum(["JEU", "YOUTUBE", "PROD_CREA", "EVENEMENT", "SPONSOR"])
+    .optional(),
   isSandbox: z.boolean().optional(),
   provisionDrive: z.boolean().optional(),
   seedBlankTemplates: z.boolean().optional(),
+  cloneFromProjectId: z.string().trim().optional(),
+  kickoffDate: z.string().trim().optional(),
+  launchDate: z.string().trim().optional(),
+  memberEmails: z.array(z.string().email()).optional(),
 });
 
 export async function GET(req: NextRequest) {
@@ -458,13 +464,131 @@ export async function POST(req: NextRequest) {
 
     let seededBudgetLines = 0;
     let seededRetroTasks = 0;
-    if (shouldSeedBlank) {
+    if (body.cloneFromProjectId) {
+      const sourceProject = await prisma.project.findFirst({
+        where: {
+          id: body.cloneFromProjectId,
+          ...buildVisibleProjectsWhere(currentUser),
+        },
+        include: {
+          budgetLines: { orderBy: [{ sheetRowIndex: "asc" }, { createdAt: "asc" }] },
+          retroTasks: { orderBy: [{ sheetRowIndex: "asc" }, { createdAt: "asc" }] },
+        },
+      });
+      if (sourceProject) {
+        if (sourceProject.budgetLines.length > 0) {
+          await prisma.budgetLine.createMany({
+            data: sourceProject.budgetLines.map((l, idx) => ({
+              projectId: project.id,
+              category: l.category,
+              objet: l.objet,
+              realisePar: l.realisePar,
+              expenseType: l.expenseType,
+              saleQty: 1,
+              saleDays: 1,
+              saleUnitPrice: 0,
+              saleTotalHt: 0,
+              preOpUnitCost: 0,
+              preOpTotalHt: 0,
+              postOpQty: 0,
+              postOpDays: 0,
+              postOpUnitCost: 0,
+              postOpTotalHt: 0,
+              sheetRowIndex: 12 + idx,
+            })),
+          });
+          seededBudgetLines = sourceProject.budgetLines.length;
+        }
+        if (sourceProject.retroTasks.length > 0) {
+          await prisma.retroTask.createMany({
+            data: sourceProject.retroTasks.map((t, idx) => ({
+              projectId: project.id,
+              phase: t.phase,
+              etape: t.etape,
+              tache: t.tache,
+              owner: null,
+              startDate: null,
+              endDate: null,
+              status: "A_FAIRE",
+              sheetRowIndex: 3 + idx,
+              isMilestone: t.isMilestone,
+              milestoneType: t.milestoneType,
+            })),
+          });
+          seededRetroTasks = sourceProject.retroTasks.length;
+        }
+      }
+    } else if (shouldSeedBlank) {
       const [budgetSeed, retroSeed] = await Promise.all([
         seedBlankBudgetForProject(prisma, project.id, category),
         seedBlankRetroForProject(prisma, project.id, { category }),
       ]);
       seededBudgetLines = budgetSeed.createdCount;
       seededRetroTasks = retroSeed.createdCount;
+    }
+
+    // Auto-schedule seeded retroplanning tasks if kickoffDate or launchDate provided
+    const kickoffParsed =
+      body.kickoffDate && /^\d{4}-\d{2}-\d{2}$/.test(body.kickoffDate)
+        ? new Date(`${body.kickoffDate}T12:00:00Z`)
+        : null;
+    const launchParsed =
+      body.launchDate && /^\d{4}-\d{2}-\d{2}$/.test(body.launchDate)
+        ? new Date(`${body.launchDate}T12:00:00Z`)
+        : null;
+
+    if ((kickoffParsed || launchParsed) && seededRetroTasks > 0) {
+      const tasksToDate = await prisma.retroTask.findMany({
+        where: { projectId: project.id },
+        orderBy: [{ sheetRowIndex: "asc" }, { createdAt: "asc" }],
+      });
+      const phaseOrder: string[] = [];
+      for (const t of tasksToDate) {
+        if (!phaseOrder.includes(t.phase)) phaseOrder.push(t.phase);
+      }
+      const totalPhases = Math.max(1, phaseOrder.length);
+      const baseAnchor = kickoffParsed
+        ? kickoffParsed
+        : new Date(
+            launchParsed!.getTime() - Math.max(1, totalPhases - 2) * 7 * 86_400_000
+          );
+      await prisma.$transaction(
+        tasksToDate.map((t) => {
+          const pIdx = Math.max(0, phaseOrder.indexOf(t.phase));
+          const start = new Date(baseAnchor.getTime() + pIdx * 7 * 86_400_000);
+          const dow = start.getUTCDay();
+          if (dow === 6) start.setUTCDate(start.getUTCDate() + 2);
+          else if (dow === 0) start.setUTCDate(start.getUTCDate() + 1);
+          const end = new Date(start.getTime() + 4 * 86_400_000);
+          return prisma.retroTask.update({
+            where: { id: t.id },
+            data: { startDate: start, endDate: end },
+          });
+        })
+      );
+    }
+
+    // Optional initial team sharing
+    if (body.memberEmails && body.memberEmails.length > 0) {
+      for (const email of body.memberEmails) {
+        const clean = email.trim().toLowerCase();
+        const found = await prisma.user.findUnique({ where: { email: clean } });
+        if (found && found.id !== currentUser?.id) {
+          await prisma.projectMember
+            .upsert({
+              where: {
+                projectId_userId: { projectId: project.id, userId: found.id },
+              },
+              update: {},
+              create: {
+                projectId: project.id,
+                userId: found.id,
+                role: "EDITOR",
+              },
+            })
+            .catch(() => undefined);
+        }
+      }
     }
 
     let provisioningResult: {

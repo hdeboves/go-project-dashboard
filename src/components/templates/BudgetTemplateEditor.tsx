@@ -92,17 +92,19 @@ export function BudgetTemplateEditor({
     setDirty(true);
   }
 
-  async function handleSave() {
+  async function handleSave(): Promise<boolean> {
     const cleaned = draftLines.filter(
       (l) => l.category.trim().length > 0 && l.objet.trim().length > 0
     );
     const ok = await saveBudgetTemplate(selectedCat, cleaned);
     if (ok) setDirty(false);
+    return ok;
   }
 
   async function handleApplyNow(replaceExisting: boolean) {
     if (dirty) {
-      await handleSave();
+      const ok = await handleSave();
+      if (!ok) return;
     }
     setConfirmMode(null);
     await onApply(selectedCat, { replaceExisting });
@@ -113,10 +115,15 @@ export function BudgetTemplateEditor({
       data-testid="budget-template-editor"
       className="space-y-4 rounded-2xl border border-slate-200/80 bg-white p-5 shadow-[0_1px_2px_rgba(15,23,42,0.04)] dark:border-slate-800 dark:bg-[#111827]"
     >
+      <div className="rounded-xl border border-indigo-200/80 bg-indigo-50/50 px-3.5 py-2 text-[11px] text-indigo-900 dark:border-indigo-500/30 dark:bg-indigo-500/10 dark:text-indigo-200">
+        <strong>Modèle global agence</strong> — Les modifications enregistrées
+        ici s&apos;appliquent à tous les futurs projets de cette catégorie pour
+        toute l&apos;équipe (GamersOrigin &amp; L&apos;Intrus).
+      </div>
       <div className="flex flex-wrap items-start justify-between gap-4 border-b border-slate-100 pb-4 dark:border-slate-800">
         <div>
           <div className="flex items-center gap-2">
-            <Sparkles className="h-4 w-4 text-rose-600 dark:text-rose-400" />
+            <Sparkles className="h-4 w-4 text-indigo-600 dark:text-indigo-400" />
             <h2 className="text-base font-bold text-slate-900 dark:text-white">
               Modèles vierges Budget (0 €) par catégorie
             </h2>

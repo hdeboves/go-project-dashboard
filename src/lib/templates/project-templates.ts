@@ -4,6 +4,7 @@ import type { NormalizedExpenseType } from "@/lib/budget/calculator";
 export const PROJECT_CATEGORIES = [
   "JEU",
   "YOUTUBE",
+  "PROD_CREA",
   "EVENEMENT",
   "SPONSOR",
 ] as const;
@@ -37,6 +38,15 @@ export const PROJECT_CATEGORY_META: Record<ProjectCategory, ProjectCategoryMeta>
     badgeClass:
       "bg-rose-50 text-rose-700 ring-1 ring-rose-200/80 dark:bg-rose-500/15 dark:text-rose-300 dark:ring-rose-500/30",
   },
+  PROD_CREA: {
+    id: "PROD_CREA",
+    label: "Prod Créa & Vidéo",
+    shortLabel: "Prod Créa",
+    description:
+      "Brand content, film publicitaire, DA, motion design, tournage, post-production & assets sociaux.",
+    badgeClass:
+      "bg-violet-50 text-violet-700 ring-1 ring-violet-200/80 dark:bg-violet-500/15 dark:text-violet-300 dark:ring-violet-500/30",
+  },
   EVENEMENT: {
     id: "EVENEMENT",
     label: "Projet Événement",
@@ -66,6 +76,14 @@ export function normalizeProjectCategory(
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "");
   if (upper === "YOUTUBE") return "YOUTUBE";
+  if (
+    upper === "PROD_CREA" ||
+    upper === "PROD" ||
+    upper === "CREA" ||
+    upper === "VIDEO"
+  ) {
+    return "PROD_CREA";
+  }
   if (upper === "EVENEMENT" || upper === "EVENT") return "EVENEMENT";
   if (upper === "SPONSOR" || upper === "SPONSORING") return "SPONSOR";
   return "JEU";
@@ -228,6 +246,61 @@ export const DEFAULT_BUDGET_TEMPLATES: Record<
       category: "GESTION DE PROJET",
       objet: "Coordination de production & Suivi client",
       expenseType: "RH Internes",
+      realisePar: "Interne agence",
+    },
+  ],
+  PROD_CREA: [
+    {
+      category: "CONCEPTION & DIRECTION ARTISTIQUE",
+      objet: "Concept créatif, Moodboard & Storyboard",
+      expenseType: "RH Internes",
+      realisePar: "Interne agence",
+    },
+    {
+      category: "CONCEPTION & DIRECTION ARTISTIQUE",
+      objet: "Direction Artistique, Key Visuals & Charte campagne",
+      expenseType: "Externe",
+    },
+    {
+      category: "PRODUCTION & TOURNAGE",
+      objet: "Réalisateur, DOP & Équipe technique tournage",
+      expenseType: "Externe",
+    },
+    {
+      category: "PRODUCTION & TOURNAGE",
+      objet: "Studio, Décors, Accessoires & Régie plateau",
+      expenseType: "Externe",
+    },
+    {
+      category: "PRODUCTION & TOURNAGE",
+      objet: "Casting, Comédiens / Talents & Droits à l'image",
+      expenseType: "Externe",
+    },
+    {
+      category: "POST-PRODUCTION & LIVRABLES",
+      objet: "Montage offline/online, Motion Design & 3D",
+      expenseType: "Externe",
+    },
+    {
+      category: "POST-PRODUCTION & LIVRABLES",
+      objet: "Étalonnage, Sound Design, Mixage & Droits musicaux",
+      expenseType: "Externe",
+    },
+    {
+      category: "POST-PRODUCTION & LIVRABLES",
+      objet: "Déclinaisons formats sociaux (9:16, 16:9, 1:1) & Mastering",
+      expenseType: "Externe",
+    },
+    {
+      category: "GESTION DE PROJET & FRAIS",
+      objet: "Production exécutive & Suivi client",
+      expenseType: "RH Internes",
+      realisePar: "Interne agence",
+    },
+    {
+      category: "GESTION DE PROJET & FRAIS",
+      objet: "Amortissement matériel & Stockage rushes",
+      expenseType: "Amortissement",
       realisePar: "Interne agence",
     },
   ],

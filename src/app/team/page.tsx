@@ -2,10 +2,13 @@
 
 import Link from "next/link";
 import {
+  BarChart3,
   Clock,
   Crown,
   DatabaseBackup,
   Download,
+  ExternalLink,
+  FileCheck2,
   FolderKanban,
   History,
   RefreshCw,
@@ -101,13 +104,50 @@ function formatDateFr(iso: string): string {
   });
 }
 
+interface WorkloadRow {
+  user: {
+    id: string;
+    name: string;
+    email: string;
+    role: string;
+    avatarId: string;
+    avatarBg: string;
+  };
+  ownedProjectsCount: number;
+  sharedProjectsCount: number;
+  totalActiveProjects: number;
+  openTasksCount: number;
+  lateTasksCount: number;
+  managedSoldHt: number;
+  projects: Array<{
+    id: string;
+    codeProjet: string;
+    client: string;
+    nomJeu: string;
+  }>;
+}
+
+interface VendorRow {
+  id: string;
+  name: string;
+  siret: string | null;
+  email: string | null;
+  vigilanceDriveFileId: string | null;
+  vigilanceFilename: string | null;
+  vigilanceUploadedAt: string | null;
+  vigilanceValidUntil: string | null;
+  vigilanceStatus: "VALID" | "EXPIRING_SOON" | "EXPIRED" | "MISSING";
+}
+
 export default function TeamAndAdminPage() {
-  const [activeTab, setActiveTab] = useState<"team" | "backups" | "audit">(
-    "team"
-  );
+  const [activeTab, setActiveTab] = useState<
+    "team" | "workload" | "vendors" | "backups" | "audit"
+  >("team");
   const [loading, setLoading] = useState(true);
   const [currentUser, setCurrentUser] = useState<DirectoryUser | null>(null);
   const [users, setUsers] = useState<DirectoryUser[]>([]);
+  const [workload, setWorkload] = useState<WorkloadRow[]>([]);
+  const [vendors, setVendors] = useState<VendorRow[]>([]);
   const [backups, setBackups] = useState<BackupRecord[]>([]);
   const [scheduleLabel, setScheduleLabel] = useState(
     "Chaque lundi à 04h00 (heure de Paris)"
@@ -129,7 +169,19 @@ export default function TeamAndAdminPage() {
   const loadAll = useCallback(async () => {
     setLoading(true);
     try {
-      const usersRes = await fetch("/api/users", { cache: "no-store" });
+      const [usersRes, wRes, vRes] = await Promise.all([
+        fetch("/api/users", { cache: "no-store" }),
+        fetch("/api/team/workload", { cache: "no-store" }),
+        fetch("/api/vendors", { cache: "no-store" }),
+      ]);
+      if (wRes.ok) {
+        const wJson = (await wRes.json()) as { workload?: WorkloadRow[] };
+        setWorkload(wJson.workload ?? []);
+      }
+      if (vRes.ok) {
+        const vJson = (await vRes.json()) as { vendors?: VendorRow[] };
+        setVendors(vJson.vendors ?? []);
+      }
       if (usersRes.ok) {
         const json = (await usersRes.json()) as {
           currentUser: DirectoryUser | null;
@@ -373,20 +425,52 @@ export default function TeamAndAdminPage() {
 
       {/* Navigation Tabs */}
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200/80 pb-1 dark:border-slate-800">
-        <div className="flex items-center gap-1">
+        <div className="flex flex-wrap items-center gap-1">
           <button
             type="button"
             onClick={() => setActiveTab("team")}
             className={`relative inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold transition-colors ${
               activeTab === "team"
-                ? "text-rose-600 dark:text-rose-400"
+                ? "text-indigo-600 dark:text-indigo-400"
                 : "text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200"
             }`}
           >
             <Users className="h-3.5 w-3.5" />
-            Annuaire Équipe ({users.length})
+            Annuaire ({users.length})
             {activeTab === "team" && (
-              <span className="absolute right-2 -bottom-1 left-2 h-0.5 rounded-full bg-rose-600 dark:bg-rose-400" />
+              <span className="absolute right-2 -bottom-1 left-2 h-0.5 rounded-full bg-indigo-600 dark:bg-indigo-400" />
+            )}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab("workload")}
+            className={`relative inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold transition-colors ${
+              activeTab === "workload"
+                ? "text-indigo-600 dark:text-indigo-400"
+                : "text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200"
+            }`}
+          >
+            <BarChart3 className="h-3.5 w-3.5" />
+            Charge Équipe ({workload.length})
+            {activeTab === "workload" && (
+              <span className="absolute right-2 -bottom-1 left-2 h-0.5 rounded-full bg-indigo-600 dark:bg-indigo-400" />
+            )}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab("vendors")}
+            className={`relative inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold transition-colors ${
+              activeTab === "vendors"
+                ? "text-indigo-600 dark:text-indigo-400"
+                : "text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200"
+            }`}
+          >
+            <FileCheck2 className="h-3.5 w-3.5" />
+            Coffre URSSAF ({vendors.length})
+            {activeTab === "vendors" && (
+              <span className="absolute right-2 -bottom-1 left-2 h-0.5 rounded-full bg-indigo-600 dark:bg-indigo-400" />
             )}
           </button>
 
@@ -397,14 +481,14 @@ export default function TeamAndAdminPage() {
                 onClick={() => setActiveTab("backups")}
                 className={`relative inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold transition-colors ${
                   activeTab === "backups"
-                    ? "text-rose-600 dark:text-rose-400"
+                    ? "text-indigo-600 dark:text-indigo-400"
                     : "text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200"
                 }`}
               >
                 <DatabaseBackup className="h-3.5 w-3.5" />
                 Backups ({backups.length})
                 {activeTab === "backups" && (
-                  <span className="absolute right-2 -bottom-1 left-2 h-0.5 rounded-full bg-rose-600 dark:bg-rose-400" />
+                  <span className="absolute right-2 -bottom-1 left-2 h-0.5 rounded-full bg-indigo-600 dark:bg-indigo-400" />
                 )}
               </button>
 
@@ -777,6 +861,178 @@ export default function TeamAndAdminPage() {
               </div>
             )}
           </div>
+        </section>
+      )}
+      {/* TAB: Charge Équipe (Direction) */}
+      {activeTab === "workload" && (
+        <section className="overflow-hidden rounded-2xl border border-slate-200/80 bg-white shadow-[0_1px_2px_rgba(15,23,42,0.04)] dark:border-slate-800 dark:bg-[#111827]">
+          <div className="border-b border-slate-100 px-5 py-4 dark:border-slate-800">
+            <h2 className="text-sm font-bold text-slate-900 dark:text-white">
+              Charge par chef de projet &amp; collaborateur
+            </h2>
+            <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
+              Projets actifs en responsabilité, tâches ouvertes, retards et CA
+              vendu piloté.
+            </p>
+          </div>
+          {workload.length === 0 ? (
+            <p className="p-10 text-center text-xs text-slate-500 dark:text-slate-400">
+              Aucune donnée de charge pour le moment.
+            </p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs">
+                <thead>
+                  <tr className="border-b border-slate-100 bg-slate-50/70 text-[11px] font-semibold text-slate-500 dark:border-slate-800 dark:bg-slate-800/40 dark:text-slate-400">
+                    <th className="px-5 py-3">Collaborateur</th>
+                    <th className="px-3 py-3 text-right">Projets actifs</th>
+                    <th className="px-3 py-3 text-right">Tâches ouvertes</th>
+                    <th className="px-3 py-3 text-right">Retards</th>
+                    <th className="px-5 py-3 text-right">CA Vendu piloté</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                  {workload.map((row) => (
+                    <tr
+                      key={row.user.id}
+                      className="hover:bg-slate-50/60 dark:hover:bg-slate-800/30"
+                    >
+                      <td className="px-5 py-3">
+                        <div className="flex items-center gap-2.5">
+                          <AvatarDisplay
+                            avatarId={row.user.avatarId}
+                            avatarBg={row.user.avatarBg}
+                            size="sm"
+                          />
+                          <div>
+                            <p className="font-semibold text-slate-900 dark:text-white">
+                              {row.user.name}
+                            </p>
+                            <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                              {row.user.email}
+                            </p>
+                          </div>
+                        </div>
+                      </td>
+                      <td className="px-3 py-3 text-right font-mono font-bold tabular-nums text-slate-900 dark:text-white">
+                        {row.totalActiveProjects}{" "}
+                        <span className="font-sans text-[10px] font-normal text-slate-500">
+                          ({row.ownedProjectsCount} lead)
+                        </span>
+                      </td>
+                      <td className="px-3 py-3 text-right font-mono font-semibold tabular-nums text-indigo-700 dark:text-indigo-300">
+                        {row.openTasksCount}
+                      </td>
+                      <td className="px-3 py-3 text-right font-mono font-semibold tabular-nums">
+                        <span
+                          className={
+                            row.lateTasksCount > 0
+                              ? "rounded-full bg-rose-50 px-2 py-0.5 text-rose-700 dark:bg-rose-500/20 dark:text-rose-300"
+                              : "text-emerald-600 dark:text-emerald-400"
+                          }
+                        >
+                          {row.lateTasksCount}
+                        </span>
+                      </td>
+                      <td className="px-5 py-3 text-right font-mono font-semibold tabular-nums text-slate-900 dark:text-white">
+                        {row.managedSoldHt.toLocaleString("fr-FR")} €
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+      )}
+
+      {/* TAB: Coffre URSSAF Prestataires (validité 6 mois) */}
+      {activeTab === "vendors" && (
+        <section className="overflow-hidden rounded-2xl border border-slate-200/80 bg-white shadow-[0_1px_2px_rgba(15,23,42,0.04)] dark:border-slate-800 dark:bg-[#111827]">
+          <div className="border-b border-slate-100 px-5 py-4 dark:border-slate-800">
+            <h2 className="text-sm font-bold text-slate-900 dark:text-white">
+              Coffre Prestataires — Attestations de vigilance URSSAF (6 mois)
+            </h2>
+            <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
+              Lorsqu&apos;un prestataire possède une attestation valide (&lt; 6
+              mois), elle est ré-attachée automatiquement sur ses nouvelles
+              factures &gt; 3 000 € HT.
+            </p>
+          </div>
+          {vendors.length === 0 ? (
+            <p className="p-10 text-center text-xs text-slate-500 dark:text-slate-400">
+              Aucune attestation URSSAF enregistrée pour l&apos;instant. Elles
+              s&apos;ajoutent automatiquement lors de la vérification des
+              factures &gt; 3 000 € HT.
+            </p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs">
+                <thead>
+                  <tr className="border-b border-slate-100 bg-slate-50/70 text-[11px] font-semibold text-slate-500 dark:border-slate-800 dark:bg-slate-800/40 dark:text-slate-400">
+                    <th className="px-5 py-3">Prestataire</th>
+                    <th className="px-3 py-3">Statut URSSAF</th>
+                    <th className="px-3 py-3">Valide jusqu&apos;au</th>
+                    <th className="px-5 py-3 text-right">Document Drive</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                  {vendors.map((v) => (
+                    <tr
+                      key={v.id}
+                      className="hover:bg-slate-50/60 dark:hover:bg-slate-800/30"
+                    >
+                      <td className="px-5 py-3 font-semibold text-slate-900 dark:text-white">
+                        {v.name}
+                      </td>
+                      <td className="px-3 py-3">
+                        <span
+                          className={`inline-flex rounded-full px-2.5 py-0.5 text-[11px] font-semibold ${
+                            v.vigilanceStatus === "VALID"
+                              ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-300"
+                              : v.vigilanceStatus === "EXPIRING_SOON"
+                                ? "bg-amber-50 text-amber-800 dark:bg-amber-500/20 dark:text-amber-300"
+                                : "bg-rose-50 text-rose-700 dark:bg-rose-500/20 dark:text-rose-300"
+                          }`}
+                        >
+                          {v.vigilanceStatus === "VALID"
+                            ? "Valide (auto-attachée)"
+                            : v.vigilanceStatus === "EXPIRING_SOON"
+                              ? "Expire bientôt (< 30j)"
+                              : v.vigilanceStatus === "EXPIRED"
+                                ? "Expirée — à renouveler"
+                                : "Manquante"}
+                        </span>
+                      </td>
+                      <td className="px-3 py-3 font-mono text-slate-600 dark:text-slate-300">
+                        {v.vigilanceValidUntil
+                          ? formatDateFr(v.vigilanceValidUntil)
+                          : "—"}
+                      </td>
+                      <td className="px-5 py-3 text-right">
+                        {v.vigilanceDriveFileId &&
+                        !v.vigilanceDriveFileId.startsWith("MANUAL") ? (
+                          <a
+                            href={`https://drive.google.com/file/d/${v.vigilanceDriveFileId}/view`}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="inline-flex items-center gap-1 font-semibold text-indigo-600 hover:underline dark:text-indigo-400"
+                          >
+                            Ouvrir Drive
+                            <ExternalLink className="h-3 w-3" />
+                          </a>
+                        ) : (
+                          <span className="text-slate-500 dark:text-slate-400">
+                            {v.vigilanceFilename ?? "Confirmée"}
+                          </span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </section>
       )}
     </div>

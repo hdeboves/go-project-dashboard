@@ -108,6 +108,7 @@ describe("M8 Audit Hardening: Shared Utils, RBAC Admin Bypass, Templates & Secur
     expect(PROJECT_CATEGORIES).toEqual([
       "JEU",
       "YOUTUBE",
+      "PROD_CREA",
       "EVENEMENT",
       "SPONSOR",
     ]);

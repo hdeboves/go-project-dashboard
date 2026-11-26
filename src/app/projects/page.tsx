@@ -192,6 +192,9 @@ export default function ProjectsPage() {
   const [nomJeu, setNomJeu] = useState("");
   const [category, setCategory] = useState<ProjectCategory>("JEU");
   const [seedBlankTemplates, setSeedBlankTemplates] = useState(true);
+  const [cloneFromProjectId, setCloneFromProjectId] = useState("");
+  const [kickoffDate, setKickoffDate] = useState("");
+  const [launchDate, setLaunchDate] = useState("");
   const [provisionDrive, setProvisionDrive] = useState(false);
 
   const [shareTarget, setShareTarget] = useState<{
@@ -327,6 +330,9 @@ export default function ProjectsPage() {
           nomJeu,
           category,
           seedBlankTemplates,
+          cloneFromProjectId: cloneFromProjectId || undefined,
+          kickoffDate: kickoffDate || undefined,
+          launchDate: launchDate || undefined,
           isSandbox: sandboxMode,
           provisionDrive,
         }),
@@ -836,7 +842,7 @@ export default function ProjectsPage() {
             <label className="mb-1.5 block text-xs font-medium text-slate-600 dark:text-slate-300">
               Catégorie de projet (choisit le modèle de budget vierge)
             </label>
-            <div className="grid gap-2.5 sm:grid-cols-2 lg:grid-cols-4">
+            <div className="grid gap-2.5 sm:grid-cols-2 lg:grid-cols-5">
               {PROJECT_CATEGORIES.map((catId) => {
                 const meta = PROJECT_CATEGORY_META[catId];
                 const active = category === catId;
@@ -848,7 +854,7 @@ export default function ProjectsPage() {
                     onClick={() => setCategory(catId)}
                     className={`rounded-xl border p-3 text-left transition-all ${
                       active
-                        ? "border-rose-500 bg-rose-50/60 ring-2 ring-rose-500/20 dark:border-rose-400 dark:bg-rose-500/15"
+                        ? "border-indigo-500 bg-indigo-50/60 ring-2 ring-indigo-500/20 dark:border-indigo-400 dark:bg-indigo-500/15"
                         : "border-slate-200 bg-slate-50/60 hover:border-indigo-300 dark:border-slate-800 dark:bg-slate-800/40"
                     }`}
                   >
@@ -866,6 +872,49 @@ export default function ProjectsPage() {
             </div>
           </div>
 
+          {/* 30s Wizard: Clone Existing + Optional Auto-Schedule Dates */}
+          <div className="mt-4 grid gap-3 rounded-xl border border-slate-200/80 bg-slate-50/60 p-3.5 md:grid-cols-3 dark:border-slate-800 dark:bg-slate-900/40">
+            <div>
+              <label className="mb-1 block text-[11px] font-semibold text-slate-600 dark:text-slate-300">
+                Cloner la structure d&apos;un projet (optionnel)
+              </label>
+              <select
+                value={cloneFromProjectId}
+                onChange={(e) => setCloneFromProjectId(e.target.value)}
+                className="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-900 focus:border-indigo-500 focus:outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-white"
+              >
+                <option value="">— Utiliser les modèles vierges —</option>
+                {projects.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.client} — {p.nomJeu} ({p.codeProjet})
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="mb-1 block text-[11px] font-semibold text-slate-600 dark:text-slate-300">
+                Date Kick-off (auto-planifie le rétro)
+              </label>
+              <input
+                type="date"
+                value={kickoffDate}
+                onChange={(e) => setKickoffDate(e.target.value)}
+                className="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 font-mono text-xs text-slate-900 focus:border-indigo-500 focus:outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-white"
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-[11px] font-semibold text-slate-600 dark:text-slate-300">
+                Date de lancement cible (optionnel)
+              </label>
+              <input
+                type="date"
+                value={launchDate}
+                onChange={(e) => setLaunchDate(e.target.value)}
+                className="w-full rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 font-mono text-xs text-slate-900 focus:border-indigo-500 focus:outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-white"
+              />
+            </div>
+          </div>
+
           <div className="mt-4 flex flex-wrap items-center justify-between gap-4 border-t border-slate-100 pt-4 dark:border-slate-800/80">
             <div className="flex flex-wrap items-center gap-4">
               <label className="flex cursor-pointer items-center gap-2 text-xs text-slate-700 dark:text-slate-200">
@@ -873,11 +922,10 @@ export default function ProjectsPage() {
                   type="checkbox"
                   checked={seedBlankTemplates}
                   onChange={(e) => setSeedBlankTemplates(e.target.checked)}
-                  className="h-4 w-4 accent-rose-600"
+                  className="h-4 w-4 accent-indigo-600"
                 />
                 <Sparkles className="h-3.5 w-3.5 text-indigo-500" />
-                Modèles vierges auto (budget sans montants + rétroplanning sans
-                dates)
+                Modèles vierges auto (budget 0 € + rétroplanning)
               </label>
 
               <label className="flex cursor-pointer items-center gap-2 text-xs text-slate-600 dark:text-slate-300">
@@ -885,7 +933,7 @@ export default function ProjectsPage() {
                   type="checkbox"
                   checked={provisionDrive}
                   onChange={(e) => setProvisionDrive(e.target.checked)}
-                  className="h-4 w-4 accent-rose-600"
+                  className="h-4 w-4 accent-indigo-600"
                 />
                 Créer automatiquement l&apos;arborescence Google Drive
               </label>
@@ -895,7 +943,7 @@ export default function ProjectsPage() {
               type="submit"
               disabled={creating}
               data-testid="create-project-btn"
-              className="rounded-xl bg-rose-600 px-5 py-2 text-xs font-semibold text-white hover:bg-rose-700 disabled:opacity-50"
+              className="rounded-xl bg-indigo-600 px-5 py-2 text-xs font-semibold text-white hover:bg-indigo-700 disabled:opacity-50"
             >
               {creating ? "Création..." : "Créer le projet"}
             </button>
@@ -1589,7 +1637,7 @@ export default function ProjectsPage() {
                       type="button"
                       disabled={openingId === p.id}
                       onClick={() => void handleOpenProject(p.id, "/")}
-                      className="inline-flex items-center gap-1.5 rounded-xl bg-rose-600 px-3.5 py-1.5 text-xs font-semibold text-white hover:bg-rose-700"
+                      className="inline-flex items-center gap-1.5 rounded-xl bg-indigo-600 px-3.5 py-1.5 text-xs font-semibold text-white hover:bg-indigo-700"
                     >
                       Ouvrir le cockpit
                       <ArrowRight className="h-3.5 w-3.5" />
@@ -1661,6 +1709,7 @@ export default function ProjectsPage() {
           )}
         </div>
 
+        {sandboxMode && (
         <div className="overflow-hidden rounded-2xl border border-slate-200/80 bg-white dark:border-slate-800 dark:bg-[#111827]">
           <button
             type="button"
@@ -1670,7 +1719,7 @@ export default function ProjectsPage() {
             <div className="flex items-center gap-2">
               <ShieldCheck className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
               <span className="text-xs font-semibold text-slate-700 dark:text-slate-200">
-                Vérifier un document (anti-mélange CP)
+                Vérifier un document (anti-mélange CP · outil pilote)
               </span>
             </div>
             {securityToolOpen ? (
@@ -1732,6 +1781,7 @@ export default function ProjectsPage() {
             </form>
           )}
         </div>
+        )}
       </div>
       {shareTarget && (
         <ProjectShareModal

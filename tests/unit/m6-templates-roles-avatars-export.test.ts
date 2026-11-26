@@ -27,6 +27,7 @@ describe("M6 — Blank Templates by Category, Retro XLSX Export, RBAC Session & 
     expect(PROJECT_CATEGORIES).toEqual([
       "JEU",
       "YOUTUBE",
+      "PROD_CREA",
       "EVENEMENT",
       "SPONSOR",
     ]);

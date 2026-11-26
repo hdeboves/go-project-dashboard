@@ -47,6 +47,7 @@ const UpdateTemplateSchema = z.object({
   target: z.enum([
     "JEU",
     "YOUTUBE",
+    "PROD_CREA",
     "EVENEMENT",
     "SPONSOR",
     "RETRO_GLOBAL",

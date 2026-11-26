@@ -1,15 +1,19 @@
 "use client";
 
 import {
+  ArrowUpRight,
+  CalendarDays,
   CalendarPlus,
+  Flag,
   RefreshCw,
   Settings,
   ShieldCheck,
   Users,
 } from "lucide-react";
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
+import { useShell } from "@/components/ShellContext";
 import {
   CascadeRulesPanel,
   type CalendarRuleView,
@@ -18,6 +22,23 @@ import {
   CascadeTimeline,
   type CalendarEventView,
 } from "@/components/calendar/CascadeTimeline";
+
+interface GlobalAgendaItem {
+  id: string;
+  kind: "MILESTONE" | "TASK" | "CALENDAR_REMINDER";
+  title: string;
+  subtitle: string;
+  date: string;
+  status: string;
+  isLate: boolean;
+  project: {
+    id: string;
+    codeProjet: string;
+    client: string;
+    nomJeu: string;
+    category: string;
+  };
+}
 
 interface ShellStatusResponse {
   activeProjectId: string | null;
@@ -32,8 +53,14 @@ interface ShellStatusResponse {
 }
 
 export function CalendarWorkspace() {
+  const router = useRouter();
+  const { selectProject } = useShell();
   const searchParams = useSearchParams();
   const queryProjectId = searchParams.get("projectId");
+
+  const [viewTab, setViewTab] = useState<"global" | "project">("global");
+  const [globalItems, setGlobalItems] = useState<GlobalAgendaItem[]>([]);
+  const [globalFilter, setGlobalFilter] = useState<"ALL" | "MILESTONE">("ALL");
 
   const [projectId, setProjectId] = useState<string | null>(null);
   const [projectLabel, setProjectLabel] = useState("");
@@ -83,9 +110,14 @@ export function CalendarWorkspace() {
         setSetupRequiredMsg(null);
       }
 
-      const res = await fetch(`/api/projects/${targetId}/calendar`, {
-        cache: "no-store",
-      });
+      const [res, globalRes] = await Promise.all([
+        fetch(`/api/projects/${targetId}/calendar`, { cache: "no-store" }),
+        fetch("/api/calendar/global", { cache: "no-store" }),
+      ]);
+      if (globalRes.ok) {
+        const gJson = (await globalRes.json()) as { items?: GlobalAgendaItem[] };
+        setGlobalItems(gJson.items ?? []);
+      }
       const json = (await res.json()) as {
         calendarId?: string | null;
         calendarSummary?: string;
@@ -296,7 +328,7 @@ export function CalendarWorkspace() {
             type="button"
             disabled={!projectId || syncingCascades}
             onClick={() => void handleSyncCascades()}
-            className="inline-flex items-center gap-1.5 rounded-xl bg-rose-600 px-4 py-2 text-xs font-semibold text-white shadow-xs hover:bg-rose-700 disabled:opacity-50"
+            className="inline-flex items-center gap-1.5 rounded-xl bg-indigo-600 px-4 py-2 text-xs font-semibold text-white shadow-xs hover:bg-indigo-700 disabled:opacity-50"
           >
             <RefreshCw
               className={`h-3.5 w-3.5 ${syncingCascades ? "animate-spin" : ""}`}
@@ -305,6 +337,133 @@ export function CalendarWorkspace() {
           </button>
         </div>
       </div>
+
+      {/* View Mode Switcher: Multi-Project Agency Agenda vs Active Project Cascade Rules */}
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200/80 pb-2 dark:border-slate-800">
+        <div className="inline-flex rounded-xl border border-slate-200 bg-white p-0.5 dark:border-slate-800 dark:bg-[#111827]">
+          <button
+            type="button"
+            onClick={() => setViewTab("global")}
+            className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors ${
+              viewTab === "global"
+                ? "bg-indigo-600 text-white"
+                : "text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white"
+            }`}
+          >
+            <CalendarDays className="h-3.5 w-3.5" />
+            Agenda Agence ({globalItems.length})
+          </button>
+          <button
+            type="button"
+            onClick={() => setViewTab("project")}
+            className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors ${
+              viewTab === "project"
+                ? "bg-indigo-600 text-white"
+                : "text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white"
+            }`}
+          >
+            <RefreshCw className="h-3.5 w-3.5" />
+            Rappels auto du projet actif ({rules.length})
+          </button>
+        </div>
+
+        {viewTab === "global" && (
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              onClick={() => setGlobalFilter("ALL")}
+              className={`rounded-lg px-2.5 py-1 text-[11px] font-semibold ${
+                globalFilter === "ALL"
+                  ? "bg-indigo-50 text-indigo-700 dark:bg-indigo-500/20 dark:text-indigo-300"
+                  : "text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800"
+              }`}
+            >
+              Tout ({globalItems.length})
+            </button>
+            <button
+              type="button"
+              onClick={() => setGlobalFilter("MILESTONE")}
+              className={`rounded-lg px-2.5 py-1 text-[11px] font-semibold ${
+                globalFilter === "MILESTONE"
+                  ? "bg-indigo-50 text-indigo-700 dark:bg-indigo-500/20 dark:text-indigo-300"
+                  : "text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800"
+              }`}
+            >
+              Jalons clés uniquement
+            </button>
+          </div>
+        )}
+      </div>
+
+      {viewTab === "global" ? (
+        <section className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-[0_1px_2px_rgba(15,23,42,0.04)] dark:border-slate-800 dark:bg-[#111827]">
+          {loading ? (
+            <p className="py-10 text-center text-xs text-slate-500 dark:text-slate-400">
+              Chargement de l&apos;agenda multi-projets…
+            </p>
+          ) : (
+            (() => {
+              const visible = globalItems.filter(
+                (it) => globalFilter === "ALL" || it.kind === "MILESTONE"
+              );
+              if (visible.length === 0) {
+                return (
+                  <p className="py-10 text-center text-xs text-slate-500 dark:text-slate-400">
+                    Aucune échéance ou jalon planifié sur vos projets actifs.
+                  </p>
+                );
+              }
+              return (
+                <ul className="divide-y divide-slate-100 dark:divide-slate-800">
+                  {visible.map((it) => (
+                    <li
+                      key={it.id}
+                      className="flex flex-wrap items-center justify-between gap-3 py-3 first:pt-0 last:pb-0"
+                    >
+                      <div className="flex min-w-0 items-center gap-3">
+                        <span
+                          className={`w-24 shrink-0 rounded-lg px-2 py-1 text-center font-mono text-[11px] font-semibold tabular-nums ${
+                            it.isLate
+                              ? "bg-rose-50 text-rose-700 dark:bg-rose-500/20 dark:text-rose-300"
+                              : "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-200"
+                          }`}
+                        >
+                          {it.date}
+                        </span>
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-1.5">
+                            {it.kind === "MILESTONE" && (
+                              <Flag className="h-3.5 w-3.5 shrink-0 text-indigo-600 dark:text-indigo-400" />
+                            )}
+                            <p className="truncate text-xs font-semibold text-slate-900 dark:text-white">
+                              {it.title}
+                            </p>
+                          </div>
+                          <p className="truncate text-[11px] text-slate-500 dark:text-slate-400">
+                            {it.subtitle}
+                          </p>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          await selectProject(it.project.id);
+                          router.push("/retroplanning");
+                        }}
+                        className="inline-flex shrink-0 items-center gap-1 rounded-lg bg-slate-100 px-2.5 py-1 text-[11px] font-semibold text-slate-700 hover:bg-indigo-50 hover:text-indigo-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-indigo-500/20 dark:hover:text-indigo-300"
+                      >
+                        {it.project.client} · {it.project.codeProjet}
+                        <ArrowUpRight className="h-3 w-3" />
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              );
+            })()
+          )}
+        </section>
+      ) : (
+      <>
 
       {/* Dedicated Calendar Info Card */}
       <div className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-slate-200/80 bg-white p-5 shadow-[0_1px_2px_rgba(15,23,42,0.04)] dark:border-slate-800 dark:bg-[#111827]">
@@ -375,6 +534,8 @@ export function CalendarWorkspace() {
             onDeleteRule={handleDeleteRule}
           />
         </div>
+      )}
+      </>
       )}
     </div>
   );

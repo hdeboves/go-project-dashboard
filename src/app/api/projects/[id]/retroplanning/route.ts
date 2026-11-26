@@ -45,6 +45,9 @@ const ShiftDatesActionSchema = z.object({
   action: z.literal("SHIFT_DATES"),
   deltaDays: z.number().int().min(-365).max(365).optional(),
   anchorStartDate: z.string().optional(),
+  retroFromLaunchDate: z.string().optional(),
+  fromTaskId: z.string().optional(),
+  excludeDone: z.boolean().optional(),
   clearDates: z.boolean().optional(),
 });
 
@@ -186,12 +189,62 @@ export async function POST(
             });
           })
         );
+      } else if (shiftAttempt.data.retroFromLaunchDate) {
+        const launch = parseStrictCalendarDate(
+          shiftAttempt.data.retroFromLaunchDate
+        );
+        if (!launch) {
+          throw new AppHttpError(
+            400,
+            "INVALID_LAUNCH_DATE",
+            "Date de lancement invalide."
+          );
+        }
+        const phaseOrder: string[] = [];
+        for (const t of tasks) {
+          if (!phaseOrder.includes(t.phase)) phaseOrder.push(t.phase);
+        }
+        const launchPhaseIdx = Math.max(
+          0,
+          phaseOrder.findIndex((p) => /lancement|mise en ligne|activation/i.test(p))
+        );
+        const anchorIdx = launchPhaseIdx > 0 ? launchPhaseIdx : Math.max(0, phaseOrder.length - 2);
+        await prisma.$transaction(
+          tasks
+            .filter((t) => !(shiftAttempt.data.excludeDone && t.status === "TERMINE"))
+            .map((t) => {
+              const phaseIdx = Math.max(0, phaseOrder.indexOf(t.phase));
+              const rawStart = addUtcDays(launch, (phaseIdx - anchorIdx) * 7);
+              const dow = rawStart.getUTCDay();
+              const start =
+                dow === 6
+                  ? addUtcDays(rawStart, -1)
+                  : dow === 0
+                    ? addUtcDays(rawStart, -2)
+                    : rawStart;
+              const end = addUtcDays(start, 4);
+              return prisma.retroTask.update({
+                where: { id: t.id },
+                data: { startDate: start, endDate: end },
+              });
+            })
+        );
       } else if (
         typeof shiftAttempt.data.deltaDays === "number" &&
         shiftAttempt.data.deltaDays !== 0
       ) {
         const delta = shiftAttempt.data.deltaDays;
-        const datedTasks = tasks.filter((t) => t.startDate || t.endDate);
+        const fromIdx = shiftAttempt.data.fromTaskId
+          ? tasks.findIndex((t) => t.id === shiftAttempt.data.fromTaskId)
+          : 0;
+        const sliceStart = fromIdx >= 0 ? fromIdx : 0;
+        const datedTasks = tasks
+          .slice(sliceStart)
+          .filter(
+            (t) =>
+              (t.startDate || t.endDate) &&
+              !(shiftAttempt.data.excludeDone && t.status === "TERMINE")
+          );
         await prisma.$transaction(
           datedTasks.map((t) =>
             prisma.retroTask.update({
