@@ -423,7 +423,7 @@ export function assertCalendarIdAllowed(
       operation: "calendar.guard",
       targetId: normalized,
       reason:
-        "Identifiant d'agenda non enregistré dans les projets actifs de GO Project Hub.",
+        "Identifiant d'agenda non enregistré dans les projets actifs de GO L'Intrus.",
     });
   }
 }

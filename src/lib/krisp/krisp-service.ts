@@ -196,7 +196,7 @@ export function formatKrispMeetingHtml(params: {
 <head><meta charset="utf-8" /><title>${escapeHtml(params.title)}</title></head>
 <body style="font-family:Arial,sans-serif;color:#0f172a;line-height:1.5;">
   <p style="color:#4f46e5;font-weight:bold;font-size:10pt;text-transform:uppercase;letter-spacing:0.06em;">
-    Project Hub · Compte Rendu Krisp · Code projet ${escapeHtml(params.project.codeProjet)}
+    GO L'Intrus · Compte Rendu Krisp · Code projet ${escapeHtml(params.project.codeProjet)}
   </p>
   <h1 style="margin-top:4px;margin-bottom:8px;">${escapeHtml(params.title)}</h1>
   <p style="color:#475569;font-size:10pt;">

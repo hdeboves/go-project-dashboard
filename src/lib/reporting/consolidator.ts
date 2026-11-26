@@ -758,7 +758,7 @@ export async function exportReportingWorkbookBuffer(
   dataset: ConsolidatedDataset
 ): Promise<Buffer> {
   const workbook = new ExcelJS.Workbook();
-  workbook.creator = "GO Project Hub";
+  workbook.creator = "GO L'Intrus";
   workbook.created = new Date();
 
   // 1. Synthèse Fortnite

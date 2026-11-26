@@ -239,7 +239,7 @@ export class GeminiClient implements GeminiPort {
       .join("\n");
 
     const prompt = [
-      "Tu es l'assistant comptable automatisé de GamersOrigin / L'Intrus (GO Project Hub).",
+      "Tu es l'assistant comptable automatisé de GamersOrigin / L'Intrus (GO L'Intrus).",
       "RÈGLE CRITIQUE — IDENTITÉ DE L'ACHETEUR (CLIENT) :",
       "- Nous sommes 'GamersOrigin' (GO) ou 'L'Intrus'.",
       "- 'GamersOrigin' et 'L'Intrus' sont TOUJOURS le CLIENT / DESTINATAIRE facturé, JAMAIS le prestataire !",

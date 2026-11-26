@@ -46,7 +46,7 @@ const KrispWebhookPayloadSchema = z.object({
 export async function GET() {
   return NextResponse.json({
     ok: true,
-    service: "Project Hub · Krisp Webhook",
+    service: "GO L'Intrus · Krisp Webhook",
     hint: "Envoyez un POST JSON avec l'en-tête x-krisp-secret (ou ?secret=...).",
   });
 }

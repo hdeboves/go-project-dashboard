@@ -29,7 +29,7 @@ export async function exportRetroplanningToXlsxBuffer(
   tasks: readonly RetroTask[]
 ): Promise<Buffer> {
   const workbook = new ExcelJS.Workbook();
-  workbook.creator = "GO Project Hub";
+  workbook.creator = "GO L'Intrus";
   workbook.created = new Date();
 
   const catMeta =

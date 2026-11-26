@@ -257,13 +257,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         <div className="flex min-h-screen flex-col items-center justify-center bg-[#f8fafc] px-4 py-12 text-slate-900 dark:bg-[#0b0f17] dark:text-slate-100">
           <div className="w-full max-w-md rounded-2xl border border-slate-200/80 bg-white p-8 text-center shadow-lg dark:border-slate-800 dark:bg-[#111827]">
             <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-indigo-600 text-base font-extrabold text-white shadow-sm">
-              PH
+              GL
             </div>
             <h1 className="mt-4 text-xl font-bold tracking-tight text-slate-900 dark:text-white">
-              Project Hub
+              GO L&apos;Intrus
             </h1>
             <p className="mt-1 text-xs font-medium text-indigo-600 dark:text-indigo-400">
-              GamersOrigin &amp; L&apos;Intrus
+              Pilotage de projets · GamersOrigin &amp; L&apos;Intrus
             </p>
             <p className="mt-4 text-sm text-slate-600 dark:text-slate-300">
               Connectez-vous avec votre compte Google Workspace pour accéder à
@@ -314,18 +314,18 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <Link
             href="/"
             onClick={() => setMobileOpen(false)}
-            title="Project Hub — GamersOrigin & L'Intrus"
+            title="GO L'Intrus — Pilotage de projets"
             className="flex items-center gap-2.5"
           >
             <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-indigo-600 text-[11px] font-extrabold text-white shadow-2xs">
-              PH
+              GL
             </div>
             <span
               className={`text-sm font-bold tracking-tight text-slate-900 dark:text-white ${
                 sidebarCollapsed ? "lg:hidden" : ""
               }`}
             >
-              Project Hub
+              GO L&apos;Intrus
             </span>
           </Link>
 
@@ -903,7 +903,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         >
           <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-2 text-[11px] tabular-nums text-slate-500 dark:text-slate-400">
             <span>
-              Project Hub · {process.env.NEXT_PUBLIC_APP_ENV ?? "Local"} · v
+              GO L&apos;Intrus · {process.env.NEXT_PUBLIC_APP_ENV ?? "Local"} · v
               {process.env.NEXT_PUBLIC_APP_VERSION ?? "0.1.0"} (
               <span className="font-mono">
                 {process.env.NEXT_PUBLIC_APP_COMMIT ?? "dev"}

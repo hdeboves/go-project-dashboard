@@ -11,7 +11,7 @@ export default function GlobalError({
       <body className="flex min-h-screen items-center justify-center bg-[#f8fafc] p-6 text-slate-900">
         <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-6 text-center shadow-sm">
           <h1 className="text-base font-bold text-slate-900">
-            Interruption temporaire de Project Hub
+            Interruption temporaire de GO L&apos;Intrus
           </h1>
           <p className="mt-2 text-xs text-slate-600">
             Le serveur n&apos;a pas répondu correctement. Cliquez ci-dessous

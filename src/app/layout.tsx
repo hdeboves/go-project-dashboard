@@ -17,8 +17,8 @@ const jetbrainsMono = JetBrains_Mono({
 
 export const metadata: Metadata = {
   title: {
-    default: "Project Hub — GamersOrigin & L'Intrus",
-    template: "%s · Project Hub",
+    default: "GO L'Intrus",
+    template: "%s · GO L'Intrus",
   },
   description:
     "Pilotage de projets, budgets, factures et livrables clients pour les équipes GamersOrigin & L'Intrus.",

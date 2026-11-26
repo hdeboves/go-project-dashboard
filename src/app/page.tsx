@@ -357,7 +357,7 @@ export default async function CommandCenterPage({
             <p className="text-xs font-semibold text-indigo-600 dark:text-indigo-400">
               {activeProject
                 ? `Code projet ${activeProject.codeProjet} · Vue du jour`
-                : "Project Hub"}
+                : "GO L'Intrus"}
             </p>
             {activeProject && (
               <span
@@ -378,7 +378,7 @@ export default async function CommandCenterPage({
           <h1 className="mt-1 text-2xl font-bold tracking-tight text-slate-900 dark:text-white">
             {activeProject
               ? `${activeProject.client} — ${activeProject.nomJeu}`
-              : "Bienvenue sur Project Hub"}
+              : "Bienvenue sur GO L'Intrus"}
           </h1>
         </div>
 
