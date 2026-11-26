@@ -123,6 +123,7 @@ export async function POST(
         mimeType,
         requestedBudgetLineId,
         emailSubject,
+        allowManualFallback: true,
       });
 
       return NextResponse.json(

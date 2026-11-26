@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import type { BudgetLine, Invoice, PrismaClient, Project } from "@prisma/client";
 import { round2 } from "@/lib/budget/calculator";
@@ -48,13 +49,21 @@ export function normalizeInvoiceNumber(
   return (num ?? "").trim().toUpperCase().replace(/\s+/g, " ");
 }
 
+const MAX_DB_PDF_BYTES = 10 * 1024 * 1024;
+
+function getWritableDataRoot(): string {
+  if (process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME) {
+    return path.join(os.tmpdir(), "go-project-hub-data");
+  }
+  return path.join(process.cwd(), ".data");
+}
+
 export function getStagedInvoicePdfPath(
   projectId: string,
   invoiceId: string
 ): string {
   return path.join(
-    process.cwd(),
-    ".data",
+    getWritableDataRoot(),
     "invoices",
     projectId,
     `${invoiceId}.pdf`
@@ -65,11 +74,29 @@ export async function stageInvoicePdf(
   projectId: string,
   invoiceId: string,
   pdfBuffer: Buffer
-): Promise<string> {
+): Promise<string | null> {
   const filePath = getStagedInvoicePdfPath(projectId, invoiceId);
-  await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
-  await fs.promises.writeFile(filePath, pdfBuffer);
-  return filePath;
+  try {
+    await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.promises.writeFile(filePath, pdfBuffer);
+    return filePath;
+  } catch {
+    // Fallback cleanly to /tmp if primary path is read-only
+    try {
+      const tmpPath = path.join(
+        os.tmpdir(),
+        "go-project-hub-data",
+        "invoices",
+        projectId,
+        `${invoiceId}.pdf`
+      );
+      await fs.promises.mkdir(path.dirname(tmpPath), { recursive: true });
+      await fs.promises.writeFile(tmpPath, pdfBuffer);
+      return tmpPath;
+    } catch {
+      return null;
+    }
+  }
 }
 
 export async function readStagedInvoicePdf(
@@ -80,7 +107,13 @@ export async function readStagedInvoicePdf(
   const candidates: string[] = [];
   if (extractedJson) {
     try {
-      const parsed = JSON.parse(extractedJson) as { localPdfPath?: string };
+      const parsed = JSON.parse(extractedJson) as {
+        localPdfPath?: string;
+        pdfBase64?: string;
+      };
+      if (typeof parsed.pdfBase64 === "string" && parsed.pdfBase64.length > 0) {
+        return Buffer.from(parsed.pdfBase64, "base64");
+      }
       if (parsed.localPdfPath) {
         candidates.push(parsed.localPdfPath);
       }
@@ -89,6 +122,15 @@ export async function readStagedInvoicePdf(
     }
   }
   candidates.push(getStagedInvoicePdfPath(projectId, invoiceId));
+  candidates.push(
+    path.join(
+      os.tmpdir(),
+      "go-project-hub-data",
+      "invoices",
+      projectId,
+      `${invoiceId}.pdf`
+    )
+  );
 
   for (const candidate of candidates) {
     try {
@@ -100,6 +142,70 @@ export async function readStagedInvoicePdf(
     }
   }
   return null;
+}
+
+function buildFallbackExtractionFromLocalPdf(
+  localPdfText: string,
+  filename: string,
+  activeCodeProjet: string,
+  warningReason: string
+): InvoiceExtractionOutput {
+  const baseName = filename.replace(/\.pdf$/i, "").replace(/[_-]+/g, " ").trim();
+
+  // Try to detect an ISO or FR date in PDF text or filename
+  let dateFacture = new Date().toISOString().slice(0, 10);
+  const isoMatch = /\b(20\d{2})-(\d{2})-(\d{2})\b/.exec(localPdfText) ??
+    /\b(20\d{2})-(\d{2})-(\d{2})\b/.exec(filename);
+  const frMatch = /\b(\d{2})\/(\d{2})\/(20\d{2})\b/.exec(localPdfText);
+  if (isoMatch) {
+    dateFacture = `${isoMatch[1]}-${isoMatch[2]}-${isoMatch[3]}`;
+  } else if (frMatch) {
+    dateFacture = `${frMatch[3]}-${frMatch[2]}-${frMatch[1]}`;
+  }
+
+  // Try to detect an invoice number (e.g. FAC-2026-042, F2026-01, INV-123)
+  const numMatch =
+    /(?:facture|invoice|n[°o]\s*[:#]?)\s*([A-Z0-9][A-Z0-9/_-]{2,20})/i.exec(
+      localPdfText
+    ) ??
+    /\b(FAC[-_ ]?\d{2,10}|INV[-_ ]?\d{2,10}|FA[-_ ]?\d{2,10})\b/i.exec(
+      `${filename} ${localPdfText}`
+    );
+
+  // Try to detect HT / TTC amount from text
+  const parseAmt = (raw: string | undefined): number => {
+    if (!raw) return 0;
+    const n = Number(raw.replace(/\s+/g, "").replace(",", "."));
+    return Number.isFinite(n) && n >= 0 ? round2(n) : 0;
+  };
+  const htMatch =
+    /(?:total\s*ht|montant\s*ht|sous[- ]total\s*ht)\s*[:=]?\s*([\d\s]+[.,]\d{2}|\d[\d\s]*)/i.exec(
+      localPdfText
+    );
+  const ttcMatch =
+    /(?:total\s*ttc|net\s*[àa]\s*payer|montant\s*ttc)\s*[:=]?\s*([\d\s]+[.,]\d{2}|\d[\d\s]*)/i.exec(
+      localPdfText
+    );
+  const montantHT = parseAmt(htMatch?.[1]);
+  const montantTTC =
+    parseAmt(ttcMatch?.[1]) || (montantHT > 0 ? round2(montantHT * 1.2) : 0);
+
+  return {
+    prestataire: baseName.slice(0, 60) || "Prestataire à vérifier",
+    numeroFacture: numMatch?.[1]?.trim() || "",
+    dateFacture,
+    montantHT,
+    tvaRate: 20,
+    montantTTC,
+    typeFacture: "UNIQUE",
+    codeProjetDetecte: activeCodeProjet,
+    prestationSummary: "Prestation",
+    suggestedBudgetLineId: null,
+    suggestedBudgetLineLabel: null,
+    confidence: 0.4,
+    extractedRawTextSnippet: localPdfText.slice(0, 500),
+    rawWarnings: [warningReason],
+  };
 }
 
 export function suggestBudgetLineForInvoice(
@@ -188,6 +294,7 @@ export async function processInvoicePdfIngestion(params: {
   gmailMessageId?: string | null;
   attachmentId?: string | null;
   quarantineOnConflictWithoutThrowing?: boolean;
+  allowManualFallback?: boolean;
 }): Promise<IngestInvoiceResult> {
   const {
     prisma,
@@ -202,18 +309,16 @@ export async function processInvoicePdfIngestion(params: {
     gmailMessageId,
     attachmentId,
     quarantineOnConflictWithoutThrowing,
+    allowManualFallback,
   } = params;
 
   // 1. Validate PDF MIME & magic bytes / structure BEFORE any DB writes
   validatePdfBuffer(pdfBuffer, mimeType, filename);
 
-  // 2. Acquire Gemini client (throws 412 GEMINI_KEY_MISSING BEFORE any DB writes)
-  const gemini = await getGeminiClient();
-
-  // 3. Deterministic local PDF text extraction
+  // 2. Deterministic local PDF text extraction
   const localPdfText = extractTextFromPdfBuffer(pdfBuffer);
 
-  // 4. Fetch project budget lines for Gemini context & suggestion
+  // 3. Fetch project budget lines for Gemini context & suggestion
   const budgetLines = await prisma.budgetLine.findMany({
     where: { projectId: project.id },
     orderBy: [{ sheetRowIndex: "asc" }, { createdAt: "asc" }],
@@ -230,23 +335,57 @@ export async function processInvoicePdfIngestion(params: {
     }
   }
 
-  // 5. Gemini multimodal extraction
-  const extracted = await gemini.extractInvoiceFromPdf({
-    pdfBuffer,
-    filename,
-    emailSubject: emailSubject ?? undefined,
-    projectContext: {
-      codeProjet: project.codeProjet,
-      client: project.client,
-      nomJeu: project.nomJeu,
-    },
-    budgetLines: budgetLines.map((l) => ({
-      id: l.id,
-      category: l.category,
-      objet: l.objet,
-      preOpTotalHt: l.preOpTotalHt,
-    })),
-  });
+  // 4. Gemini multimodal extraction (with safe manual fallback on interactive uploads!)
+  let extracted: InvoiceExtractionOutput;
+  if (allowManualFallback) {
+    try {
+      const gemini = await getGeminiClient();
+      extracted = await gemini.extractInvoiceFromPdf({
+        pdfBuffer,
+        filename,
+        emailSubject: emailSubject ?? undefined,
+        projectContext: {
+          codeProjet: project.codeProjet,
+          client: project.client,
+          nomJeu: project.nomJeu,
+        },
+        budgetLines: budgetLines.map((l) => ({
+          id: l.id,
+          category: l.category,
+          objet: l.objet,
+          preOpTotalHt: l.preOpTotalHt,
+        })),
+      });
+    } catch {
+      extracted = buildFallbackExtractionFromLocalPdf(
+        localPdfText,
+        filename,
+        project.codeProjet,
+        "Extraction IA indisponible : vérifiez et complétez les champs à l'aide de la visionneuse PDF."
+      );
+    }
+  } else {
+    const gemini = await getGeminiClient();
+    extracted = await gemini.extractInvoiceFromPdf({
+      pdfBuffer,
+      filename,
+      emailSubject: emailSubject ?? undefined,
+      projectContext: {
+        codeProjet: project.codeProjet,
+        client: project.client,
+        nomJeu: project.nomJeu,
+      },
+      budgetLines: budgetLines.map((l) => ({
+        id: l.id,
+        category: l.category,
+        objet: l.objet,
+        preOpTotalHt: l.preOpTotalHt,
+      })),
+    });
+  }
+
+  const pdfBase64 =
+    pdfBuffer.length <= MAX_DB_PDF_BYTES ? pdfBuffer.toString("base64") : undefined;
 
   const amountHt = round2(Math.max(0, extracted.montantHT));
   let tvaAmount = round2(Math.max(0, extracted.montantTTC - amountHt));
@@ -302,9 +441,12 @@ export async function processInvoicePdfIngestion(params: {
           localPdfTextSnippet: localPdfText.slice(0, 500),
           cpCheck,
           attachmentId: attachmentId ?? null,
+          ...(pdfBase64 ? { pdfBase64 } : {}),
         }),
       },
     });
+
+    await stageInvoicePdf(project.id, blocked.id, pdfBuffer);
 
     await prisma.auditLog.create({
       data: {
@@ -419,6 +561,7 @@ export async function processInvoicePdfIngestion(params: {
         duplicateOfInvoiceId: duplicateOf?.id ?? null,
         attachmentId: attachmentId ?? null,
         localPdfPath,
+        ...(pdfBase64 ? { pdfBase64 } : {}),
       }),
     },
   });

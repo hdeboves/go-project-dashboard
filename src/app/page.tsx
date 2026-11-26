@@ -535,27 +535,8 @@ export default async function CommandCenterPage({
       {/* 3. ACTIONABLE 2-COLUMN COCKPIT (min-w-0 prevents mobile overflow!) */}
       {activeProject && (
         <div className="grid gap-6 lg:grid-cols-12">
-          {/* LEFT (8 cols): Direct Invoice Dropzone + Priorities + Upcoming Tasks */}
+          {/* LEFT (8 cols): Priorities + Upcoming Tasks */}
           <div className="min-w-0 space-y-6 lg:col-span-8">
-            <CockpitInvoiceDropzone
-              key={`dropzone-${activeProject.id}`}
-              project={{
-                id: activeProject.id,
-                codeProjet: activeProject.codeProjet,
-                client: activeProject.client,
-                nomJeu: activeProject.nomJeu,
-              }}
-              allProjects={projects.map((p) => ({
-                id: p.id,
-                codeProjet: p.codeProjet,
-                client: p.client,
-                nomJeu: p.nomJeu,
-              }))}
-              budgetLines={cockpitBudgetLines}
-              quotes={cockpitQuotes}
-              initialPendingInvoices={cockpitPendingInvoices}
-            />
-
             {/* Attention / Priorities */}
             <section className="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-[0_1px_2px_rgba(15,23,42,0.04)] dark:border-slate-800 dark:bg-[#111827]">
               <div className="mb-3 flex items-center justify-between">
@@ -634,6 +615,24 @@ export default async function CommandCenterPage({
                 Accès rapides
               </h2>
               <div className="grid grid-cols-2 gap-2.5">
+                <CockpitInvoiceDropzone
+                  key={`dropzone-${activeProject.id}`}
+                  project={{
+                    id: activeProject.id,
+                    codeProjet: activeProject.codeProjet,
+                    client: activeProject.client,
+                    nomJeu: activeProject.nomJeu,
+                  }}
+                  allProjects={projects.map((p) => ({
+                    id: p.id,
+                    codeProjet: p.codeProjet,
+                    client: p.client,
+                    nomJeu: p.nomJeu,
+                  }))}
+                  budgetLines={cockpitBudgetLines}
+                  quotes={cockpitQuotes}
+                  initialPendingInvoices={cockpitPendingInvoices}
+                />
                 <Link
                   href="/retroplanning"
                   className="group flex flex-col gap-2 rounded-xl border border-slate-200/80 bg-slate-50/40 p-3 text-xs font-semibold text-slate-800 transition-all hover:border-rose-300 hover:bg-rose-50/40 dark:border-slate-800 dark:bg-slate-800/30 dark:text-slate-100 dark:hover:border-rose-500/40 dark:hover:bg-rose-500/10"
@@ -651,15 +650,6 @@ export default async function CommandCenterPage({
                     <FileSpreadsheet className="h-4 w-4" />
                   </span>
                   <span>Devis &amp; Budget</span>
-                </Link>
-                <Link
-                  href="/budget?tab=invoices"
-                  className="group flex flex-col gap-2 rounded-xl border border-slate-200/80 bg-slate-50/40 p-3 text-xs font-semibold text-slate-800 transition-all hover:border-rose-300 hover:bg-rose-50/40 dark:border-slate-800 dark:bg-slate-800/30 dark:text-slate-100 dark:hover:border-rose-500/40 dark:hover:bg-rose-500/10"
-                >
-                  <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-slate-100 text-slate-600 transition-colors group-hover:bg-rose-100 group-hover:text-rose-600 dark:bg-slate-800 dark:text-slate-300 dark:group-hover:bg-rose-500/20 dark:group-hover:text-rose-300">
-                    <Receipt className="h-4 w-4" />
-                  </span>
-                  <span>Déposer facture</span>
                 </Link>
                 <Link
                   href="/meetings"

@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { NextRequest, NextResponse } from "next/server";
 import { toErrorResponse } from "@/lib/api-error";
@@ -91,16 +92,18 @@ export async function POST(
     const today = new Date().toISOString().slice(0, 10);
     const targetFilename = `AttestationVigilance_${safeCp}_${safePresta}_${today}${ext}`;
 
-    // Stage locally first so it is never lost
-    const stagedPath = path.join(
-      process.cwd(),
-      ".data",
-      "vigilance",
-      id,
-      `${invoice.id}${ext}`
-    );
-    await fs.promises.mkdir(path.dirname(stagedPath), { recursive: true });
-    await fs.promises.writeFile(stagedPath, buf);
+    // Stage in writable tmp dir (Vercel /var/task is read-only!)
+    const baseDir =
+      process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME
+        ? path.join(os.tmpdir(), "go-project-hub-data")
+        : path.join(process.cwd(), ".data");
+    const stagedPath = path.join(baseDir, "vigilance", id, `${invoice.id}${ext}`);
+    try {
+      await fs.promises.mkdir(path.dirname(stagedPath), { recursive: true });
+      await fs.promises.writeFile(stagedPath, buf);
+    } catch {
+      // Non-fatal; Google Drive upload or base64 fallback handles persistence
+    }
 
     // Upload directly into Drive folder 001.3 Factures if Google Workspace is connected
     let driveFileId: string | null = null;

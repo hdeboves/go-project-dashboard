@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
@@ -232,13 +233,11 @@ export async function POST(
           "Le fichier envoyé n'est pas un PDF valide."
         );
       }
-      const filePath = path.join(
-        process.cwd(),
-        ".data",
-        "quotes",
-        id,
-        `${quote.id}.pdf`
-      );
+      const baseDir =
+        process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME
+          ? path.join(os.tmpdir(), "go-project-hub-data")
+          : path.join(process.cwd(), ".data");
+      const filePath = path.join(baseDir, "quotes", id, `${quote.id}.pdf`);
       await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
       await fs.promises.writeFile(filePath, pdfBuf);
       quote = await prisma.quote.update({
