@@ -5,13 +5,20 @@ import {
   computeBudgetMetrics,
   normalizeExpenseType,
   round2,
+  toResourceTypeOption,
 } from "@/lib/budget/calculator";
 import {
   type ParsedBudgetLine,
   buildCanonicalPostesMatrix,
+  colIndexToLetter,
   parseBudgetSheetMatrices,
   parseBudgetXlsxBuffer,
+  resolvePostOpLayoutFromMatrix,
 } from "@/lib/budget/parser";
+import {
+  type BudgetSyncDirection,
+  decideBudgetSyncDirection,
+} from "@/lib/budget/sync-direction";
 import { provisionProjectTree } from "@/lib/drive/tree-service";
 import { AppHttpError } from "@/lib/errors";
 import type { GoogleWorkspacePort } from "@/lib/ports";
@@ -32,6 +39,7 @@ export const UpsertBudgetLineSchema = z.object({
   postOpDays: z.number().finite().min(0).optional(),
   postOpUnitCost: z.number().finite().min(0).optional(),
   postOpTotalHt: z.number().finite().min(0).optional(),
+  marginPct: z.number().finite().min(0).max(95).nullable().optional(),
   sheetRowIndex: z.number().int().positive().nullable().optional(),
   invoiceNumbersNote: z.string().nullable().optional(),
 });
@@ -50,10 +58,26 @@ export interface FnpAlertItem {
   budgetLineObjet: string | null;
 }
 
+export interface BudgetSyncMeta {
+  lastSyncedAt: string | null;
+  lastSheetModifiedAt: string | null;
+  localModifiedAt: string | null;
+  hasPendingLocalChanges: boolean;
+}
+
+export interface BudgetSyncResultInfo {
+  direction: BudgetSyncDirection;
+  reason: string;
+  sheetModifiedAt: string | null;
+  siteModifiedAt: string | null;
+}
+
 export interface BudgetOverviewResponse extends BudgetComputationResult {
   budgetSheetId: string | null;
   lines: Array<BudgetLine & { committedHt?: number }>;
   fnpAlerts?: FnpAlertItem[];
+  syncMeta?: BudgetSyncMeta;
+  syncResult?: BudgetSyncResultInfo;
   warnings: string[];
 }
 
@@ -158,6 +182,109 @@ async function upsertBudgetDriveNode(
   });
 }
 
+async function computeLocalBudgetModifiedAt(
+  prisma: PrismaClient,
+  projectId: string,
+  lines?: ReadonlyArray<{ updatedAt: Date }>
+): Promise<Date | null> {
+  const [maxLineUpdated, latestAudit] = await Promise.all([
+    lines
+      ? Promise.resolve(
+          lines.reduce<Date | null>(
+            (max, l) => (!max || l.updatedAt > max ? l.updatedAt : max),
+            null
+          )
+        )
+      : prisma.budgetLine
+          .aggregate({
+            where: { projectId },
+            _max: { updatedAt: true },
+          })
+          .then((r) => r._max.updatedAt),
+    prisma.auditLog.findFirst({
+      where: {
+        projectId,
+        action: {
+          in: [
+            "BUDGET_LINE_UPSERTED",
+            "BUDGET_LINE_DELETED",
+            "INVOICE_VALIDATED",
+          ],
+        },
+      },
+      orderBy: { createdAt: "desc" },
+      select: { createdAt: true },
+    }),
+  ]);
+
+  const a = maxLineUpdated?.getTime() ?? 0;
+  const b = latestAudit?.createdAt.getTime() ?? 0;
+  const maxMs = Math.max(a, b);
+  return maxMs > 0 ? new Date(maxMs) : null;
+}
+
+async function recordBudgetSyncBaseline(params: {
+  prisma: PrismaClient;
+  projectId: string;
+  sheetId: string;
+  sheetModifiedAt: Date | null;
+}): Promise<void> {
+  const { prisma, projectId, sheetId, sheetModifiedAt } = params;
+  // Slightly advance lastSyncedAt (+500ms) so DB rows just reconciled during PULL
+  // are never mistaken for subsequent local edits on the site.
+  const syncedNow = new Date(Date.now() + 500);
+  const existingNode = await prisma.driveNode.findFirst({
+    where: { projectId, code: "001.1.budget" },
+    select: { id: true },
+  });
+
+  if (existingNode) {
+    await prisma.driveNode.update({
+      where: { id: existingNode.id },
+      data: {
+        driveFileId: sheetId,
+        lastSyncedAt: syncedNow,
+        internalModifiedAt: sheetModifiedAt ?? syncedNow,
+      },
+    });
+  } else {
+    await prisma.driveNode.create({
+      data: {
+        projectId,
+        code: "001.1.budget",
+        name: "Budget",
+        driveFileId: sheetId,
+        isFolder: false,
+        mimeType: "application/vnd.google-apps.spreadsheet",
+        isExtEligible: false,
+        lastSyncedAt: syncedNow,
+        internalModifiedAt: sheetModifiedAt ?? syncedNow,
+      },
+    });
+  }
+}
+
+async function fetchSheetModifiedTime(
+  gateway: GoogleWorkspacePort,
+  spreadsheetId: string
+): Promise<Date | null> {
+  try {
+    const meta = await gateway.drive.getFileMetadata(
+      spreadsheetId,
+      "id,name,modifiedTime"
+    );
+    if (meta.modifiedTime) {
+      const parsed = new Date(meta.modifiedTime);
+      if (!Number.isNaN(parsed.getTime())) {
+        return parsed;
+      }
+    }
+  } catch {
+    // Non-fatal fallback
+  }
+  return null;
+}
+
 async function reconcileBudgetLines(
   prisma: PrismaClient,
   projectId: string,
@@ -255,7 +382,7 @@ export async function getProjectBudget(
   projectId: string
 ): Promise<BudgetOverviewResponse> {
   const project = await requireProject(prisma, projectId);
-  const [lines, quotes] = await Promise.all([
+  const [lines, quotes, budgetNode] = await Promise.all([
     prisma.budgetLine.findMany({
       where: { projectId },
       orderBy: [{ sheetRowIndex: "asc" }, { createdAt: "asc" }],
@@ -280,6 +407,10 @@ export async function getProjectBudget(
           select: { amountHt: true },
         },
       },
+    }),
+    prisma.driveNode.findFirst({
+      where: { projectId, code: "001.1.budget" },
+      select: { lastSyncedAt: true, internalModifiedAt: true },
     }),
   ]);
 
@@ -326,11 +457,31 @@ export async function getProjectBudget(
     committedHt: committedByLine.get(line.id) ?? 0,
   }));
 
+  const localModifiedAt = await computeLocalBudgetModifiedAt(
+    prisma,
+    projectId,
+    lines
+  );
+  const lastSyncedAt = budgetNode?.lastSyncedAt ?? null;
+  const lastSheetModifiedAt = budgetNode?.internalModifiedAt ?? null;
+  const hasPendingLocalChanges = Boolean(
+    localModifiedAt &&
+      (!lastSyncedAt || localModifiedAt.getTime() > lastSyncedAt.getTime() + 2000)
+  );
+
   const computed = computeBudgetMetrics(enrichedLines);
   return {
     budgetSheetId: project.budgetSheetId ?? null,
     lines: enrichedLines,
     fnpAlerts,
+    syncMeta: {
+      lastSyncedAt: lastSyncedAt ? lastSyncedAt.toISOString() : null,
+      lastSheetModifiedAt: lastSheetModifiedAt
+        ? lastSheetModifiedAt.toISOString()
+        : null,
+      localModifiedAt: localModifiedAt ? localModifiedAt.toISOString() : null,
+      hasPendingLocalChanges,
+    },
     ...computed,
     warnings: [],
   };
@@ -424,6 +575,9 @@ export async function upsertManualBudgetLine(
         postOpDays,
         postOpUnitCost,
         postOpTotalHt,
+        ...(input.marginPct !== undefined
+          ? { marginPct: input.marginPct }
+          : {}),
         sheetRowIndex:
           input.sheetRowIndex !== undefined
             ? input.sheetRowIndex
@@ -472,6 +626,7 @@ export async function upsertManualBudgetLine(
         postOpDays,
         postOpUnitCost,
         postOpTotalHt,
+        marginPct: input.marginPct !== undefined ? input.marginPct : 43,
         sheetRowIndex: input.sheetRowIndex ?? null,
         invoiceNumbersNote: input.invoiceNumbersNote ?? null,
       },
@@ -593,6 +748,14 @@ export async function importBudgetFromXlsx(params: {
   await prisma.project.update({
     where: { id: projectId },
     data: { budgetSheetId: created.id },
+  });
+
+  const importedSheetMod = await fetchSheetModifiedTime(gateway, created.id);
+  await recordBudgetSyncBaseline({
+    prisma,
+    projectId,
+    sheetId: created.id,
+    sheetModifiedAt: importedSheetMod,
   });
 
   await prisma.auditLog.create({
@@ -798,6 +961,14 @@ export async function importBudgetFromSheetCopy(params: {
     data: { budgetSheetId: copied.id },
   });
 
+  const copiedSheetMod = await fetchSheetModifiedTime(gateway, copied.id);
+  await recordBudgetSyncBaseline({
+    prisma,
+    projectId,
+    sheetId: copied.id,
+    sheetModifiedAt: copiedSheetMod,
+  });
+
   await prisma.auditLog.create({
     data: {
       projectId,
@@ -879,6 +1050,16 @@ export async function syncBudgetFromAttachedSheet(params: {
   });
 
   const lines = await reconcileBudgetLines(prisma, projectId, parsed.lines);
+  const sheetModifiedAt = await fetchSheetModifiedTime(
+    gateway,
+    project.budgetSheetId
+  );
+  await recordBudgetSyncBaseline({
+    prisma,
+    projectId,
+    sheetId: project.budgetSheetId,
+    sheetModifiedAt,
+  });
 
   await prisma.auditLog.create({
     data: {
@@ -888,18 +1069,417 @@ export async function syncBudgetFromAttachedSheet(params: {
       targetType: "BUDGET_SHEET",
       targetId: project.budgetSheetId,
       detailsJson: JSON.stringify({
+        direction: "PULL_FROM_SHEET",
         linesCount: lines.length,
         warnings: parsed.warnings,
       }),
     },
   });
 
-  const computed = computeBudgetMetrics(lines);
+  const overview = await getProjectBudget(prisma, projectId);
   return {
     ok: true,
-    budgetSheetId: project.budgetSheetId,
-    lines,
-    ...computed,
+    ...overview,
     warnings: parsed.warnings,
+  };
+}
+
+/**
+ * Pushes all current site BudgetLines to the attached Google Sheet (or creates a canonical
+ * Google Sheet in 001.1 Budget if none is attached yet), preserving existing Sheet formatting
+ * when updating matched rows in place.
+ */
+export async function pushBudgetToAttachedSheet(params: {
+  prisma: PrismaClient;
+  getGoogleGateway: (projectId?: string) => Promise<GoogleWorkspacePort>;
+  projectId: string;
+}): Promise<{ ok: true } & BudgetOverviewResponse> {
+  const { prisma, getGoogleGateway, projectId } = params;
+  const project = await requireProject(prisma, projectId);
+  const gateway = await getGoogleGateway(projectId);
+
+  const lines = await prisma.budgetLine.findMany({
+    where: { projectId },
+    orderBy: [{ sheetRowIndex: "asc" }, { createdAt: "asc" }],
+  });
+
+  let spreadsheetId = project.budgetSheetId;
+  let postesTitle = "Postes de dépenses";
+  const warnings: string[] = [];
+
+  if (!spreadsheetId) {
+    const folder0011 = await ensureProjectFolderNode(
+      prisma,
+      gateway,
+      projectId,
+      "001.1"
+    );
+    const prefix = project.isSandbox
+      ? `[PILOTE ${project.codeProjet}]`
+      : `[${project.codeProjet}]`;
+    const sheetName = `${prefix} Budget : ${project.client} - ${project.nomJeu}`;
+
+    const created = await gateway.drive.createFile({
+      name: sheetName,
+      parentId: folder0011.driveFileId,
+      mimeType: "application/vnd.google-apps.spreadsheet",
+      body: "",
+    });
+    spreadsheetId = created.id;
+
+    await upsertBudgetDriveNode(prisma, {
+      projectId,
+      name: sheetName,
+      driveFileId: spreadsheetId,
+      parentNodeId: folder0011.id,
+    });
+    await prisma.project.update({
+      where: { id: projectId },
+      data: { budgetSheetId: spreadsheetId },
+    });
+  }
+
+  const sheetData = await readSheetMatrices(gateway, spreadsheetId);
+  postesTitle = sheetData.postesTitle || "Postes de dépenses";
+  const escapedTitle = postesTitle.replace(/'/g, "''");
+
+  const layout =
+    sheetData.postesMatrix.length > 0
+      ? resolvePostOpLayoutFromMatrix(
+          sheetData.postesMatrix,
+          postesTitle,
+          sheetData.postesSheetId
+        )
+      : null;
+
+  if (layout) {
+    // Smart in-place update of existing matched rows, clear removed rows, and append new ones
+    const parsedExisting = parseBudgetSheetMatrices({
+      postesMatrix: sheetData.postesMatrix,
+      postesSheetTitle: postesTitle,
+      postesSheetId: sheetData.postesSheetId,
+      postesNotes: sheetData.postesNotes,
+      vueEnsembleMatrix: sheetData.vueMatrix,
+      projectContext: {
+        codeProjet: project.codeProjet,
+        client: project.client,
+        nomJeu: project.nomJeu,
+      },
+    });
+
+    const maxCol = Math.max(
+      layout.objetCol,
+      layout.realiseParCol ?? 0,
+      layout.saleQtyCol ?? 0,
+      layout.saleDaysCol ?? 0,
+      layout.saleUnitCol ?? 0,
+      layout.saleTotalCol,
+      layout.expenseTypeCol ?? 0,
+      layout.preOpUnitCol ?? 0,
+      layout.preOpTotalCol,
+      layout.postOpQtyCol ?? 0,
+      layout.postOpDaysCol ?? 0,
+      layout.postOpUnitCol ?? 0,
+      layout.postOpTotalCol
+    );
+    const lastColLetter = colIndexToLetter(maxCol);
+
+    const existingRowNumbers = new Set(
+      parsedExisting.lines.map((l) => l.sheetRowIndex)
+    );
+    const activeRowNumbers = new Set<number>();
+
+    const buildRowCells = (
+      line: BudgetLine,
+      existingRow?: unknown[]
+    ): unknown[] => {
+      const row = new Array<unknown>(maxCol + 1).fill("");
+      if (existingRow) {
+        for (let c = 0; c <= maxCol && c < existingRow.length; c++) {
+          row[c] = existingRow[c] ?? "";
+        }
+      }
+      row[layout.objetCol] = line.objet;
+      if (layout.realiseParCol !== null) {
+        row[layout.realiseParCol] = line.realisePar ?? "";
+      }
+      if (layout.saleQtyCol !== null) row[layout.saleQtyCol] = line.saleQty;
+      if (layout.saleDaysCol !== null) row[layout.saleDaysCol] = line.saleDays;
+      if (layout.saleUnitCol !== null) {
+        row[layout.saleUnitCol] = line.saleUnitPrice;
+      }
+      row[layout.saleTotalCol] = line.saleTotalHt;
+      if (layout.expenseTypeCol !== null) {
+        row[layout.expenseTypeCol] = toResourceTypeOption(line.expenseType);
+      }
+      if (layout.preOpUnitCol !== null) {
+        row[layout.preOpUnitCol] = line.preOpUnitCost;
+      }
+      row[layout.preOpTotalCol] = line.preOpTotalHt;
+      if (layout.postOpQtyCol !== null) {
+        row[layout.postOpQtyCol] = line.postOpQty;
+      }
+      if (layout.postOpDaysCol !== null) {
+        row[layout.postOpDaysCol] = line.postOpDays;
+      }
+      if (layout.postOpUnitCol !== null) {
+        row[layout.postOpUnitCol] = line.postOpUnitCost;
+      }
+      row[layout.postOpTotalCol] = line.postOpTotalHt;
+      return row;
+    };
+
+    const unmappedLines: BudgetLine[] = [];
+
+    for (const line of lines) {
+      if (
+        line.sheetRowIndex &&
+        line.sheetRowIndex > layout.headerRowIndex + 1 &&
+        existingRowNumbers.has(line.sheetRowIndex) &&
+        !activeRowNumbers.has(line.sheetRowIndex)
+      ) {
+        activeRowNumbers.add(line.sheetRowIndex);
+        const existingRow = sheetData.postesMatrix[line.sheetRowIndex - 1];
+        const rowValues = buildRowCells(line, existingRow);
+        await gateway.sheets.updateValues({
+          spreadsheetId,
+          range: `'${escapedTitle}'!A${line.sheetRowIndex}:${lastColLetter}${line.sheetRowIndex}`,
+          values: [rowValues],
+          valueInputOption: "USER_ENTERED",
+        });
+      } else {
+        unmappedLines.push(line);
+      }
+    }
+
+    // Clear Sheet rows that were deleted on the site
+    for (const oldRowNum of existingRowNumbers) {
+      if (!activeRowNumbers.has(oldRowNum)) {
+        const emptyRow = new Array<unknown>(maxCol + 1).fill("");
+        await gateway.sheets.updateValues({
+          spreadsheetId,
+          range: `'${escapedTitle}'!A${oldRowNum}:${lastColLetter}${oldRowNum}`,
+          values: [emptyRow],
+          valueInputOption: "USER_ENTERED",
+        });
+      }
+    }
+
+    // Append newly added lines cleanly below the last used row
+    if (unmappedLines.length > 0) {
+      let nextRow = Math.max(
+        sheetData.postesMatrix.length + 1,
+        layout.headerRowIndex + 2
+      );
+      let lastAppendedCat = "";
+      const rowsToAppend: unknown[][] = [];
+      const rowUpdates: Array<{ id: string; rowIndex: number }> = [];
+
+      for (const line of unmappedLines) {
+        const cat = line.category.trim() || "Général";
+        if (cat !== lastAppendedCat) {
+          const catRow = new Array<unknown>(maxCol + 1).fill("");
+          catRow[layout.objetCol] = cat;
+          if (layout.expenseTypeCol !== null) {
+            catRow[layout.expenseTypeCol] = "TOTAL";
+          }
+          rowsToAppend.push(catRow);
+          nextRow += 1;
+          lastAppendedCat = cat;
+        }
+        rowsToAppend.push(buildRowCells(line));
+        rowUpdates.push({ id: line.id, rowIndex: nextRow });
+        nextRow += 1;
+      }
+
+      const startRow = nextRow - rowsToAppend.length;
+      const endRow = nextRow - 1;
+      await gateway.sheets.updateValues({
+        spreadsheetId,
+        range: `'${escapedTitle}'!A${startRow}:${lastColLetter}${endRow}`,
+        values: rowsToAppend,
+        valueInputOption: "USER_ENTERED",
+      });
+
+      for (const upd of rowUpdates) {
+        await prisma.budgetLine.update({
+          where: { id: upd.id },
+          data: { sheetRowIndex: upd.rowIndex },
+        });
+      }
+    }
+  } else {
+    // Sheet is empty or non-standard: write canonical matrix cleanly
+    const canonical = buildCanonicalPostesMatrix(
+      lines.map((l) => ({
+        ...l,
+        expenseType: toResourceTypeOption(l.expenseType),
+      })),
+      `${project.client} x ${project.nomJeu}`
+    );
+
+    const clearExtraRows = Math.max(
+      0,
+      sheetData.postesMatrix.length - canonical.matrix.length
+    );
+    const fullMatrix = [...canonical.matrix];
+    for (let i = 0; i < clearExtraRows; i++) {
+      fullMatrix.push(new Array(19).fill(""));
+    }
+
+    await gateway.sheets.updateValues({
+      spreadsheetId,
+      range: `'${escapedTitle}'!A1:S${fullMatrix.length}`,
+      values: fullMatrix,
+      valueInputOption: "USER_ENTERED",
+    });
+
+    for (let i = 0; i < lines.length; i++) {
+      const targetRow = canonical.rowIndices[i];
+      if (targetRow && lines[i].sheetRowIndex !== targetRow) {
+        await prisma.budgetLine.update({
+          where: { id: lines[i].id },
+          data: { sheetRowIndex: targetRow },
+        });
+      }
+    }
+  }
+
+  // Record fresh Drive modifiedTime so our own push is not treated as an external Sheet edit
+  const freshSheetMod = await fetchSheetModifiedTime(gateway, spreadsheetId);
+  await recordBudgetSyncBaseline({
+    prisma,
+    projectId,
+    sheetId: spreadsheetId,
+    sheetModifiedAt: freshSheetMod,
+  });
+
+  await prisma.auditLog.create({
+    data: {
+      projectId,
+      actor: "user",
+      action: "BUDGET_SYNCED",
+      targetType: "BUDGET_SHEET",
+      targetId: spreadsheetId,
+      detailsJson: JSON.stringify({
+        direction: "PUSH_TO_SHEET",
+        linesCount: lines.length,
+        warnings,
+      }),
+    },
+  });
+
+  const overview = await getProjectBudget(prisma, projectId);
+  return {
+    ok: true,
+    ...overview,
+    warnings,
+  };
+}
+
+/**
+ * Smart bidirectional sync: inspects both Google Drive's Sheet modifiedTime and the
+ * site's latest Budget modification timestamp, then automatically executes the side
+ * with the most recent edits (Last-Write-Wins).
+ */
+export async function smartSyncBudgetWithSheet(params: {
+  prisma: PrismaClient;
+  getGoogleGateway: (projectId?: string) => Promise<GoogleWorkspacePort>;
+  projectId: string;
+  forceDirection?: "auto" | "pull" | "push";
+}): Promise<{ ok: true } & BudgetOverviewResponse> {
+  const { prisma, getGoogleGateway, projectId, forceDirection = "auto" } =
+    params;
+  const project = await requireProject(prisma, projectId);
+  const linesCount = await prisma.budgetLine.count({ where: { projectId } });
+
+  if (!project.budgetSheetId) {
+    if (linesCount > 0 && forceDirection !== "pull") {
+      const pushed = await pushBudgetToAttachedSheet({
+        prisma,
+        getGoogleGateway,
+        projectId,
+      });
+      return {
+        ...pushed,
+        syncResult: {
+          direction: "PUSH_TO_SHEET",
+          reason:
+            "Nouveau Google Sheet Budget créé dans 001.1 Budget à partir du site.",
+          sheetModifiedAt: pushed.syncMeta?.lastSheetModifiedAt ?? null,
+          siteModifiedAt: pushed.syncMeta?.localModifiedAt ?? null,
+        },
+      };
+    }
+    throw new AppHttpError(
+      400,
+      "BUDGET_SHEET_NOT_LINKED",
+      "Aucun Google Sheet Budget n'est rattaché à ce projet."
+    );
+  }
+
+  const gateway = await getGoogleGateway(projectId);
+  const [sheetModifiedAt, budgetNode, siteModifiedAt] = await Promise.all([
+    fetchSheetModifiedTime(gateway, project.budgetSheetId),
+    prisma.driveNode.findFirst({
+      where: { projectId, code: "001.1.budget" },
+      select: { lastSyncedAt: true, internalModifiedAt: true },
+    }),
+    computeLocalBudgetModifiedAt(prisma, projectId),
+  ]);
+
+  const decision = decideBudgetSyncDirection({
+    sheetModifiedAt,
+    lastKnownSheetModifiedAt: budgetNode?.internalModifiedAt ?? null,
+    siteModifiedAt,
+    lastSyncedAt: budgetNode?.lastSyncedAt ?? null,
+    siteLineCount: linesCount,
+    forceDirection,
+  });
+
+  if (decision.direction === "PULL_FROM_SHEET") {
+    const pulled = await syncBudgetFromAttachedSheet({
+      prisma,
+      getGoogleGateway,
+      projectId,
+    });
+    return {
+      ...pulled,
+      syncResult: {
+        direction: "PULL_FROM_SHEET",
+        reason: decision.reason,
+        sheetModifiedAt: sheetModifiedAt ? sheetModifiedAt.toISOString() : null,
+        siteModifiedAt: siteModifiedAt ? siteModifiedAt.toISOString() : null,
+      },
+    };
+  }
+
+  if (decision.direction === "PUSH_TO_SHEET") {
+    const pushed = await pushBudgetToAttachedSheet({
+      prisma,
+      getGoogleGateway,
+      projectId,
+    });
+    return {
+      ...pushed,
+      syncResult: {
+        direction: "PUSH_TO_SHEET",
+        reason: decision.reason,
+        sheetModifiedAt: pushed.syncMeta?.lastSheetModifiedAt ?? null,
+        siteModifiedAt: siteModifiedAt ? siteModifiedAt.toISOString() : null,
+      },
+    };
+  }
+
+  const overview = await getProjectBudget(prisma, projectId);
+  return {
+    ok: true,
+    ...overview,
+    syncResult: {
+      direction: "UP_TO_DATE",
+      reason: decision.reason,
+      sheetModifiedAt: sheetModifiedAt ? sheetModifiedAt.toISOString() : null,
+      siteModifiedAt: siteModifiedAt ? siteModifiedAt.toISOString() : null,
+    },
   };
 }

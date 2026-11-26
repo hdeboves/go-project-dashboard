@@ -15,6 +15,7 @@ export interface BudgetLineDto {
   postOpDays: number;
   postOpUnitCost: number;
   postOpTotalHt: number;
+  marginPct?: number | null;
   committedHt?: number;
   sheetRowIndex: number | null;
   invoiceNumbersNote: string | null;
@@ -78,6 +79,13 @@ export interface FnpAlertDto {
   budgetLineObjet: string | null;
 }
 
+export interface BudgetSyncMetaDto {
+  lastSyncedAt: string | null;
+  lastSheetModifiedAt: string | null;
+  localModifiedAt: string | null;
+  hasPendingLocalChanges: boolean;
+}
+
 export interface BudgetDataDto {
   budgetSheetId: string | null;
   lines: BudgetLineDto[];
@@ -86,6 +94,13 @@ export interface BudgetDataDto {
   alerts: BudgetAlertDto[];
   fnpAlerts?: FnpAlertDto[];
   warnings?: string[];
+  syncMeta?: BudgetSyncMetaDto;
+  syncResult?: {
+    direction: "PULL_FROM_SHEET" | "PUSH_TO_SHEET" | "UP_TO_DATE";
+    reason: string;
+    sheetModifiedAt: string | null;
+    siteModifiedAt: string | null;
+  };
 }
 
 export interface InvoiceDto {

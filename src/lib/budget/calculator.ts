@@ -1,4 +1,59 @@
 export type NormalizedExpenseType = "Externe" | "RH Internes" | "Amortissement";
+export type ResourceTypeOption = "Interne" | "Externe" | "Amortissement";
+
+export const RESOURCE_TYPE_OPTIONS: readonly ResourceTypeOption[] = [
+  "Interne",
+  "Externe",
+  "Amortissement",
+] as const;
+
+export const DEFAULT_MARGIN_PCT = 43;
+
+export function toResourceTypeOption(
+  raw: string | null | undefined
+): ResourceTypeOption {
+  const norm = normalizeExpenseType(raw);
+  if (norm === "RH Internes") return "Interne";
+  if (norm === "Amortissement") return "Amortissement";
+  return "Externe";
+}
+
+/**
+ * Computes selling price HT from pre-op cost HT and target margin rate (taux de marque).
+ * Example: cost = 570 €, marginPct = 43% -> sale = 570 / (1 - 0.43) = 1 000 €.
+ * When marginPct = 0 (unmarged line), sale = cost.
+ */
+export function computeSaleFromCostAndMargin(
+  preOpTotalHt: number,
+  marginPct: number
+): number {
+  const safeCost = Number.isFinite(preOpTotalHt) ? Math.max(0, preOpTotalHt) : 0;
+  const clampedMargin = Number.isFinite(marginPct)
+    ? Math.max(0, Math.min(95, marginPct))
+    : 0;
+  if (safeCost <= 0) return 0;
+  if (clampedMargin <= 0) return round2(safeCost);
+  return round2(safeCost / (1 - clampedMargin / 100));
+}
+
+/**
+ * Resolves the effective margin % of a budget line:
+ * - If saleTotalHt > 0, reflects actual (sale - preOp) / sale * 100.
+ * - If saleTotalHt === 0 & preOpTotalHt === 0, uses explicit stored marginPct (default 43%).
+ */
+export function resolveLineMarginPct(line: {
+  saleTotalHt: number;
+  preOpTotalHt: number;
+  marginPct?: number | null;
+}): number {
+  if (line.saleTotalHt > 0) {
+    return round2(((line.saleTotalHt - line.preOpTotalHt) / line.saleTotalHt) * 100);
+  }
+  if (typeof line.marginPct === "number" && Number.isFinite(line.marginPct)) {
+    return round2(Math.max(0, Math.min(95, line.marginPct)));
+  }
+  return DEFAULT_MARGIN_PCT;
+}
 
 export interface BudgetLineLike {
   id: string;

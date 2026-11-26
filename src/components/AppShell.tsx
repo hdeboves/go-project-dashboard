@@ -42,7 +42,7 @@ import { showToast } from "@/lib/toast";
 const NAV_PRIMARY = [
   { href: "/", label: "Cockpit Projet", icon: Home },
   { href: "/retroplanning", label: "Tâches & Planning", icon: GanttChartSquare },
-  { href: "/budget", label: "Budget & Factures", icon: FileSpreadsheet },
+  { href: "/budget", label: "Budget", icon: FileSpreadsheet },
   { href: "/drive", label: "Fichiers Drive", icon: FolderGit2 },
   { href: "/meetings", label: "Comptes rendus", icon: Mic },
   { href: "/calendar", label: "Agenda", icon: Calendar },
@@ -58,7 +58,7 @@ const PAGE_TITLES: Record<string, string> = {
   "/my-tasks": "Mes Tâches",
   "/projects": "Vue d'ensemble (Tous les projets)",
   "/retroplanning": "Tâches & Planning",
-  "/budget": "Budget & Factures",
+  "/budget": "Budget",
   "/drive": "Fichiers Drive",
   "/meetings": "Comptes rendus Krisp",
   "/calendar": "Agenda & Rappels",

@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { isAllowedWorkspaceEmail } from "@/lib/auth/session";
-import { computeBudgetMetrics } from "@/lib/budget/calculator";
+import {
+  DEFAULT_MARGIN_PCT,
+  computeBudgetMetrics,
+  computeSaleFromCostAndMargin,
+  resolveLineMarginPct,
+  toResourceTypeOption,
+} from "@/lib/budget/calculator";
+import { decideBudgetSyncDirection } from "@/lib/budget/sync-direction";
 import { stripInvoiceBinaries } from "@/lib/invoices/ingest";
 import {
   computeDriveBaseSequence,
@@ -162,5 +169,89 @@ describe("M10 Audit V2 Hardening — Auth, Paris Dates, Engagé Margin, PROD_CRE
         { name: "2026-11-12_260123_StudioB_700EUR.pdf", mimeType: "application/pdf" },
       ])
     ).toBe(2);
+  });
+
+  it("computes 43% margin factor, unmarged 0% lines, and 3 resource types accurately", () => {
+    expect(DEFAULT_MARGIN_PCT).toBe(43);
+    // 570 € cost at 43% margin -> 1000 € selling price HT
+    expect(computeSaleFromCostAndMargin(570, 43)).toBe(1000);
+    // Unmarged line (0%) -> selling price equals cost
+    expect(computeSaleFromCostAndMargin(1500, 0)).toBe(1500);
+
+    expect(
+      resolveLineMarginPct({ saleTotalHt: 1000, preOpTotalHt: 570, marginPct: null })
+    ).toBe(43);
+    expect(
+      resolveLineMarginPct({ saleTotalHt: 0, preOpTotalHt: 0, marginPct: 0 })
+    ).toBe(0);
+    expect(
+      resolveLineMarginPct({ saleTotalHt: 0, preOpTotalHt: 0, marginPct: null })
+    ).toBe(43);
+
+    expect(toResourceTypeOption("RH Internes")).toBe("Interne");
+    expect(toResourceTypeOption("Interne")).toBe("Interne");
+    expect(toResourceTypeOption("Externe")).toBe("Externe");
+    expect(toResourceTypeOption("Amortissement")).toBe("Amortissement");
+  });
+
+  it("decides bidirectional Google Sheets sync direction from latest modification timestamps", () => {
+    const t0 = new Date("2026-11-26T10:00:00Z");
+    const t1 = new Date("2026-11-26T10:05:00Z");
+    const t2 = new Date("2026-11-26T10:10:00Z");
+
+    // Only Google Sheet modified -> PULL
+    expect(
+      decideBudgetSyncDirection({
+        sheetModifiedAt: t1,
+        lastKnownSheetModifiedAt: t0,
+        siteModifiedAt: t0,
+        lastSyncedAt: t0,
+        siteLineCount: 5,
+      }).direction
+    ).toBe("PULL_FROM_SHEET");
+
+    // Only Site modified -> PUSH
+    expect(
+      decideBudgetSyncDirection({
+        sheetModifiedAt: t0,
+        lastKnownSheetModifiedAt: t0,
+        siteModifiedAt: t1,
+        lastSyncedAt: t0,
+        siteLineCount: 5,
+      }).direction
+    ).toBe("PUSH_TO_SHEET");
+
+    // Both modified: Sheet is newer -> PULL
+    expect(
+      decideBudgetSyncDirection({
+        sheetModifiedAt: t2,
+        lastKnownSheetModifiedAt: t0,
+        siteModifiedAt: t1,
+        lastSyncedAt: t0,
+        siteLineCount: 5,
+      }).direction
+    ).toBe("PULL_FROM_SHEET");
+
+    // Both modified: Site is newer -> PUSH
+    expect(
+      decideBudgetSyncDirection({
+        sheetModifiedAt: t1,
+        lastKnownSheetModifiedAt: t0,
+        siteModifiedAt: t2,
+        lastSyncedAt: t0,
+        siteLineCount: 5,
+      }).direction
+    ).toBe("PUSH_TO_SHEET");
+
+    // Neither modified -> UP_TO_DATE
+    expect(
+      decideBudgetSyncDirection({
+        sheetModifiedAt: t0,
+        lastKnownSheetModifiedAt: t0,
+        siteModifiedAt: t0,
+        lastSyncedAt: t0,
+        siteLineCount: 5,
+      }).direction
+    ).toBe("UP_TO_DATE");
   });
 });

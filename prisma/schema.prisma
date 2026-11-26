@@ -196,6 +196,7 @@ model BudgetLine {
   postOpDays         Float    @default(0)
   postOpUnitCost     Float    @default(0)
   postOpTotalHt      Float    @default(0)
+  marginPct          Float?
   sheetRowIndex      Int?
   invoiceNumbersNote String?
   createdAt          DateTime @default(now())

@@ -129,8 +129,8 @@ const NAV_COMMANDS = [
   },
   {
     href: "/budget",
-    label: "Budget & Factures",
-    hint: "Graphiques, postes, devis & Pennylane",
+    label: "Budget",
+    hint: "Tableur budget, marges, devis & factures",
     icon: FileSpreadsheet,
   },
   {

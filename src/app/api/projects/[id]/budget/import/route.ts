@@ -6,6 +6,8 @@ import {
   getProjectBudget,
   importBudgetFromSheetCopy,
   importBudgetFromXlsx,
+  pushBudgetToAttachedSheet,
+  smartSyncBudgetWithSheet,
   syncBudgetFromAttachedSheet,
 } from "@/lib/budget/service";
 import { getServices } from "@/lib/container";
@@ -21,11 +23,20 @@ const ImportJsonSchema = z.union([
     action: z.literal("refresh"),
   }),
   z.object({
+    mode: z.literal("smart_sync"),
+    forceDirection: z.enum(["auto", "pull", "push"]).optional(),
+  }),
+  z.object({
     mode: z.literal("sync_from_sheet"),
   }),
   z.object({
+    mode: z.literal("push_to_sheet"),
+  }),
+  z.object({
     mode: z.literal("apply_blank_template"),
-    category: z.enum(["JEU", "YOUTUBE", "EVENEMENT", "SPONSOR"]).optional(),
+    category: z
+      .enum(["JEU", "YOUTUBE", "PROD_CREA", "EVENEMENT", "SPONSOR"])
+      .optional(),
     replaceExisting: z.boolean().optional(),
   }),
   z.object({
@@ -103,6 +114,25 @@ export async function POST(
     const rawText = await req.text();
     const parsedJson = rawText.trim() ? JSON.parse(rawText) : {};
     const body = ImportJsonSchema.parse(parsedJson);
+
+    if ("mode" in body && body.mode === "smart_sync") {
+      const result = await smartSyncBudgetWithSheet({
+        prisma,
+        getGoogleGateway,
+        projectId: id,
+        forceDirection: body.forceDirection ?? "auto",
+      });
+      return NextResponse.json(result, { status: 200 });
+    }
+
+    if ("mode" in body && body.mode === "push_to_sheet") {
+      const result = await pushBudgetToAttachedSheet({
+        prisma,
+        getGoogleGateway,
+        projectId: id,
+      });
+      return NextResponse.json(result, { status: 200 });
+    }
 
     if (
       ("action" in body && body.action === "refresh") ||
