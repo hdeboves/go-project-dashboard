@@ -2,7 +2,11 @@ import fs from "node:fs/promises";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { toErrorResponse } from "@/lib/api-error";
-import { assertProjectAccess, getCurrentUser } from "@/lib/auth/session";
+import {
+  assertInvoiceOwnerAccess,
+  assertProjectAccess,
+  getCurrentUser,
+} from "@/lib/auth/session";
 import { round2 } from "@/lib/budget/calculator";
 import { normalizeProjectCodesList } from "@/lib/invoices/accounting-email";
 import { getStagedInvoicePdfPath } from "@/lib/invoices/ingest";
@@ -43,6 +47,8 @@ export async function PATCH(
         { status: 404 }
       );
     }
+
+    assertInvoiceOwnerAccess(existing, currentUser);
 
     if (existing.status === "VALIDATED") {
       return NextResponse.json(
@@ -140,6 +146,8 @@ export async function DELETE(
         { status: 404 }
       );
     }
+
+    assertInvoiceOwnerAccess(invoice, currentUser);
 
     if (invoice.status === "VALIDATED") {
       return NextResponse.json(

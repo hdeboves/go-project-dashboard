@@ -24,7 +24,11 @@ import {
   type CockpitQuoteOption,
 } from "@/components/cockpit/CockpitInvoiceDropzone";
 import { UpcomingTasksCard } from "@/components/cockpit/UpcomingTasksCard";
-import { buildVisibleProjectsWhere, getCurrentUser } from "@/lib/auth/session";
+import {
+  buildVisibleInvoicesWhere,
+  buildVisibleProjectsWhere,
+  getCurrentUser,
+} from "@/lib/auth/session";
 import { decryptSecret } from "@/lib/crypto";
 import { prisma } from "@/lib/prisma";
 import { formatAuditActionFr } from "@/lib/shared/audit-labels";
@@ -146,10 +150,9 @@ export default async function CommandCenterPage({
         },
       }),
       prisma.invoice.findMany({
-        where: {
-          projectId: activeProject.id,
-          status: { in: ["PENDING_VALIDATION", "CONFLICT_BLOCKED"] },
-        },
+        where: buildVisibleInvoicesWhere(activeProject.id, currentUser, {
+          onlyPending: true,
+        }),
         orderBy: { createdAt: "desc" },
         select: {
           id: true,
@@ -168,6 +171,7 @@ export default async function CommandCenterPage({
           projectCodesJson: true,
           vigilanceDriveFileId: true,
           vigilanceFilename: true,
+          extractedJson: true,
           cpConflict: true,
           status: true,
         },

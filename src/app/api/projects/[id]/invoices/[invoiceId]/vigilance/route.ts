@@ -3,7 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import { NextRequest, NextResponse } from "next/server";
 import { toErrorResponse } from "@/lib/api-error";
-import { assertProjectAccess, getCurrentUser } from "@/lib/auth/session";
+import {
+  assertInvoiceOwnerAccess,
+  assertProjectAccess,
+  getCurrentUser,
+} from "@/lib/auth/session";
 import { ensureProjectFolderNode } from "@/lib/budget/service";
 import { getServices } from "@/lib/container";
 import { AppHttpError } from "@/lib/errors";
@@ -30,6 +34,8 @@ export async function POST(
     if (!invoice || invoice.projectId !== id) {
       throw new AppHttpError(404, "INVOICE_NOT_FOUND", "Facture introuvable.");
     }
+
+    assertInvoiceOwnerAccess(invoice, currentUser);
 
     const contentType = req.headers.get("content-type") ?? "";
     if (!contentType.includes("multipart/form-data")) {

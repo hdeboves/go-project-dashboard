@@ -2,6 +2,7 @@ import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 import { toErrorResponse } from "@/lib/api-error";
 import {
+  buildVisibleInvoicesWhere,
   buildVisibleProjectsWhere,
   getCurrentUser,
   getProjectAccess,
@@ -97,11 +98,9 @@ export async function GET() {
         await Promise.all([
           getProjectAccess(prisma, activeProject.id, currentUser),
           prisma.invoice.count({
-            where: {
-              projectId: activeProject.id,
-              cpConflict: true,
-              status: "CONFLICT_BLOCKED",
-            },
+            where: buildVisibleInvoicesWhere(activeProject.id, currentUser, {
+              onlyConflicts: true,
+            }),
           }),
           prisma.syncStatus.count({
             where: {
@@ -111,7 +110,9 @@ export async function GET() {
           }),
           prisma.invoice.count({
             where: {
-              projectId: activeProject.id,
+              ...buildVisibleInvoicesWhere(activeProject.id, currentUser, {
+                onlyPending: true,
+              }),
               status: "PENDING_VALIDATION",
             },
           }),

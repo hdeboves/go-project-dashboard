@@ -14,8 +14,16 @@ import {
   requiresVigilanceAttestation,
 } from "@/lib/invoices/accounting-email";
 import {
+  assertInvoiceOwnerAccess,
+  buildVisibleInvoicesWhere,
+} from "@/lib/auth/session";
+import {
+  computeNextSequentialInvoiceNumber,
+  computeTtcFromHtAndVat,
+  extractAmounts,
   extractInvoiceFieldsFromText,
   isOwnCompanyName,
+  snapToStandardVatRate,
 } from "@/lib/invoices/local-extractor";
 import { buildValidatedInvoiceFilename } from "@/lib/shared/filenames";
 
@@ -235,5 +243,74 @@ describe("M9 Cockpit Invoice Dropzone, Vigilance >3k€, Multi-CP, Roles & Accou
     expect(resIntrus.prestationSummary).toBe(
       "Montage Reels campagne lancement"
     );
+  });
+
+  it("isolates pending invoices per user, auto-numbers sequentially from 1, and handles VAT 0% / 5% / 10% / 20%", () => {
+    // 1. Per-user isolation for pending invoices
+    const whereUserA = buildVisibleInvoicesWhere(
+      "proj-1",
+      { id: "user-a" },
+      { onlyPending: true }
+    );
+    expect(JSON.stringify(whereUserA)).toContain("user-a");
+
+    // User B is blocked from accessing User A's pending invoice
+    expect(() =>
+      assertInvoiceOwnerAccess(
+        { status: "PENDING_VALIDATION", uploadedById: "user-a" },
+        { id: "user-b" }
+      )
+    ).toThrow(/autre utilisateur/i);
+
+    // User A can access their own pending invoice
+    expect(() =>
+      assertInvoiceOwnerAccess(
+        { status: "PENDING_VALIDATION", uploadedById: "user-a" },
+        { id: "user-a" }
+      )
+    ).not.toThrow();
+
+    // Validated invoices are shared across project members
+    expect(() =>
+      assertInvoiceOwnerAccess(
+        { status: "VALIDATED", uploadedById: "user-a" },
+        { id: "user-b" }
+      )
+    ).not.toThrow();
+
+    // 2. Sequential numbering starting strictly at 1
+    expect(computeNextSequentialInvoiceNumber([])).toBe("1");
+    expect(computeNextSequentialInvoiceNumber(["FAC-2026-01"])).toBe("1");
+    expect(computeNextSequentialInvoiceNumber(["1"])).toBe("2");
+    expect(computeNextSequentialInvoiceNumber(["1", "2", "5"])).toBe("6");
+    expect(
+      buildValidatedInvoiceFilename({
+        invoiceNumber: computeNextSequentialInvoiceNumber([]),
+        codeProjet: "326027",
+        vendorName: "Studio Vertigo",
+        invoiceDate: "2026-11-26",
+      })
+    ).toBe("1_326027_StudioVertigo_2026-11-26.pdf");
+
+    // 3. VAT detection (0% default if no VAT; 5 / 10 / 20% recalculation)
+    const noVat = extractAmounts("Total HT : 800,00 €\nTotal : 800,00 €");
+    expect(noVat.hasVat).toBe(false);
+    expect(noVat.tvaRate).toBe(0);
+    expect(noVat.montantTTC).toBe(800);
+
+    const vat10 = extractAmounts("Total HT : 1 000,00 €\nTVA 10% : 100,00 €\nTotal TTC : 1 100,00 €");
+    expect(vat10.hasVat).toBe(true);
+    expect(vat10.tvaRate).toBe(10);
+    expect(vat10.montantTTC).toBe(1100);
+
+    expect(snapToStandardVatRate(0)).toBe(0);
+    expect(snapToStandardVatRate(5.5)).toBe(5);
+    expect(snapToStandardVatRate(10)).toBe(10);
+    expect(snapToStandardVatRate(20)).toBe(20);
+
+    expect(computeTtcFromHtAndVat(1000, 0)).toEqual({ tvaAmount: 0, amountTtc: 1000 });
+    expect(computeTtcFromHtAndVat(1000, 5)).toEqual({ tvaAmount: 50, amountTtc: 1050 });
+    expect(computeTtcFromHtAndVat(1000, 10)).toEqual({ tvaAmount: 100, amountTtc: 1100 });
+    expect(computeTtcFromHtAndVat(1000, 20)).toEqual({ tvaAmount: 200, amountTtc: 1200 });
   });
 });

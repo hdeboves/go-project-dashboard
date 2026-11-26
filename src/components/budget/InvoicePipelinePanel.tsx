@@ -19,6 +19,12 @@ import {
   type QuoteDto,
   formatEur,
 } from "@/components/budget/types";
+import {
+  SUPPORTED_VAT_RATES,
+  computeTtcFromHtAndVat,
+  snapToStandardVatRate,
+  type SupportedVatRate,
+} from "@/lib/invoices/local-extractor";
 import { buildValidatedInvoiceFilename } from "@/lib/shared/filenames";
 import { showToast } from "@/lib/toast";
 
@@ -38,6 +44,8 @@ interface DraftEdits {
   invoiceNumber: string;
   invoiceDate: string;
   amountHt: string;
+  tvaRate: SupportedVatRate;
+  amountTtc: string;
   prestationLabel: string;
   budgetLineId: string;
   quoteId: string;
@@ -89,22 +97,51 @@ export function InvoicePipelinePanel({
   function getEdits(inv: InvoiceDto): DraftEdits {
     const existing = editsById[inv.id];
     if (existing) return existing;
+    const rawRate =
+      inv.amountHt > 0 && inv.amountTtc > inv.amountHt + 0.01
+        ? ((inv.amountTtc - inv.amountHt) / inv.amountHt) * 100
+        : 0;
+    const tvaRate = snapToStandardVatRate(rawRate);
+    const ttc =
+      inv.amountTtc > 0
+        ? inv.amountTtc
+        : computeTtcFromHtAndVat(inv.amountHt ?? 0, tvaRate).amountTtc;
     return {
       vendorName: inv.vendorName ?? "",
       invoiceNumber: inv.invoiceNumber ?? "",
       invoiceDate: inv.invoiceDate ?? new Date().toISOString().slice(0, 10),
       amountHt: String(inv.amountHt ?? 0),
+      tvaRate,
+      amountTtc: String(ttc),
       prestationLabel: inv.prestationLabel ?? "",
       budgetLineId: inv.budgetLineId ?? "",
       quoteId: inv.quoteId ?? "",
     };
   }
 
-  function updateEdit(inv: InvoiceDto, field: keyof DraftEdits, value: string) {
+  function updateEdit<K extends keyof DraftEdits>(
+    inv: InvoiceDto,
+    field: K,
+    value: DraftEdits[K]
+  ) {
     const cur = getEdits(inv);
+    const next: DraftEdits = { ...cur, [field]: value };
+    if (field === "amountHt") {
+      const htNum = Number(value);
+      if (Number.isFinite(htNum)) {
+        next.amountTtc = String(
+          computeTtcFromHtAndVat(htNum, cur.tvaRate).amountTtc
+        );
+      }
+    } else if (field === "tvaRate") {
+      const htNum = Number(cur.amountHt) || 0;
+      next.amountTtc = String(
+        computeTtcFromHtAndVat(htNum, value as SupportedVatRate).amountTtc
+      );
+    }
     setEditsById((prev) => ({
       ...prev,
-      [inv.id]: { ...cur, [field]: value },
+      [inv.id]: next,
     }));
   }
 
@@ -252,6 +289,11 @@ export function InvoicePipelinePanel({
             invoiceNumber: edits.invoiceNumber.trim() || undefined,
             invoiceDate: edits.invoiceDate.trim() || undefined,
             amountHt: Number(edits.amountHt),
+            tvaAmount: Math.max(
+              0,
+              Math.round((Number(edits.amountTtc) - Number(edits.amountHt)) * 100) / 100
+            ),
+            amountTtc: Number(edits.amountTtc),
             prestationLabel: edits.prestationLabel.trim() || undefined,
             budgetLineId: edits.budgetLineId || undefined,
             quoteId: edits.quoteId || null,
@@ -760,6 +802,39 @@ export function InvoicePipelinePanel({
                               }
                               className="w-full rounded-xl border border-slate-200 bg-slate-50/70 px-3 py-1.5 font-mono text-xs text-slate-900 focus:border-indigo-500 focus:bg-white focus:outline-none disabled:opacity-50 dark:border-slate-700 dark:bg-slate-800 dark:text-white"
                             />
+                          </div>
+                          <div className="space-y-1.5 sm:col-span-2">
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <span className="text-xs font-medium text-slate-600 dark:text-slate-300">
+                                TVA ({edits.tvaRate} %) · TTC :{" "}
+                                <strong className="font-mono text-slate-900 dark:text-white">
+                                  {formatEur(Number(edits.amountTtc) || 0)}
+                                </strong>
+                              </span>
+                              <div className="inline-flex items-center gap-1">
+                                {SUPPORTED_VAT_RATES.map((rate) => (
+                                  <button
+                                    key={rate}
+                                    type="button"
+                                    disabled={isBlocked}
+                                    onClick={() => updateEdit(inv, "tvaRate", rate)}
+                                    className={`rounded-lg px-2 py-0.5 font-mono text-[11px] font-bold transition-colors disabled:opacity-50 ${
+                                      edits.tvaRate === rate
+                                        ? "bg-indigo-600 text-white"
+                                        : "border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300"
+                                    }`}
+                                  >
+                                    {rate === 0 ? "0 %" : `${rate} %`}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                            {edits.tvaRate > 0 && (
+                              <p className="text-[11px] text-amber-700 dark:text-amber-300">
+                                TVA détectée ({edits.tvaRate} %) — vérifiez le
+                                taux sur le PDF (5 %, 10 % ou 20 %).
+                              </p>
+                            )}
                           </div>
                           <div>
                             <label

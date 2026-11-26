@@ -332,3 +332,74 @@ export async function assertProjectAccess(
   }
   return access;
 }
+
+/**
+ * Per-user invoice visibility filter:
+ * - Pending / in-verification invoices (PENDING_VALIDATION, CONFLICT_BLOCKED) uploaded by a user
+ *   are strictly private to THAT user so colleagues never see someone else's drafts in progress.
+ * - Validated invoices are shared with all members of the project (official project budget).
+ * - Automated Gmail-scanned invoices (uploadedById = null, gmailMessageId != null) remain visible.
+ */
+export function buildVisibleInvoicesWhere(
+  projectId: string,
+  user: Pick<User, "id"> | null,
+  options: { onlyPending?: boolean; onlyConflicts?: boolean } = {}
+): Prisma.InvoiceWhereInput {
+  const pendingOwnershipFilter: Prisma.InvoiceWhereInput = user
+    ? {
+        OR: [
+          { uploadedById: user.id },
+          { uploadedById: null, gmailMessageId: { not: null } },
+        ],
+      }
+    : {
+        uploadedById: null,
+      };
+
+  if (options.onlyConflicts) {
+    return {
+      projectId,
+      cpConflict: true,
+      status: "CONFLICT_BLOCKED",
+      ...pendingOwnershipFilter,
+    };
+  }
+
+  if (options.onlyPending) {
+    return {
+      projectId,
+      status: { in: ["PENDING_VALIDATION", "CONFLICT_BLOCKED"] },
+      ...pendingOwnershipFilter,
+    };
+  }
+
+  return {
+    projectId,
+    OR: [
+      { status: "VALIDATED" },
+      {
+        status: { not: "VALIDATED" },
+        ...pendingOwnershipFilter,
+      },
+    ],
+  };
+}
+
+/**
+ * Guards single-invoice operations (preview, edit, delete, email-preview, vigilance, validate)
+ * so another user cannot view or modify a pending invoice belonging to someone else.
+ */
+export function assertInvoiceOwnerAccess(
+  invoice: { status: string; uploadedById?: string | null },
+  user: Pick<User, "id"> | null
+): void {
+  if (invoice.status === "VALIDATED") return;
+  if (!invoice.uploadedById) return;
+  if (!user || invoice.uploadedById !== user.id) {
+    throw new AppHttpError(
+      403,
+      "INVOICE_FORBIDDEN",
+      "Cette facture en cours de vérification appartient à un autre utilisateur."
+    );
+  }
+}

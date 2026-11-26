@@ -11,9 +11,11 @@ import {
 } from "@/lib/isolation/cp-guard";
 import type { GeminiPort, InvoiceExtractionOutput } from "@/lib/ports";
 import {
+  computeNextSequentialInvoiceNumber,
   extractInvoiceFieldsFromText,
   isOwnCompanyName,
   matchQuoteForInvoice,
+  snapToStandardVatRate,
 } from "@/lib/invoices/local-extractor";
 import { normalizeProjectCodesList } from "@/lib/invoices/accounting-email";
 import {
@@ -307,6 +309,8 @@ export async function processInvoicePdfIngestion(params: {
   emailBody?: string | null;
   gmailMessageId?: string | null;
   attachmentId?: string | null;
+  uploadedById?: string | null;
+  useSequentialInvoiceNumber?: boolean;
   quarantineOnConflictWithoutThrowing?: boolean;
   allowManualFallback?: boolean;
 }): Promise<IngestInvoiceResult> {
@@ -322,6 +326,8 @@ export async function processInvoicePdfIngestion(params: {
     emailBody,
     gmailMessageId,
     attachmentId,
+    uploadedById,
+    useSequentialInvoiceNumber,
     quarantineOnConflictWithoutThrowing,
     allowManualFallback,
   } = params;
@@ -427,14 +433,53 @@ export async function processInvoicePdfIngestion(params: {
     pdfBuffer.length <= MAX_DB_PDF_BYTES ? pdfBuffer.toString("base64") : undefined;
 
   const amountHt = round2(Math.max(0, extracted.montantHT));
+  const rawTvaRate = Number.isFinite(extracted.tvaRate)
+    ? Math.max(0, extracted.tvaRate)
+    : 0;
   let tvaAmount = round2(Math.max(0, extracted.montantTTC - amountHt));
-  if (tvaAmount === 0 && extracted.tvaRate > 0 && amountHt > 0 && extracted.montantTTC <= amountHt) {
-    tvaAmount = round2(amountHt * (extracted.tvaRate / 100));
+  if (
+    tvaAmount === 0 &&
+    rawTvaRate > 0 &&
+    amountHt > 0 &&
+    extracted.montantTTC <= amountHt
+  ) {
+    tvaAmount = round2(amountHt * (rawTvaRate / 100));
   }
   const amountTtc =
     extracted.montantTTC > 0
       ? round2(extracted.montantTTC)
       : round2(amountHt + tvaAmount);
+
+  // Derive clean standard VAT rate (0%, 5%, 10%, 20%) & whether VAT was detected
+  const inferredRate =
+    amountHt > 0 && amountTtc > amountHt + 0.01
+      ? ((amountTtc - amountHt) / amountHt) * 100
+      : rawTvaRate;
+  const detectedVatRate = snapToStandardVatRate(inferredRate);
+  const hasVatDetected = detectedVatRate > 0;
+  extracted.tvaRate = detectedVatRate;
+
+  // Keep supplier's raw invoice reference, and compute sequential 1..N number if requested
+  const supplierInvoiceNumber = (extracted.numeroFacture ?? "").trim();
+  const existingProjectInvoices = await prisma.invoice.findMany({
+    where: {
+      projectId: project.id,
+      status: { not: "REJECTED" },
+    },
+    orderBy: { createdAt: "asc" },
+    select: {
+      id: true,
+      status: true,
+      invoiceNumber: true,
+      extractedJson: true,
+    },
+  });
+
+  const assignedInvoiceNumber = useSequentialInvoiceNumber
+    ? computeNextSequentialInvoiceNumber(
+        existingProjectInvoices.map((inv) => inv.invoiceNumber)
+      )
+    : supplierInvoiceNumber;
 
   // Auto-match Quote from PDF text / vendor / HT amount
   const matchedQuote = matchQuoteForInvoice(quotes, {
@@ -454,7 +499,7 @@ export async function processInvoicePdfIngestion(params: {
     extracted.extractedRawTextSnippet,
     extracted.prestationSummary,
     extracted.prestataire,
-    extracted.numeroFacture,
+    supplierInvoiceNumber,
   ]
     .filter(Boolean)
     .join("\n");
@@ -475,7 +520,7 @@ export async function processInvoicePdfIngestion(params: {
   );
 
   const autoRenamedFilename = buildValidatedInvoiceFilename({
-    invoiceNumber: extracted.numeroFacture,
+    invoiceNumber: assignedInvoiceNumber,
     invoiceDate: extracted.dateFacture,
     codeProjet: detectedProjectCodes.join("-"),
     vendorName: extracted.prestataire,
@@ -486,13 +531,14 @@ export async function processInvoicePdfIngestion(params: {
     const blocked = await prisma.invoice.create({
       data: {
         projectId: project.id,
+        uploadedById: uploadedById ?? null,
         budgetLineId: matchedQuote?.budgetLineId ?? null,
         quoteId: suggestedQuoteId,
         gmailMessageId: gmailMessageId ?? null,
         originalFilename: filename,
         renamedFilename: autoRenamedFilename,
         vendorName: extracted.prestataire,
-        invoiceNumber: extracted.numeroFacture,
+        invoiceNumber: assignedInvoiceNumber,
         invoiceDate: extracted.dateFacture,
         amountHt,
         tvaAmount,
@@ -506,6 +552,8 @@ export async function processInvoicePdfIngestion(params: {
         status: "CONFLICT_BLOCKED",
         extractedJson: JSON.stringify({
           ...extracted,
+          supplierInvoiceNumber: supplierInvoiceNumber || null,
+          hasVatDetected,
           localPdfTextSnippet: localPdfText.slice(0, 500),
           cpCheck,
           attachmentId: attachmentId ?? null,
@@ -547,29 +595,35 @@ export async function processInvoicePdfIngestion(params: {
     };
   }
 
-  // 7. Duplicate invoiceNumber detection within project
-  const normInvNum = normalizeInvoiceNumber(extracted.numeroFacture);
-  let duplicateOf: Invoice | null = null;
-  if (normInvNum) {
-    const existingProjectInvoices = await prisma.invoice.findMany({
-      where: {
-        projectId: project.id,
-        status: { not: "REJECTED" },
-        invoiceNumber: { not: null },
-      },
-      orderBy: { createdAt: "asc" },
-    });
+  // 7. Duplicate supplier invoiceNumber detection within project
+  const normSupplierNum = normalizeInvoiceNumber(supplierInvoiceNumber);
+  let duplicateOf: { id: string; status: string } | null = null;
+  if (normSupplierNum) {
     duplicateOf =
-      existingProjectInvoices.find(
-        (inv) => normalizeInvoiceNumber(inv.invoiceNumber) === normInvNum
-      ) ?? null;
+      existingProjectInvoices.find((inv) => {
+        if (normalizeInvoiceNumber(inv.invoiceNumber) === normSupplierNum) {
+          return true;
+        }
+        try {
+          const parsed = JSON.parse(inv.extractedJson || "{}") as {
+            supplierInvoiceNumber?: string | null;
+          };
+          return (
+            parsed.supplierInvoiceNumber &&
+            normalizeInvoiceNumber(parsed.supplierInvoiceNumber) ===
+              normSupplierNum
+          );
+        } catch {
+          return false;
+        }
+      }) ?? null;
   }
 
   const isDuplicate = Boolean(duplicateOf);
   const warnings = [...(extracted.rawWarnings ?? [])];
   if (isDuplicate && duplicateOf) {
     warnings.push(
-      `Doublon détecté : le N° Facture ${extracted.numeroFacture} existe déjà sur ce projet (statut ${duplicateOf.status}).`
+      `Doublon détecté : le N° Facture ${supplierInvoiceNumber} existe déjà sur ce projet (statut ${duplicateOf.status}).`
     );
   }
   if (!localPdfText.trim() && amountHt === 0) {
@@ -589,17 +643,18 @@ export async function processInvoicePdfIngestion(params: {
       filename,
     }) ?? (budgetLines.length === 1 ? budgetLines[0].id : null);
 
-  // 9. Create Invoice with auto-renamed nomenclature filename, then stage PDF bytes
+  // 9. Create Invoice with per-user owner, sequential 1..N number, and auto-renamed filename
   const created = await prisma.invoice.create({
     data: {
       projectId: project.id,
+      uploadedById: uploadedById ?? null,
       budgetLineId: suggestedBudgetLineId,
       quoteId: suggestedQuoteId,
       gmailMessageId: gmailMessageId ?? null,
       originalFilename: filename,
       renamedFilename: autoRenamedFilename,
       vendorName: extracted.prestataire,
-      invoiceNumber: extracted.numeroFacture,
+      invoiceNumber: assignedInvoiceNumber,
       invoiceDate: extracted.dateFacture,
       amountHt,
       tvaAmount,
@@ -614,6 +669,8 @@ export async function processInvoicePdfIngestion(params: {
       status: "PENDING_VALIDATION",
       extractedJson: JSON.stringify({
         ...extracted,
+        supplierInvoiceNumber: supplierInvoiceNumber || null,
+        hasVatDetected,
         rawWarnings: warnings,
         isDuplicate,
         duplicateOfInvoiceId: duplicateOf?.id ?? null,
@@ -628,6 +685,8 @@ export async function processInvoicePdfIngestion(params: {
     data: {
       extractedJson: JSON.stringify({
         ...extracted,
+        supplierInvoiceNumber: supplierInvoiceNumber || null,
+        hasVatDetected,
         rawWarnings: warnings,
         isDuplicate,
         duplicateOfInvoiceId: duplicateOf?.id ?? null,

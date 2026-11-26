@@ -1,7 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { toErrorResponse } from "@/lib/api-error";
-import { assertProjectAccess, getCurrentUser } from "@/lib/auth/session";
+import {
+  assertInvoiceOwnerAccess,
+  assertProjectAccess,
+  getCurrentUser,
+} from "@/lib/auth/session";
 import { AppHttpError } from "@/lib/errors";
 import {
   buildAccountingCcEntries,
@@ -63,6 +67,8 @@ export async function POST(
       throw new AppHttpError(404, "INVOICE_NOT_FOUND", "Facture introuvable.");
     }
 
+    assertInvoiceOwnerAccess(invoice, currentUser);
+
     const projectCodes = normalizeProjectCodesList(
       body.projectCodes && body.projectCodes.length > 0
         ? body.projectCodes
@@ -112,7 +118,7 @@ export async function POST(
       new Date().toISOString().slice(0, 10)
     ).trim();
     const amountHt = body.amountHt ?? invoice.amountHt ?? 0;
-    const amountTtc = body.amountTtc ?? invoice.amountTtc ?? amountHt * 1.2;
+    const amountTtc = body.amountTtc ?? invoice.amountTtc ?? amountHt;
     const budgetLineId = body.budgetLineId ?? invoice.budgetLineId ?? "";
 
     const warnings = evaluateInvoiceVerificationWarnings({

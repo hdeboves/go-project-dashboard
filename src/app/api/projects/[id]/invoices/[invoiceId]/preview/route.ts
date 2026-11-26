@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { toErrorResponse } from "@/lib/api-error";
-import { assertProjectAccess, getCurrentUser } from "@/lib/auth/session";
+import {
+  assertInvoiceOwnerAccess,
+  assertProjectAccess,
+  getCurrentUser,
+} from "@/lib/auth/session";
 import { getGoogleGateway } from "@/lib/container";
 import { AppHttpError } from "@/lib/errors";
 import { readStagedInvoicePdf } from "@/lib/invoices/ingest";
@@ -26,6 +30,8 @@ export async function GET(
         "Facture introuvable pour ce projet."
       );
     }
+
+    assertInvoiceOwnerAccess(invoice, currentUser);
 
     let buffer = await readStagedInvoicePdf(
       id,

@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { toErrorResponse } from "@/lib/api-error";
+import {
+  assertProjectAccess,
+  buildVisibleInvoicesWhere,
+  getCurrentUser,
+} from "@/lib/auth/session";
 import { getServices } from "@/lib/container";
 import { AppHttpError } from "@/lib/errors";
 import {
@@ -23,6 +28,8 @@ export async function GET(
   try {
     const { id } = await context.params;
     const { prisma } = getServices();
+    const currentUser = await getCurrentUser(prisma);
+    await assertProjectAccess(prisma, id, currentUser, "VIEW");
 
     const project = await prisma.project.findUnique({ where: { id } });
     if (!project) {
@@ -30,7 +37,7 @@ export async function GET(
     }
 
     const invoices = await prisma.invoice.findMany({
-      where: { projectId: id },
+      where: buildVisibleInvoicesWhere(id, currentUser),
       orderBy: { createdAt: "desc" },
     });
 
@@ -47,6 +54,8 @@ export async function POST(
   try {
     const { id } = await context.params;
     const { prisma, getGeminiClient } = getServices();
+    const currentUser = await getCurrentUser(prisma);
+    await assertProjectAccess(prisma, id, currentUser, "EDIT");
 
     const project = await prisma.project.findUnique({ where: { id } });
     if (!project) {
@@ -123,6 +132,8 @@ export async function POST(
         mimeType,
         requestedBudgetLineId,
         emailSubject,
+        uploadedById: currentUser?.id ?? null,
+        useSequentialInvoiceNumber: true,
         allowManualFallback: true,
       });
 

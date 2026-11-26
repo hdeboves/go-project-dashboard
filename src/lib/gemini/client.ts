@@ -257,7 +257,7 @@ export class GeminiClient implements GeminiPort {
       "- prestataire : nom propre et exact du fournisseur (JAMAIS GamersOrigin ni L'Intrus)",
       "- numeroFacture : numéro exact de la facture",
       "- dateFacture : date d'ÉMISSION au format YYYY-MM-DD (ne pas confondre avec la date d'échéance !)",
-      "- montantHT, tvaRate (0 si TVA non applicable / art. 293 B), montantTTC",
+      "- montantHT, tvaRate, montantTTC : détecte précisément s'il y a de la TVA ou NON. S'il n'y a PAS de TVA (franchise en base art. 293 B, exonéré, autoliquidation, ou aucune ligne TVA et HT = TTC), retourne OBLIGATOIREMENT tvaRate = 0 et montantTTC = montantHT. S'il y a de la TVA, retourne le taux exact (5, 10 ou 20).",
       "- typeFacture : ACOMPTE, SOLDE ou UNIQUE",
       "- codeProjetDetecte : code projet principal détecté (si plusieurs codes projet apparaissent, indique-les tous dans extractedRawTextSnippet)",
       "- prestationSummary : intitulé synthétique et clair de la prestation facturée",
