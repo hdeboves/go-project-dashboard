@@ -19,11 +19,9 @@ import {
 } from "@/lib/auth/session";
 import {
   computeNextSequentialInvoiceNumber,
-  computeTtcFromHtAndVat,
   extractAmounts,
   extractInvoiceFieldsFromText,
   isOwnCompanyName,
-  snapToStandardVatRate,
 } from "@/lib/invoices/local-extractor";
 import { buildValidatedInvoiceFilename } from "@/lib/shared/filenames";
 
@@ -194,8 +192,8 @@ describe("M9 Cockpit Invoice Dropzone, Vigilance >3k€, Multi-CP, Roles & Accou
     expect(resGo.numeroFacture).toBe("FA-2026-042");
     expect(resGo.dateFacture).toBe("2026-11-14");
     expect(resGo.montantHT).toBe(3500);
-    expect(resGo.tvaRate).toBe(20);
-    expect(resGo.montantTTC).toBe(4200);
+    expect(resGo.tvaRate).toBe(0);
+    expect(resGo.montantTTC).toBe(3500);
     expect(resGo.detectedProjectCodes).toEqual(["326027", "326018"]);
     expect(resGo.suggestedQuoteId).toBe("quote-11");
     expect(resGo.suggestedBudgetLineId).toBe("line-prod-1");
@@ -292,25 +290,23 @@ describe("M9 Cockpit Invoice Dropzone, Vigilance >3k€, Multi-CP, Roles & Accou
       })
     ).toBe("1_326027_StudioVertigo_2026-11-26.pdf");
 
-    // 3. VAT detection (0% default if no VAT; 5 / 10 / 20% recalculation)
+    // 3. Strictly HT-only extraction (TVA ignored, HT stored into budget)
     const noVat = extractAmounts("Total HT : 800,00 €\nTotal : 800,00 €");
-    expect(noVat.hasVat).toBe(false);
+    expect(noVat.montantHT).toBe(800);
     expect(noVat.tvaRate).toBe(0);
     expect(noVat.montantTTC).toBe(800);
 
-    const vat10 = extractAmounts("Total HT : 1 000,00 €\nTVA 10% : 100,00 €\nTotal TTC : 1 100,00 €");
-    expect(vat10.hasVat).toBe(true);
-    expect(vat10.tvaRate).toBe(10);
-    expect(vat10.montantTTC).toBe(1100);
+    const withVatOnPdf = extractAmounts(
+      "Total HT : 1 000,00 €\nTVA 20% : 200,00 €\nTotal TTC : 1 200,00 €"
+    );
+    expect(withVatOnPdf.montantHT).toBe(1000);
+    expect(withVatOnPdf.tvaRate).toBe(0);
+    expect(withVatOnPdf.montantTTC).toBe(1000);
 
-    expect(snapToStandardVatRate(0)).toBe(0);
-    expect(snapToStandardVatRate(5.5)).toBe(5);
-    expect(snapToStandardVatRate(10)).toBe(10);
-    expect(snapToStandardVatRate(20)).toBe(20);
-
-    expect(computeTtcFromHtAndVat(1000, 0)).toEqual({ tvaAmount: 0, amountTtc: 1000 });
-    expect(computeTtcFromHtAndVat(1000, 5)).toEqual({ tvaAmount: 50, amountTtc: 1050 });
-    expect(computeTtcFromHtAndVat(1000, 10)).toEqual({ tvaAmount: 100, amountTtc: 1100 });
-    expect(computeTtcFromHtAndVat(1000, 20)).toEqual({ tvaAmount: 200, amountTtc: 1200 });
+    const recoverHtFromTtcMinusTva = extractAmounts(
+      "TVA 20% : 200,00 €\nNet à payer TTC : 1 200,00 €"
+    );
+    expect(recoverHtFromTtcMinusTva.montantHT).toBe(1000);
+    expect(recoverHtFromTtcMinusTva.tvaRate).toBe(0);
   });
 });

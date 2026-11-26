@@ -329,31 +329,6 @@ function findLastLabeledAmount(text: string, labelRegex: RegExp): number {
   return matches.length > 0 ? matches[matches.length - 1] : 0;
 }
 
-export const SUPPORTED_VAT_RATES = [0, 5, 10, 20] as const;
-export type SupportedVatRate = (typeof SUPPORTED_VAT_RATES)[number];
-
-/**
- * Snaps any detected VAT percentage to the closest user-selectable rate:
- * 0% (no VAT), 5%, 10%, or 20%.
- */
-export function snapToStandardVatRate(rawRate: number): SupportedVatRate {
-  if (!Number.isFinite(rawRate) || rawRate <= 0.5) return 0;
-  if (rawRate < 7.5) return 5;
-  if (rawRate < 15) return 10;
-  return 20;
-}
-
-export function computeTtcFromHtAndVat(
-  amountHt: number,
-  vatRate: number
-): { tvaAmount: number; amountTtc: number } {
-  const safeHt = Number.isFinite(amountHt) && amountHt > 0 ? round2(amountHt) : 0;
-  const safeRate = Number.isFinite(vatRate) && vatRate > 0 ? vatRate : 0;
-  const tvaAmount = round2(safeHt * (safeRate / 100));
-  const amountTtc = round2(safeHt + tvaAmount);
-  return { tvaAmount, amountTtc };
-}
-
 /**
  * Computes the next sequential invoice number starting strictly at "1" (1, 2, 3, ...).
  */
@@ -373,121 +348,54 @@ export function computeNextSequentialInvoiceNumber(
   return String(maxSeq + 1);
 }
 
+/**
+ * Extracts strictly the HT (Hors Taxes) amount from the invoice PDF text.
+ * VAT/TVA is intentionally ignored (tvaRate = 0, montantTTC = montantHT) because
+ * only Montant HT is tracked and imputed into the project budget.
+ */
 export function extractAmounts(pdfText: string): {
   montantHT: number;
   tvaRate: number;
   montantTTC: number;
-  hasVat: boolean;
 } {
-  const isVatExempt =
-    /tva\s+non\s+applicable|art(?:icle)?\.?\s*293\s*b|293\s*b\s*du\s*cgi|franchise\s+en\s+base|exon[ée]r[ée]e?\s+de\s+tva|autoliquidation|sans\s+tva|hors\s+champ\s+tva|tva\s*(?::|\()?\s*0(?:[.,]00?)?\s*%/i.test(
-      pdfText
-    );
-
-  // Detect explicit positive VAT rate mentioned on the invoice (5%, 5.5%, 10%, 20%, etc.)
-  let explicitVatRate: number | null = null;
-  if (!isVatExempt) {
-    const rateMatch =
-      /tva\s*(?:\(|à|de|:|\s+)?\s*(20|10|5[.,]5|5|8[.,]5|2[.,]1)(?:[.,]00?)?\s*%/i.exec(
-        pdfText
-      ) ??
-      /\b(20|10|5[.,]5|5)(?:[.,]00?)?\s*%\s*(?:de\s+)?tva\b/i.exec(pdfText);
-    if (rateMatch) {
-      explicitVatRate = Number(rateMatch[1].replace(",", "."));
-    }
-  }
-
   let montantHT = findLastLabeledAmount(
     pdfText,
     /(?:total\s+(?:net\s+|g[ée]n[ée]ral\s+)?ht|montant\s+(?:total\s+)?ht|sous[- ]?total\s*(?:ht)?|total\s+hors\s+taxes?|base\s+ht|subtotal)\b/i
   );
 
-  const montantTVA = isVatExempt
-    ? 0
-    : findLastLabeledAmount(
-        pdfText,
-        /(?:total\s+tva|montant\s+(?:de\s+la\s+)?tva|tva\s*(?:\(\s*\d+(?:[.,]\d+)?\s*%\s*\)|\d+(?:[.,]\d+)?\s*%)?)\s*[:|]?\s*(?!non\s+applicable)/i
-      );
-
-  let montantTTC = findLastLabeledAmount(
-    pdfText,
-    /(?:net\s+[àa]\s+payer(?:\s+ttc)?|total\s+(?:g[ée]n[ée]ral\s+)?ttc|montant\s+(?:total\s+)?ttc|total\s+[àa]\s+payer|montant\s+d[ûu]|grand\s+total|amount\s+due)\b/i
-  );
-
-  // Fallback if only "Total" without HT/TTC is written
-  if (montantHT === 0 && montantTTC === 0) {
-    const genericTotal = findLastLabeledAmount(
+  // If no explicit HT label was found, recover HT from TTC - TVA or from a single generic Total
+  if (montantHT === 0) {
+    const montantTVA = findLastLabeledAmount(
       pdfText,
-      /(?:^|\|\s*)(?:total|montant\s+total)\s*[:|]?/i
+      /(?:total\s+tva|montant\s+(?:de\s+la\s+)?tva|tva\s*(?:\(\s*\d+(?:[.,]\d+)?\s*%\s*\)|\d+(?:[.,]\d+)?\s*%)?)\s*[:|]?\s*(?!non\s+applicable)/i
     );
-    if (genericTotal > 0) {
-      if (isVatExempt || (explicitVatRate === null && montantTVA === 0)) {
-        // No VAT mentioned anywhere -> treat as 0% VAT (HT = TTC)
-        montantHT = genericTotal;
-        montantTTC = genericTotal;
+    const montantTTC = findLastLabeledAmount(
+      pdfText,
+      /(?:net\s+[àa]\s+payer(?:\s+ttc)?|total\s+(?:g[ée]n[ée]ral\s+)?ttc|montant\s+(?:total\s+)?ttc|total\s+[àa]\s+payer|montant\s+d[ûu]|grand\s+total|amount\s+due)\b/i
+    );
+
+    if (montantTTC > 0) {
+      if (montantTVA > 0 && montantTVA < montantTTC) {
+        montantHT = round2(montantTTC - montantTVA);
       } else {
-        montantTTC = genericTotal;
+        montantHT = montantTTC;
+      }
+    } else {
+      const genericTotal = findLastLabeledAmount(
+        pdfText,
+        /(?:^|\|\s*)(?:total|montant\s+total)\s*[:|]?/i
+      );
+      if (genericTotal > 0) {
+        montantHT = genericTotal;
       }
     }
   }
 
-  // Determine if VAT actually exists on the invoice
-  let rawVatRate = 0;
-
-  if (isVatExempt) {
-    rawVatRate = 0;
-    if (montantHT > 0 && montantTTC === 0) montantTTC = montantHT;
-    if (montantTTC > 0 && montantHT === 0) montantHT = montantTTC;
-  } else if (montantHT > 0 && montantTTC > 0) {
-    if (montantTTC < montantHT) {
-      const tmp = montantHT;
-      montantHT = montantTTC;
-      montantTTC = tmp;
-    }
-    const diff = round2(montantTTC - montantHT);
-    if (diff <= 0.01) {
-      // HT == TTC -> No VAT (0%)!
-      rawVatRate = 0;
-    } else {
-      rawVatRate = round2((diff / montantHT) * 100);
-    }
-  } else if (montantHT > 0 && montantTTC === 0) {
-    if (montantTVA > 0 && montantTVA < montantHT) {
-      montantTTC = round2(montantHT + montantTVA);
-      rawVatRate = round2((montantTVA / montantHT) * 100);
-    } else if (explicitVatRate !== null && explicitVatRate > 0) {
-      rawVatRate = explicitVatRate;
-      montantTTC = round2(montantHT * (1 + snapToStandardVatRate(rawVatRate) / 100));
-    } else {
-      // No TVA line and no TVA rate detected -> default to 0%
-      rawVatRate = 0;
-      montantTTC = montantHT;
-    }
-  } else if (montantTTC > 0 && montantHT === 0) {
-    if (montantTVA > 0 && montantTVA < montantTTC) {
-      montantHT = round2(montantTTC - montantTVA);
-      rawVatRate = montantHT > 0 ? round2((montantTVA / montantHT) * 100) : 0;
-    } else if (explicitVatRate !== null && explicitVatRate > 0) {
-      rawVatRate = explicitVatRate;
-      const snapped = snapToStandardVatRate(rawVatRate);
-      montantHT = round2(montantTTC / (1 + snapped / 100));
-    } else {
-      // No TVA detected -> 0%
-      rawVatRate = 0;
-      montantHT = montantTTC;
-    }
-  } else if (explicitVatRate !== null && explicitVatRate > 0) {
-    rawVatRate = explicitVatRate;
-  }
-
-  const finalVatRate = snapToStandardVatRate(rawVatRate);
-  const hasVat = finalVatRate > 0;
-
+  const cleanHt = round2(Math.max(0, montantHT));
   return {
-    montantHT: round2(montantHT),
-    tvaRate: finalVatRate,
-    montantTTC: round2(montantTTC),
-    hasVat,
+    montantHT: cleanHt,
+    tvaRate: 0,
+    montantTTC: cleanHt,
   };
 }
 

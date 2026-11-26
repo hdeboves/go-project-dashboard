@@ -15,7 +15,6 @@ import {
   extractInvoiceFieldsFromText,
   isOwnCompanyName,
   matchQuoteForInvoice,
-  snapToStandardVatRate,
 } from "@/lib/invoices/local-extractor";
 import { normalizeProjectCodesList } from "@/lib/invoices/accounting-email";
 import {
@@ -433,31 +432,33 @@ export async function processInvoicePdfIngestion(params: {
     pdfBuffer.length <= MAX_DB_PDF_BYTES ? pdfBuffer.toString("base64") : undefined;
 
   const amountHt = round2(Math.max(0, extracted.montantHT));
-  const rawTvaRate = Number.isFinite(extracted.tvaRate)
-    ? Math.max(0, extracted.tvaRate)
-    : 0;
-  let tvaAmount = round2(Math.max(0, extracted.montantTTC - amountHt));
-  if (
-    tvaAmount === 0 &&
-    rawTvaRate > 0 &&
-    amountHt > 0 &&
-    extracted.montantTTC <= amountHt
-  ) {
-    tvaAmount = round2(amountHt * (rawTvaRate / 100));
-  }
-  const amountTtc =
-    extracted.montantTTC > 0
-      ? round2(extracted.montantTTC)
-      : round2(amountHt + tvaAmount);
+  let tvaAmount = 0;
+  let amountTtc = amountHt;
 
-  // Derive clean standard VAT rate (0%, 5%, 10%, 20%) & whether VAT was detected
-  const inferredRate =
-    amountHt > 0 && amountTtc > amountHt + 0.01
-      ? ((amountTtc - amountHt) / amountHt) * 100
-      : rawTvaRate;
-  const detectedVatRate = snapToStandardVatRate(inferredRate);
-  const hasVatDetected = detectedVatRate > 0;
-  extracted.tvaRate = detectedVatRate;
+  if (useSequentialInvoiceNumber) {
+    // Interactive uploads track Montant HT only (TVA removed by user request)
+    tvaAmount = 0;
+    amountTtc = amountHt;
+    extracted.tvaRate = 0;
+    extracted.montantTTC = amountHt;
+  } else {
+    const rawTvaRate = Number.isFinite(extracted.tvaRate)
+      ? Math.max(0, extracted.tvaRate)
+      : 0;
+    tvaAmount = round2(Math.max(0, extracted.montantTTC - amountHt));
+    if (
+      tvaAmount === 0 &&
+      rawTvaRate > 0 &&
+      amountHt > 0 &&
+      extracted.montantTTC <= amountHt
+    ) {
+      tvaAmount = round2(amountHt * (rawTvaRate / 100));
+    }
+    amountTtc =
+      extracted.montantTTC > 0
+        ? round2(extracted.montantTTC)
+        : round2(amountHt + tvaAmount);
+  }
 
   // Keep supplier's raw invoice reference, and compute sequential 1..N number if requested
   const supplierInvoiceNumber = (extracted.numeroFacture ?? "").trim();
@@ -553,7 +554,6 @@ export async function processInvoicePdfIngestion(params: {
         extractedJson: JSON.stringify({
           ...extracted,
           supplierInvoiceNumber: supplierInvoiceNumber || null,
-          hasVatDetected,
           localPdfTextSnippet: localPdfText.slice(0, 500),
           cpCheck,
           attachmentId: attachmentId ?? null,
@@ -670,7 +670,6 @@ export async function processInvoicePdfIngestion(params: {
       extractedJson: JSON.stringify({
         ...extracted,
         supplierInvoiceNumber: supplierInvoiceNumber || null,
-        hasVatDetected,
         rawWarnings: warnings,
         isDuplicate,
         duplicateOfInvoiceId: duplicateOf?.id ?? null,
@@ -686,7 +685,6 @@ export async function processInvoicePdfIngestion(params: {
       extractedJson: JSON.stringify({
         ...extracted,
         supplierInvoiceNumber: supplierInvoiceNumber || null,
-        hasVatDetected,
         rawWarnings: warnings,
         isDuplicate,
         duplicateOfInvoiceId: duplicateOf?.id ?? null,

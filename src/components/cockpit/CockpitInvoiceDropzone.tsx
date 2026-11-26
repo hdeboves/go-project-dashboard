@@ -25,12 +25,6 @@ import {
   requiresVigilanceAttestation,
   type AccountingCcEntry,
 } from "@/lib/invoices/accounting-email";
-import {
-  SUPPORTED_VAT_RATES,
-  computeTtcFromHtAndVat,
-  snapToStandardVatRate,
-  type SupportedVatRate,
-} from "@/lib/invoices/local-extractor";
 import { buildValidatedInvoiceFilename } from "@/lib/shared/filenames";
 import { formatEur, normalizeIsoDate } from "@/lib/shared/format";
 import { showToast } from "@/lib/toast";
@@ -100,53 +94,19 @@ interface EmailPreviewPayload {
   vigilanceFilename: string | null;
 }
 
-function parseInvoiceExtraMeta(inv: CockpitInvoiceItem): {
-  vatRate: SupportedVatRate;
-  hasVatDetected: boolean;
-  supplierInvoiceNumber: string | null;
-} {
-  let parsedRate: number | null = null;
-  let hasVatFlag: boolean | null = null;
-  let supplierInvoiceNumber: string | null = null;
-
-  if (inv.extractedJson) {
-    try {
-      const parsed = JSON.parse(inv.extractedJson) as {
-        tvaRate?: number;
-        hasVatDetected?: boolean;
-        supplierInvoiceNumber?: string | null;
-      };
-      if (typeof parsed.tvaRate === "number" && Number.isFinite(parsed.tvaRate)) {
-        parsedRate = parsed.tvaRate;
-      }
-      if (typeof parsed.hasVatDetected === "boolean") {
-        hasVatFlag = parsed.hasVatDetected;
-      }
-      if (typeof parsed.supplierInvoiceNumber === "string" && parsed.supplierInvoiceNumber.trim()) {
-        supplierInvoiceNumber = parsed.supplierInvoiceNumber.trim();
-      }
-    } catch {
-      // ignore invalid JSON
-    }
+function parseSupplierInvoiceRef(inv: CockpitInvoiceItem): string | null {
+  if (!inv.extractedJson) return null;
+  try {
+    const parsed = JSON.parse(inv.extractedJson) as {
+      supplierInvoiceNumber?: string | null;
+    };
+    return typeof parsed.supplierInvoiceNumber === "string" &&
+      parsed.supplierInvoiceNumber.trim()
+      ? parsed.supplierInvoiceNumber.trim()
+      : null;
+  } catch {
+    return null;
   }
-
-  let effectiveRate: number;
-  if (inv.amountHt > 0 && inv.amountTtc > inv.amountHt + 0.01) {
-    effectiveRate = ((inv.amountTtc - inv.amountHt) / inv.amountHt) * 100;
-  } else if (inv.tvaAmount > 0 && inv.amountHt > 0) {
-    effectiveRate = (inv.tvaAmount / inv.amountHt) * 100;
-  } else if (parsedRate !== null) {
-    effectiveRate = parsedRate;
-  } else {
-    effectiveRate = 0;
-  }
-
-  const vatRate = snapToStandardVatRate(effectiveRate);
-  return {
-    vatRate,
-    hasVatDetected: hasVatFlag ?? vatRate > 0,
-    supplierInvoiceNumber,
-  };
 }
 
 function parseInitialCodes(
@@ -203,12 +163,9 @@ export function CockpitInvoiceDropzone({
   const [invoiceNumber, setInvoiceNumber] = useState("");
   const [invoiceDate, setInvoiceDate] = useState("");
   const [amountHt, setAmountHt] = useState("");
-  const [tvaRate, setTvaRate] = useState<SupportedVatRate>(0);
-  const [hasVatDetected, setHasVatDetected] = useState(false);
   const [supplierInvoiceRef, setSupplierInvoiceRef] = useState<string | null>(
     null
   );
-  const [amountTtc, setAmountTtc] = useState("");
   const [prestationLabel, setPrestationLabel] = useState("");
   const [budgetLineId, setBudgetLineId] = useState("");
   const [quoteId, setQuoteId] = useState("");
@@ -254,15 +211,7 @@ export function CockpitInvoiceDropzone({
       normalizeIsoDate(inv.invoiceDate) ?? new Date().toISOString().slice(0, 10)
     );
     setAmountHt(String(inv.amountHt ?? 0));
-    const meta = parseInvoiceExtraMeta(inv);
-    setTvaRate(meta.vatRate);
-    setHasVatDetected(meta.hasVatDetected);
-    setSupplierInvoiceRef(meta.supplierInvoiceNumber);
-    const computedInitialTtc =
-      inv.amountTtc && inv.amountTtc > 0
-        ? inv.amountTtc
-        : computeTtcFromHtAndVat(inv.amountHt ?? 0, meta.vatRate).amountTtc;
-    setAmountTtc(String(computedInitialTtc));
+    setSupplierInvoiceRef(parseSupplierInvoiceRef(inv));
     setPrestationLabel(inv.prestationLabel ?? "Prestation");
     setBudgetLineId(
       inv.budgetLineId ?? (budgetLines.length === 1 ? budgetLines[0].id : "")
@@ -297,7 +246,8 @@ export function CockpitInvoiceDropzone({
         invoiceNumber: invoiceNumber.trim() || currentInvoice.invoiceNumber,
         invoiceDate: invoiceDate.trim() || currentInvoice.invoiceDate,
         amountHt: Number(amountHt) || 0,
-        amountTtc: Number(amountTtc) || 0,
+        tvaAmount: 0,
+        amountTtc: Number(amountHt) || 0,
         prestationLabel: prestationLabel.trim() || currentInvoice.prestationLabel,
         budgetLineId: budgetLineId || null,
         quoteId: quoteId || null,
@@ -315,7 +265,7 @@ export function CockpitInvoiceDropzone({
           invoiceNumber: invoiceNumber.trim(),
           invoiceDate: invoiceDate.trim(),
           amountHt: Number(amountHt) || 0,
-          amountTtc: Number(amountTtc) || 0,
+          amountTtc: Number(amountHt) || 0,
           prestationLabel: prestationLabel.trim(),
           budgetLineId: budgetLineId || null,
           quoteId: quoteId || null,
@@ -523,8 +473,7 @@ export function CockpitInvoiceDropzone({
   }
 
   const parsedHt = Number(amountHt) || 0;
-  const parsedTtc = Number(amountTtc) || 0;
-  const needsVigilance = requiresVigilanceAttestation(parsedHt, parsedTtc);
+  const needsVigilance = requiresVigilanceAttestation(parsedHt, parsedHt);
 
   const warnings = useMemo(
     () =>
@@ -533,7 +482,7 @@ export function CockpitInvoiceDropzone({
         invoiceNumber,
         invoiceDate,
         amountHt: parsedHt,
-        amountTtc: parsedTtc,
+        amountTtc: parsedHt,
         budgetLineId,
         activeProjectCode: project.codeProjet,
         projectCodes,
@@ -545,7 +494,6 @@ export function CockpitInvoiceDropzone({
       invoiceNumber,
       invoiceDate,
       parsedHt,
-      parsedTtc,
       budgetLineId,
       project.codeProjet,
       projectCodes,
@@ -593,8 +541,8 @@ export function CockpitInvoiceDropzone({
             invoiceNumber: invoiceNumber.trim(),
             invoiceDate: invoiceDate.trim(),
             amountHt: parsedHt,
-            tvaAmount: Math.max(0, Math.round((parsedTtc - parsedHt) * 100) / 100),
-            amountTtc: parsedTtc,
+            tvaAmount: 0,
+            amountTtc: parsedHt,
             budgetLineId,
             projectCodes,
             multiProjectConfirmed: true,
@@ -622,7 +570,8 @@ export function CockpitInvoiceDropzone({
         invoiceNumber: invoiceNumber.trim(),
         invoiceDate: invoiceDate.trim(),
         amountHt: parsedHt,
-        amountTtc: parsedTtc,
+        tvaAmount: 0,
+        amountTtc: parsedHt,
         prestationLabel: prestationLabel.trim() || "Prestation",
         budgetLineId,
         quoteId: quoteId || null,
@@ -657,8 +606,8 @@ export function CockpitInvoiceDropzone({
             invoiceNumber: invoiceNumber.trim(),
             invoiceDate: invoiceDate.trim(),
             amountHt: parsedHt,
-            tvaAmount: Math.max(0, Math.round((parsedTtc - parsedHt) * 100) / 100),
-            amountTtc: parsedTtc,
+            tvaAmount: 0,
+            amountTtc: parsedHt,
             prestationLabel: prestationLabel.trim() || "Prestation",
             budgetLineId,
             quoteId: quoteId || null,
@@ -1045,97 +994,9 @@ export function CockpitInvoiceDropzone({
                           step="0.01"
                           min="0"
                           value={amountHt}
-                          onChange={(e) => {
-                            const val = e.target.value;
-                            setAmountHt(val);
-                            const num = Number(val);
-                            if (Number.isFinite(num)) {
-                              setAmountTtc(
-                                String(
-                                  computeTtcFromHtAndVat(num, tvaRate).amountTtc
-                                )
-                              );
-                            }
-                          }}
+                          onChange={(e) => setAmountHt(e.target.value)}
                           className="w-full rounded-xl border border-slate-200 bg-slate-50/70 px-3 py-1.5 font-mono text-xs tabular-nums text-slate-900 focus:border-rose-500 focus:bg-white focus:outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-white"
                         />
-                      </div>
-
-                      <div>
-                        <label className="mb-1 flex items-center justify-between text-[11px] font-semibold text-slate-600 dark:text-slate-300">
-                          <span>Montant TTC (€)</span>
-                          <span className="font-mono text-[10px] font-normal text-slate-400">
-                            TVA : {formatEur(Math.max(0, parsedTtc - parsedHt))}
-                          </span>
-                        </label>
-                        <input
-                          type="number"
-                          step="0.01"
-                          min="0"
-                          value={amountTtc}
-                          onChange={(e) => setAmountTtc(e.target.value)}
-                          className="w-full rounded-xl border border-slate-200 bg-slate-50/70 px-3 py-1.5 font-mono text-xs tabular-nums text-slate-900 focus:border-rose-500 focus:bg-white focus:outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-white"
-                        />
-                      </div>
-
-                      {/* TVA Rate Selector (0%, 5%, 10%, 20%) with Automatic TTC Recalculation & Verification Reminder */}
-                      <div className="space-y-2 rounded-xl border border-slate-200/80 bg-slate-50/60 p-3 sm:col-span-2 dark:border-slate-800 dark:bg-slate-900/40">
-                        <div className="flex flex-wrap items-center justify-between gap-2">
-                          <label className="text-[11px] font-bold text-slate-700 dark:text-slate-200">
-                            Taux de TVA appliqué (recalcul TTC automatique)
-                          </label>
-                          <div
-                            data-testid="vat-rate-selector"
-                            className="inline-flex items-center gap-1"
-                          >
-                            {SUPPORTED_VAT_RATES.map((rate) => {
-                              const active = tvaRate === rate;
-                              return (
-                                <button
-                                  key={rate}
-                                  type="button"
-                                  data-testid={`vat-rate-btn-${rate}`}
-                                  onClick={() => {
-                                    setTvaRate(rate);
-                                    const next = computeTtcFromHtAndVat(
-                                      parsedHt,
-                                      rate
-                                    );
-                                    setAmountTtc(String(next.amountTtc));
-                                  }}
-                                  className={`rounded-lg px-2.5 py-1 font-mono text-[11px] font-bold transition-colors ${
-                                    active
-                                      ? "bg-rose-600 text-white shadow-2xs"
-                                      : "border border-slate-200 bg-white text-slate-700 hover:border-rose-300 hover:bg-rose-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
-                                  }`}
-                                >
-                                  {rate === 0 ? "0 % (Sans TVA)" : `${rate} %`}
-                                </button>
-                              );
-                            })}
-                          </div>
-                        </div>
-
-                        {tvaRate > 0 || hasVatDetected ? (
-                          <div
-                            data-testid="vat-verification-reminder"
-                            className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50/80 px-2.5 py-1.5 text-[11px] text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200"
-                          >
-                            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-600 dark:text-amber-400" />
-                            <span>
-                              <strong>
-                                TVA détectée ({tvaRate} %) :
-                              </strong>{" "}
-                              pensez à vérifier le pourcentage de TVA sur la
-                              facture PDF (ajustable entre 5 %, 10 % et 20 %).
-                            </span>
-                          </div>
-                        ) : (
-                          <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                            Aucune TVA détectée sur la facture — taux défini par
-                            défaut à <strong>0 %</strong> (HT = TTC).
-                          </p>
-                        )}
                       </div>
 
                       <div className="sm:col-span-2">
