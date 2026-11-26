@@ -194,6 +194,7 @@ export function CockpitInvoiceDropzone({
   const [modalError, setModalError] = useState<string | null>(null);
   const [mobilePane, setMobilePane] = useState<"pdf" | "form">("form");
   const blobUrlsRef = useRef<Record<string, string>>({});
+  const userEditedNumberRef = useRef(false);
 
   const currentInvoice = queue[queueIdx] ?? null;
 
@@ -225,6 +226,7 @@ export function CockpitInvoiceDropzone({
     setEmailPreview(null);
     setAcknowledgeWarnings(false);
     setConfirmDelete(false);
+    userEditedNumberRef.current = false;
     setVendorName(
       inv.vendorName && inv.vendorName !== "Prestataire à vérifier"
         ? inv.vendorName
@@ -248,11 +250,69 @@ export function CockpitInvoiceDropzone({
     setVigilanceName(inv.vigilanceFilename ?? null);
   }
 
-  function openVerifierFor(items: CockpitInvoiceItem[], startIndex = 0) {
+  async function syncPendingNumberingWithDrive(activeInvoiceId?: string) {
+    try {
+      const res = await fetch(
+        `/api/projects/${project.id}/invoices?syncNumbering=1`,
+        { cache: "no-store" }
+      );
+      if (!res.ok) return;
+      const json = (await res.json()) as {
+        invoices?: CockpitInvoiceItem[];
+      };
+      if (!Array.isArray(json.invoices)) return;
+
+      const byId = new Map(json.invoices.map((inv) => [inv.id, inv]));
+
+      setPendingList((prev) =>
+        prev.map((item) => {
+          const fresh = byId.get(item.id);
+          return fresh
+            ? {
+                ...item,
+                invoiceNumber: fresh.invoiceNumber,
+                renamedFilename: fresh.renamedFilename,
+              }
+            : item;
+        })
+      );
+
+      setQueue((prev) =>
+        prev.map((item) => {
+          const fresh = byId.get(item.id);
+          return fresh
+            ? {
+                ...item,
+                invoiceNumber: fresh.invoiceNumber,
+                renamedFilename: fresh.renamedFilename,
+              }
+            : item;
+        })
+      );
+
+      if (activeInvoiceId && !userEditedNumberRef.current) {
+        const freshActive = byId.get(activeInvoiceId);
+        if (freshActive?.invoiceNumber) {
+          setInvoiceNumber(freshActive.invoiceNumber);
+        }
+      }
+    } catch {
+      // Non-fatal: keep current local numbering
+    }
+  }
+
+  function openVerifierFor(
+    items: CockpitInvoiceItem[],
+    startIndex = 0,
+    syncWithDrive = false
+  ) {
     if (items.length === 0) return;
     setQueue(items);
     setQueueIdx(startIndex);
     hydrateStep1(items[startIndex]);
+    if (syncWithDrive) {
+      void syncPendingNumberingWithDrive(items[startIndex]?.id);
+    }
   }
 
   function closeModal(persistCurrentDraft = false) {
@@ -315,7 +375,14 @@ export function CockpitInvoiceDropzone({
         `/api/projects/${project.id}/invoices/${targetId}`,
         { method: "DELETE" }
       );
-      const json = (await res.json().catch(() => ({}))) as { error?: string };
+      const json = (await res.json().catch(() => ({}))) as {
+        error?: string;
+        updatedPendingInvoices?: Array<{
+          id: string;
+          invoiceNumber: string;
+          renamedFilename: string;
+        }>;
+      };
       if (!res.ok) {
         setModalError(
           json.error ?? "Impossible de supprimer cette facture."
@@ -334,10 +401,28 @@ export function CockpitInvoiceDropzone({
         });
       }
 
-      const remainingPending = pendingList.filter((p) => p.id !== targetId);
+      const updatedById = new Map(
+        (json.updatedPendingInvoices ?? []).map((u) => [u.id, u])
+      );
+      const applyResyncedNumbering = (item: CockpitInvoiceItem) => {
+        const u = updatedById.get(item.id);
+        return u
+          ? {
+              ...item,
+              invoiceNumber: u.invoiceNumber,
+              renamedFilename: u.renamedFilename,
+            }
+          : item;
+      };
+
+      const remainingPending = pendingList
+        .filter((p) => p.id !== targetId)
+        .map(applyResyncedNumbering);
       setPendingList(remainingPending);
 
-      const remainingQueue = queue.filter((q) => q.id !== targetId);
+      const remainingQueue = queue
+        .filter((q) => q.id !== targetId)
+        .map(applyResyncedNumbering);
       setConfirmDelete(false);
       showToast("Facture supprimée.");
       window.dispatchEvent(new CustomEvent("go:shell-refresh"));
@@ -813,7 +898,7 @@ export function CockpitInvoiceDropzone({
             </span>
             <button
               type="button"
-              onClick={() => openVerifierFor(pendingList, 0)}
+              onClick={() => openVerifierFor(pendingList, 0, true)}
               className="inline-flex items-center gap-1 rounded-lg bg-indigo-600 px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-indigo-700"
             >
               Ouvrir visionneuse
@@ -910,43 +995,6 @@ export function CockpitInvoiceDropzone({
               </div>
 
               <div className="flex flex-wrap items-center gap-2">
-                {confirmDelete ? (
-                  <div
-                    data-testid="confirm-delete-invoice-bar"
-                    className="inline-flex items-center gap-1.5 rounded-lg border border-rose-300 bg-rose-50 px-2.5 py-1 text-xs font-semibold text-rose-800 dark:border-rose-500/40 dark:bg-rose-500/15 dark:text-rose-200"
-                  >
-                    <span>Supprimer cette facture ?</span>
-                    <button
-                      type="button"
-                      disabled={deletingInvoice}
-                      onClick={() => void handleDeleteCurrentInvoice()}
-                      data-testid="confirm-delete-invoice-yes"
-                      className="rounded-md bg-rose-600 px-2 py-0.5 text-[11px] font-semibold text-white hover:bg-rose-700 disabled:opacity-50"
-                    >
-                      {deletingInvoice ? "..." : "Oui"}
-                    </button>
-                    <button
-                      type="button"
-                      disabled={deletingInvoice}
-                      onClick={() => setConfirmDelete(false)}
-                      className="rounded-md border border-rose-300 bg-white px-2 py-0.5 text-[11px] font-medium text-rose-700 hover:bg-rose-100 dark:border-rose-500/40 dark:bg-slate-900 dark:text-rose-200"
-                    >
-                      Non
-                    </button>
-                  </div>
-                ) : (
-                  <button
-                    type="button"
-                    disabled={deletingInvoice || submittingDraft}
-                    onClick={() => setConfirmDelete(true)}
-                    data-testid="delete-invoice-in-modal-btn"
-                    title="Supprimer cette facture si vous ne souhaitez plus la vérifier"
-                    className="inline-flex items-center gap-1 rounded-lg border border-rose-200 bg-rose-50/70 px-2.5 py-1.5 text-xs font-semibold text-rose-700 hover:bg-rose-100 disabled:opacity-50 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-300 dark:hover:bg-rose-500/20"
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                    Supprimer
-                  </button>
-                )}
                 <a
                   href={currentPdfUrl}
                   target="_blank"
@@ -1082,8 +1130,11 @@ export function CockpitInvoiceDropzone({
                         <input
                           type="text"
                           value={invoiceNumber}
-                          onChange={(e) => setInvoiceNumber(e.target.value)}
-                          className="w-full rounded-xl border border-slate-200 bg-slate-50/70 px-3 py-1.5 font-mono text-xs text-slate-900 focus:border-rose-500 focus:bg-white focus:outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-white"
+                          onChange={(e) => {
+                            userEditedNumberRef.current = true;
+                            setInvoiceNumber(e.target.value);
+                          }}
+                          className="w-full rounded-xl border border-slate-200 bg-slate-50/70 px-3 py-1.5 font-mono text-xs text-slate-900 focus:border-indigo-500 focus:bg-white focus:outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-white"
                         />
                         {supplierInvoiceRef &&
                           supplierInvoiceRef !== invoiceNumber.trim() && (
@@ -1389,15 +1440,44 @@ export function CockpitInvoiceDropzone({
 
                     {/* Step 1 -> Step 2 CTA */}
                     <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 pt-3 dark:border-slate-800">
-                      <button
-                        type="button"
-                        disabled={deletingInvoice}
-                        onClick={() => setConfirmDelete(true)}
-                        className="inline-flex items-center gap-1 rounded-xl border border-rose-200 bg-white px-3 py-2 text-xs font-medium text-rose-600 hover:bg-rose-50 disabled:opacity-40 dark:border-rose-500/30 dark:bg-slate-800 dark:text-rose-400 dark:hover:bg-rose-500/15"
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                        Supprimer
-                      </button>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <button
+                          type="button"
+                          disabled={deletingInvoice || submittingDraft}
+                          onClick={() => setConfirmDelete((prev) => !prev)}
+                          data-testid="delete-invoice-in-modal-btn"
+                          title="Supprimer cette facture si vous ne souhaitez plus la vérifier"
+                          className="inline-flex items-center gap-1 rounded-xl border border-rose-200 bg-white px-3 py-2 text-xs font-medium text-rose-600 hover:bg-rose-50 disabled:opacity-40 dark:border-rose-500/30 dark:bg-slate-800 dark:text-rose-400 dark:hover:bg-rose-500/15"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                          Supprimer
+                        </button>
+                        {confirmDelete && (
+                          <div
+                            data-testid="confirm-delete-invoice-bar"
+                            className="inline-flex items-center gap-1.5 rounded-xl border border-rose-300 bg-rose-50 px-2.5 py-1.5 text-xs font-semibold text-rose-800 dark:border-rose-500/40 dark:bg-rose-500/15 dark:text-rose-200"
+                          >
+                            <span>Confirmer ?</span>
+                            <button
+                              type="button"
+                              disabled={deletingInvoice}
+                              onClick={() => void handleDeleteCurrentInvoice()}
+                              data-testid="confirm-delete-invoice-yes"
+                              className="rounded-md bg-rose-600 px-2 py-0.5 text-[11px] font-semibold text-white hover:bg-rose-700 disabled:opacity-50"
+                            >
+                              {deletingInvoice ? "..." : "Oui"}
+                            </button>
+                            <button
+                              type="button"
+                              disabled={deletingInvoice}
+                              onClick={() => setConfirmDelete(false)}
+                              className="rounded-md border border-rose-300 bg-white px-2 py-0.5 text-[11px] font-medium text-rose-700 hover:bg-rose-100 dark:border-rose-500/40 dark:bg-slate-900 dark:text-rose-200"
+                            >
+                              Non
+                            </button>
+                          </div>
+                        )}
+                      </div>
                       <div className="flex items-center gap-2">
                         <button
                           type="button"
@@ -1411,7 +1491,7 @@ export function CockpitInvoiceDropzone({
                           disabled={loadingPreview || blockingErrors.length > 0}
                           onClick={() => void handleProceedToStep2()}
                           data-testid="step1-confirm-verify-btn"
-                          className="inline-flex items-center gap-1.5 rounded-xl bg-rose-600 px-4 py-2 text-xs font-semibold text-white hover:bg-rose-700 disabled:opacity-40"
+                          className="inline-flex items-center gap-1.5 rounded-xl bg-indigo-600 px-4 py-2 text-xs font-semibold text-white hover:bg-indigo-700 disabled:opacity-40"
                         >
                           {loadingPreview
                             ? "Préparation du mail..."
@@ -1567,7 +1647,7 @@ export function CockpitInvoiceDropzone({
                         disabled={submittingDraft}
                         onClick={() => void handleConfirmAndCreateGmailDraft()}
                         data-testid="step2-create-gmail-draft-btn"
-                        className="inline-flex items-center gap-1.5 rounded-xl bg-rose-600 px-4 py-2 text-xs font-semibold text-white hover:bg-rose-700 disabled:opacity-50"
+                        className="inline-flex items-center gap-1.5 rounded-xl bg-indigo-600 px-4 py-2 text-xs font-semibold text-white hover:bg-indigo-700 disabled:opacity-50"
                       >
                         <Mail className="h-4 w-4" />
                         {submittingDraft

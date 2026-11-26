@@ -8,8 +8,10 @@ import {
   getCurrentUser,
 } from "@/lib/auth/session";
 import { round2 } from "@/lib/budget/calculator";
+import { getServices } from "@/lib/container";
 import { normalizeProjectCodesList } from "@/lib/invoices/accounting-email";
 import { getStagedInvoicePdfPath, stripInvoiceBinaries } from "@/lib/invoices/ingest";
+import { resyncPendingInvoicesNumbering } from "@/lib/invoices/numbering";
 import { prisma } from "@/lib/prisma";
 import { getParisTodayIso } from "@/lib/shared/dates";
 import { buildValidatedInvoiceFilename } from "@/lib/shared/filenames";
@@ -172,11 +174,17 @@ export async function DELETE(
     const currentUser = await getCurrentUser(prisma);
     await assertProjectAccess(prisma, projectId, currentUser, "EDIT");
 
-    const invoice = await prisma.invoice.findFirst({
-      where: { id: invoiceId, projectId },
-    });
+    const [project, invoice] = await Promise.all([
+      prisma.project.findUnique({
+        where: { id: projectId },
+        select: { id: true, codeProjet: true },
+      }),
+      prisma.invoice.findFirst({
+        where: { id: invoiceId, projectId },
+      }),
+    ]);
 
-    if (!invoice) {
+    if (!project || !invoice) {
       return NextResponse.json(
         { error: "Facture introuvable pour ce projet." },
         { status: 404 }
@@ -208,6 +216,19 @@ export async function DELETE(
 
     await prisma.invoice.delete({ where: { id: invoice.id } });
 
+    const { getGoogleGateway } = getServices();
+    const resync = await resyncPendingInvoicesNumbering({
+      prisma,
+      projectId,
+      codeProjet: project.codeProjet,
+      uploadedById: currentUser?.id ?? null,
+      getGoogleGateway,
+    }).catch(() => ({
+      baseSeq: 0,
+      source: "db_fallback" as const,
+      updatedInvoices: [],
+    }));
+
     await prisma.auditLog.create({
       data: {
         projectId,
@@ -225,7 +246,12 @@ export async function DELETE(
       },
     });
 
-    return NextResponse.json({ ok: true, deletedId: invoice.id });
+    return NextResponse.json({
+      ok: true,
+      deletedId: invoice.id,
+      driveBaseSeq: resync.baseSeq,
+      updatedPendingInvoices: resync.updatedInvoices,
+    });
   } catch (err) {
     return toErrorResponse(err);
   }

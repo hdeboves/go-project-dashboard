@@ -9,13 +9,17 @@ import {
   CpConflictError,
   checkCodeProjetConflict,
 } from "@/lib/isolation/cp-guard";
-import type { GeminiPort, InvoiceExtractionOutput } from "@/lib/ports";
+import type {
+  GeminiPort,
+  GoogleWorkspacePort,
+  InvoiceExtractionOutput,
+} from "@/lib/ports";
 import {
-  computeNextSequentialInvoiceNumber,
   extractInvoiceFieldsFromText,
   isOwnCompanyName,
   matchQuoteForInvoice,
 } from "@/lib/invoices/local-extractor";
+import { computeNextInvoiceNumberFromDrive } from "@/lib/invoices/numbering";
 import { normalizeProjectCodesList } from "@/lib/invoices/accounting-email";
 import {
   extractRichTextFromPdfBuffer,
@@ -323,6 +327,7 @@ export function suggestBudgetLineForInvoice(
 export async function processInvoicePdfIngestion(params: {
   prisma: PrismaClient;
   getGeminiClient: () => Promise<GeminiPort>;
+  getGoogleGateway?: (projectId?: string) => Promise<GoogleWorkspacePort>;
   project: Project;
   pdfBuffer: Buffer;
   filename: string;
@@ -340,6 +345,7 @@ export async function processInvoicePdfIngestion(params: {
   const {
     prisma,
     getGeminiClient,
+    getGoogleGateway,
     project,
     pdfBuffer,
     filename,
@@ -502,23 +508,13 @@ export async function processInvoicePdfIngestion(params: {
 
   let assignedInvoiceNumber = supplierInvoiceNumber;
   if (useSequentialInvoiceNumber) {
-    const fallbackNext = Number.parseInt(
-      computeNextSequentialInvoiceNumber(
-        existingProjectInvoices.map((inv) => inv.invoiceNumber)
-      ),
-      10
-    );
-    const bumped = await prisma.project.update({
-      where: { id: project.id },
-      data: {
-        nextInvoiceSeq:
-          project.nextInvoiceSeq >= fallbackNext - 1
-            ? { increment: 1 }
-            : fallbackNext,
-      },
-      select: { nextInvoiceSeq: true },
+    const seqResult = await computeNextInvoiceNumberFromDrive({
+      prisma,
+      projectId: project.id,
+      uploadedById,
+      getGoogleGateway,
     });
-    assignedInvoiceNumber = String(bumped.nextInvoiceSeq);
+    assignedInvoiceNumber = seqResult.nextNumber;
   }
 
   // Auto-attach valid Vendor URSSAF attestation (< 6 months old) from Coffre Prestataires

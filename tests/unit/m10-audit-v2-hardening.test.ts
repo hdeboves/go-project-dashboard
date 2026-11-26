@@ -3,6 +3,11 @@ import { isAllowedWorkspaceEmail } from "@/lib/auth/session";
 import { computeBudgetMetrics } from "@/lib/budget/calculator";
 import { stripInvoiceBinaries } from "@/lib/invoices/ingest";
 import {
+  computeDriveBaseSequence,
+  extractInvoiceSequenceFromFilename,
+  isDriveInvoiceFile,
+} from "@/lib/invoices/numbering";
+import {
   getParisTodayIso,
   getParisWorkWeekWindow,
   isCalendarDateLate,
@@ -117,5 +122,45 @@ describe("M10 Audit V2 Hardening — Auth, Paris Dates, Engagé Margin, PROD_CRE
     expect(normalizeVendorKey("  Studio Éclair SAS  ")).toBe("studio eclair sas");
     expect(normalizeVendorKey("STUDIO ECLAIR-SAS")).toBe("studio eclair sas");
     expect(VIGILANCE_VALIDITY_MONTHS).toBe(6);
+  });
+
+  it("derives sequential invoice numbering strictly from Google Drive 001.3 Factures files", () => {
+    // Empty Drive -> base 0 -> next invoice is 1
+    expect(computeDriveBaseSequence([])).toBe(0);
+
+    // Folders, trashed files and URSSAF attestations are ignored
+    expect(
+      computeDriveBaseSequence([
+        { name: "Archives", mimeType: "application/vnd.google-apps.folder" },
+        { name: "AttestationVigilance_260123.pdf", mimeType: "application/pdf" },
+        { name: "1_260123_Deleted_2026-11-20.pdf", mimeType: "application/pdf", trashed: true },
+      ])
+    ).toBe(0);
+    expect(
+      isDriveInvoiceFile({ name: "Attestation_URSSAF_2026.pdf", mimeType: "application/pdf" })
+    ).toBe(false);
+
+    // Numbered invoice filenames in Drive
+    expect(extractInvoiceSequenceFromFilename("1_260123_StudioA_2026-11-26.pdf")).toBe(1);
+    expect(extractInvoiceSequenceFromFilename("03_260123_StudioB_2026-11-26.pdf")).toBe(3);
+    expect(extractInvoiceSequenceFromFilename("Facture_5_StudioC.pdf")).toBe(5);
+    // Legacy ISO date-prefixed filenames must NOT be parsed as invoice #2026
+    expect(extractInvoiceSequenceFromFilename("2026-11-20_260123_Studio_1000EUR.pdf")).toBeNull();
+
+    expect(
+      computeDriveBaseSequence([
+        { name: "1_260123_StudioA_2026-11-20.pdf", mimeType: "application/pdf" },
+        { name: "2_260123_StudioB_2026-11-24.pdf", mimeType: "application/pdf" },
+        { name: "AttestationVigilance_StudioB.pdf", mimeType: "application/pdf" },
+      ])
+    ).toBe(2);
+
+    // Legacy date-named PDFs still count by file count
+    expect(
+      computeDriveBaseSequence([
+        { name: "2026-11-10_260123_StudioA_500EUR.pdf", mimeType: "application/pdf" },
+        { name: "2026-11-12_260123_StudioB_700EUR.pdf", mimeType: "application/pdf" },
+      ])
+    ).toBe(2);
   });
 });

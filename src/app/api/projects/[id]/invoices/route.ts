@@ -13,6 +13,7 @@ import {
   processInvoicePdfIngestion,
   stripInvoiceBinaries,
 } from "@/lib/invoices/ingest";
+import { resyncPendingInvoicesNumbering } from "@/lib/invoices/numbering";
 
 const JsonInvoiceUploadSchema = z.object({
   filename: z.string().trim().min(1),
@@ -23,18 +24,32 @@ const JsonInvoiceUploadSchema = z.object({
 });
 
 export async function GET(
-  _req: NextRequest,
+  req: NextRequest,
   context: { params: Promise<{ id: string }> }
 ) {
   try {
     const { id } = await context.params;
-    const { prisma } = getServices();
+    const { prisma, getGoogleGateway } = getServices();
     const currentUser = await getCurrentUser(prisma);
     await assertProjectAccess(prisma, id, currentUser, "VIEW");
 
     const project = await prisma.project.findUnique({ where: { id } });
     if (!project) {
       throw new AppHttpError(404, "PROJECT_NOT_FOUND", "Projet introuvable.");
+    }
+
+    let driveBaseSeq: number | undefined;
+    if (req.nextUrl.searchParams.get("syncNumbering") === "1") {
+      const synced = await resyncPendingInvoicesNumbering({
+        prisma,
+        projectId: id,
+        codeProjet: project.codeProjet,
+        uploadedById: currentUser?.id ?? null,
+        getGoogleGateway,
+      }).catch(() => null);
+      if (synced) {
+        driveBaseSeq = synced.baseSeq;
+      }
     }
 
     const invoices = await prisma.invoice.findMany({
@@ -77,6 +92,7 @@ export async function GET(
 
     return NextResponse.json({
       invoices: invoices.map((inv) => stripInvoiceBinaries(inv)),
+      ...(driveBaseSeq !== undefined ? { driveBaseSeq } : {}),
     });
   } catch (err) {
     return toErrorResponse(err);
@@ -89,7 +105,7 @@ export async function POST(
 ) {
   try {
     const { id } = await context.params;
-    const { prisma, getGeminiClient } = getServices();
+    const { prisma, getGeminiClient, getGoogleGateway } = getServices();
     const currentUser = await getCurrentUser(prisma);
     await assertProjectAccess(prisma, id, currentUser, "EDIT");
 
@@ -162,6 +178,7 @@ export async function POST(
       const result = await processInvoicePdfIngestion({
         prisma,
         getGeminiClient,
+        getGoogleGateway,
         project,
         pdfBuffer,
         filename,
