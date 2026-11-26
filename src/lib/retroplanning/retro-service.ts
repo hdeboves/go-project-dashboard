@@ -296,6 +296,10 @@ export async function createRetroTask(
       etape,
       tache,
       owner: input.owner?.trim() || null,
+      ownerUserId:
+        "ownerUserId" in input && typeof input.ownerUserId === "string"
+          ? input.ownerUserId.trim() || null
+          : null,
       startDate,
       endDate,
       status,

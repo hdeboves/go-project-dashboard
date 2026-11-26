@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { AvatarDisplay } from "@/components/AvatarDisplay";
+import { Modal } from "@/components/ui/Modal";
 import { showToast } from "@/lib/toast";
 
 interface MemberUser {
@@ -183,19 +184,15 @@ export function ProjectShareModal({
   const quickSuggestions = teamUsers.filter((u) => !existingIds.has(u.id));
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/45 p-4 backdrop-blur-xs">
-      <div
-        role="dialog"
-        aria-modal="true"
-        className="w-full max-w-lg rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl dark:border-slate-700 dark:bg-[#111827]"
-      >
+    <Modal open={open} onClose={onClose} labelledBy="share-project-modal-title" maxWidthClass="max-w-lg">
+      <div className="p-6">
         <div className="flex items-start justify-between gap-3">
           <div className="flex items-center gap-2.5">
             <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-indigo-50 text-indigo-600 dark:bg-indigo-500/15 dark:text-indigo-400">
               <Users className="h-4 w-4" />
             </div>
             <div>
-              <h2 className="text-base font-bold text-slate-900 dark:text-white">
+              <h2 id="share-project-modal-title" className="text-base font-bold text-slate-900 dark:text-white">
                 Partager le projet
               </h2>
               <p className="text-xs text-slate-500 dark:text-slate-400">
@@ -404,6 +401,6 @@ export function ProjectShareModal({
           )}
         </div>
       </div>
-    </div>
+    </Modal>
   );
 }

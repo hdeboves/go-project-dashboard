@@ -15,6 +15,7 @@ export interface BudgetLineDto {
   postOpDays: number;
   postOpUnitCost: number;
   postOpTotalHt: number;
+  committedHt?: number;
   sheetRowIndex: number | null;
   invoiceNumbersNote: string | null;
 }
@@ -25,6 +26,7 @@ export interface BudgetSummaryDto {
   preOpExternalHt: number;
   preOpRhHt: number;
   preOpAmortHt: number;
+  committedTotalHt?: number;
   postOpTotalHt: number;
   postOpExternalHt: number;
   postOpRhHt: number;
@@ -64,12 +66,25 @@ export interface BudgetAlertDto {
   message: string;
 }
 
+export interface FnpAlertDto {
+  quoteId: string;
+  quoteNumber: string;
+  vendorName: string;
+  amountHt: number;
+  invoicedHt: number;
+  remainingHt: number;
+  issueDate: string | null;
+  validUntil: string | null;
+  budgetLineObjet: string | null;
+}
+
 export interface BudgetDataDto {
   budgetSheetId: string | null;
   lines: BudgetLineDto[];
   summary: BudgetSummaryDto;
   categories: CategoryBreakdownDto[];
   alerts: BudgetAlertDto[];
+  fnpAlerts?: FnpAlertDto[];
   warnings?: string[];
 }
 

@@ -7,7 +7,6 @@ import {
   BarChart3,
   Calendar,
   CheckSquare,
-  ChevronDown,
   Eye,
   FileSpreadsheet,
   FolderGit2,
@@ -35,6 +34,7 @@ import { AvatarDisplay } from "@/components/AvatarDisplay";
 import { CommandPalette } from "@/components/CommandPalette";
 import { NotificationBell } from "@/components/NotificationBell";
 import { ProjectShareModal } from "@/components/ProjectShareModal";
+import { ProjectSwitcherCombobox } from "@/components/ProjectSwitcherCombobox";
 import { ShellContext, type ShellStatus } from "@/components/ShellContext";
 import { ToastContainer } from "@/components/ToastContainer";
 import { showToast } from "@/lib/toast";
@@ -455,33 +455,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 Projet actif
               </span>
             </div>
-            <div className="relative">
-              <select
-                id="active-project-select"
-                aria-label="Projet actif"
-                data-testid="active-project-switcher"
-                title={
-                  activeProject
-                    ? `${activeProject.client} — ${activeProject.nomJeu} (Code projet ${activeProject.codeProjet})`
-                    : "Sélectionner un projet"
-                }
-                value={status?.activeProjectId ?? ""}
-                disabled={switching || !status?.projects.length}
-                onChange={(e) => void handleProjectChange(e.target.value)}
-                className="w-full appearance-none truncate rounded-lg bg-white py-1.5 pr-7 pl-2.5 text-xs font-semibold text-slate-900 shadow-2xs ring-1 ring-slate-200/80 transition-colors focus:ring-indigo-500 focus:outline-none disabled:opacity-60 dark:bg-slate-900 dark:text-white dark:ring-slate-700"
-              >
-                {!status?.projects.length ? (
-                  <option value="">Aucun projet</option>
-                ) : (
-                  status.projects.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.client} — {p.nomJeu} ({p.codeProjet})
-                    </option>
-                  ))
-                )}
-              </select>
-              <ChevronDown className="pointer-events-none absolute top-1/2 right-2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
-            </div>
+            <ProjectSwitcherCombobox
+              projects={status?.projects ?? []}
+              activeProjectId={status?.activeProjectId ?? null}
+              disabled={switching}
+              onSelect={handleProjectChange}
+            />
           </div>
         </div>
 

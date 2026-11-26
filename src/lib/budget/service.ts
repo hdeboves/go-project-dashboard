@@ -38,9 +38,22 @@ export const UpsertBudgetLineSchema = z.object({
 
 export type UpsertBudgetLineInput = z.infer<typeof UpsertBudgetLineSchema>;
 
+export interface FnpAlertItem {
+  quoteId: string;
+  quoteNumber: string;
+  vendorName: string;
+  amountHt: number;
+  invoicedHt: number;
+  remainingHt: number;
+  issueDate: string | null;
+  validUntil: string | null;
+  budgetLineObjet: string | null;
+}
+
 export interface BudgetOverviewResponse extends BudgetComputationResult {
   budgetSheetId: string | null;
-  lines: BudgetLine[];
+  lines: Array<BudgetLine & { committedHt?: number }>;
+  fnpAlerts?: FnpAlertItem[];
   warnings: string[];
 }
 
@@ -242,15 +255,82 @@ export async function getProjectBudget(
   projectId: string
 ): Promise<BudgetOverviewResponse> {
   const project = await requireProject(prisma, projectId);
-  const lines = await prisma.budgetLine.findMany({
-    where: { projectId },
-    orderBy: [{ sheetRowIndex: "asc" }, { createdAt: "asc" }],
-  });
+  const [lines, quotes] = await Promise.all([
+    prisma.budgetLine.findMany({
+      where: { projectId },
+      orderBy: [{ sheetRowIndex: "asc" }, { createdAt: "asc" }],
+    }),
+    prisma.quote.findMany({
+      where: {
+        projectId,
+        status: { in: ["ACCEPTE", "FACTURE"] },
+      },
+      select: {
+        id: true,
+        quoteNumber: true,
+        vendorName: true,
+        amountHt: true,
+        issueDate: true,
+        validUntil: true,
+        budgetLineId: true,
+        createdAt: true,
+        budgetLine: { select: { objet: true } },
+        invoices: {
+          where: { status: { notIn: ["REJECTED", "CONFLICT_BLOCKED"] } },
+          select: { amountHt: true },
+        },
+      },
+    }),
+  ]);
 
-  const computed = computeBudgetMetrics(lines);
+  const committedByLine = new Map<string, number>();
+  const fnpAlerts: FnpAlertItem[] = [];
+  const nowMs = Date.now();
+  const fourteenDaysMs = 14 * 86_400_000;
+
+  for (const q of quotes) {
+    if (q.budgetLineId) {
+      committedByLine.set(
+        q.budgetLineId,
+        round2((committedByLine.get(q.budgetLineId) ?? 0) + (q.amountHt || 0))
+      );
+    }
+    const invoicedHt = round2(
+      q.invoices.reduce((sum, inv) => sum + (inv.amountHt || 0), 0)
+    );
+    const remainingHt = round2((q.amountHt || 0) - invoicedHt);
+    if (remainingHt > 0.01) {
+      const validMs = q.validUntil ? Date.parse(q.validUntil) : Number.NaN;
+      const issueMs = q.issueDate ? Date.parse(q.issueDate) : q.createdAt.getTime();
+      const isOverdueOrStale =
+        (!Number.isNaN(validMs) && validMs < nowMs) ||
+        (!Number.isNaN(issueMs) && nowMs - issueMs > fourteenDaysMs);
+      if (isOverdueOrStale) {
+        fnpAlerts.push({
+          quoteId: q.id,
+          quoteNumber: q.quoteNumber,
+          vendorName: q.vendorName,
+          amountHt: q.amountHt,
+          invoicedHt,
+          remainingHt,
+          issueDate: q.issueDate,
+          validUntil: q.validUntil,
+          budgetLineObjet: q.budgetLine?.objet ?? null,
+        });
+      }
+    }
+  }
+
+  const enrichedLines = lines.map((line) => ({
+    ...line,
+    committedHt: committedByLine.get(line.id) ?? 0,
+  }));
+
+  const computed = computeBudgetMetrics(enrichedLines);
   return {
     budgetSheetId: project.budgetSheetId ?? null,
-    lines,
+    lines: enrichedLines,
+    fnpAlerts,
     ...computed,
     warnings: [],
   };

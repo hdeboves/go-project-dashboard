@@ -8,9 +8,13 @@
   --go-border: #e2e8f0;
   --go-text: #0f172a;
   --go-muted: #64748b;
-  --go-brand: #e11d48;
+  --go-primary: #4f46e5;
+  --go-primary-hover: #4338ca;
+  --go-danger: #dc2626;
+  --go-brand: #4f46e5;
   --go-indigo: #4f46e5;
   --go-emerald: #059669;
+  --go-amber: #d97706;
 }
 
 .dark {
@@ -20,9 +24,13 @@
   --go-border: #1f2937;
   --go-text: #f8fafc;
   --go-muted: #94a3b8;
-  --go-brand: #f43f5e;
+  --go-primary: #6366f1;
+  --go-primary-hover: #818cf8;
+  --go-danger: #f87171;
+  --go-brand: #818cf8;
   --go-indigo: #818cf8;
   --go-emerald: #34d399;
+  --go-amber: #fbbf24;
 }
 
 @theme inline {
@@ -34,6 +42,19 @@
 
 html {
   scroll-behavior: smooth;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }
 
 body {

@@ -7,17 +7,20 @@ import {
   FileText,
   Link2,
   Plus,
+  Search,
+  Sparkles,
   Trash2,
   Upload,
   X,
 } from "lucide-react";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import {
   type BudgetLineDto,
   type InvoiceDto,
   type QuoteDto,
   formatEur,
 } from "@/components/budget/types";
+import { Modal } from "@/components/ui/Modal";
 import { PdfPreviewModal } from "@/components/ui/PdfPreviewModal";
 import { showToast } from "@/lib/toast";
 
@@ -82,8 +85,12 @@ export function QuotesPanel({
   const [budgetLineId, setBudgetLineId] = useState("");
   const [notes, setNotes] = useState("");
   const [pdfFile, setPdfFile] = useState<File | null>(null);
+  const [extractingPdf, setExtractingPdf] = useState(false);
   const [selectedNewInvoices, setSelectedNewInvoices] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState<string>("ALL");
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
   // Link invoices modal per quote
   const [linkingQuote, setLinkingQuote] = useState<QuoteDto | null>(null);
@@ -96,6 +103,59 @@ export function QuotesPanel({
     url: string;
     driveUrl?: string | null;
   } | null>(null);
+
+  const filteredQuotes = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    return quotes.filter((item) => {
+      if (statusFilter !== "ALL" && item.status !== statusFilter) return false;
+      if (!q) return true;
+      return (
+        item.quoteNumber.toLowerCase().includes(q) ||
+        item.vendorName.toLowerCase().includes(q) ||
+        (item.description ?? "").toLowerCase().includes(q)
+      );
+    });
+  }, [quotes, searchQuery, statusFilter]);
+
+  async function handleQuotePdfPick(file: File | null) {
+    setPdfFile(file);
+    if (!file) return;
+    setExtractingPdf(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await fetch(`/api/projects/${projectId}/quotes/extract`, {
+        method: "POST",
+        body: fd,
+      });
+      if (!res.ok) return;
+      const json = (await res.json()) as {
+        extracted?: {
+          quoteNumber?: string;
+          vendorName?: string;
+          issueDate?: string;
+          amountHt?: number;
+          description?: string;
+          suggestedBudgetLineId?: string | null;
+        };
+      };
+      const ex = json.extracted;
+      if (!ex) return;
+      if (ex.quoteNumber && !quoteNumber) setQuoteNumber(ex.quoteNumber);
+      if (ex.vendorName && !vendorName) setVendorName(ex.vendorName);
+      if (ex.issueDate) setIssueDate(ex.issueDate);
+      if (ex.amountHt && ex.amountHt > 0 && !amountHt) {
+        setAmountHt(String(ex.amountHt));
+      }
+      if (ex.description && !description) setDescription(ex.description);
+      if (ex.suggestedBudgetLineId && !budgetLineId) {
+        setBudgetLineId(ex.suggestedBudgetLineId);
+      }
+      showToast("Devis PDF analysé : champs pré-remplis automatiquement !");
+    } finally {
+      setExtractingPdf(false);
+    }
+  }
 
   const acceptedTotalHt = quotes
     .filter((q) => q.status === "ACCEPTE" || q.status === "FACTURE")
@@ -239,7 +299,7 @@ export function QuotesPanel({
             type="button"
             onClick={() => setShowCreate((v) => !v)}
             data-testid="toggle-create-quote-btn"
-            className="inline-flex shrink-0 items-center gap-1.5 rounded-xl bg-rose-600 px-3.5 py-2 text-xs font-semibold text-white hover:bg-rose-700"
+            className="inline-flex shrink-0 items-center gap-1.5 rounded-xl bg-indigo-600 px-3.5 py-2 text-xs font-semibold text-white hover:bg-indigo-700"
           >
             {showCreate ? <X className="h-3.5 w-3.5" /> : <Plus className="h-3.5 w-3.5" />}
             {showCreate ? "Fermer" : "Nouveau devis"}
@@ -364,21 +424,33 @@ export function QuotesPanel({
           </div>
 
           <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-3 dark:border-slate-800">
-            <label className="inline-flex cursor-pointer items-center gap-2 rounded-xl border border-dashed border-slate-300 bg-slate-50 px-3 py-1.5 text-xs font-medium text-slate-700 hover:border-indigo-400 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200">
-              <Upload className="h-3.5 w-3.5 text-indigo-500" />
-              <span>{pdfFile ? pdfFile.name : "Joindre un PDF (optionnel)"}</span>
+            <label className="inline-flex cursor-pointer items-center gap-2 rounded-xl border border-dashed border-indigo-300 bg-indigo-50/50 px-3.5 py-2 text-xs font-semibold text-indigo-700 hover:border-indigo-500 dark:border-indigo-500/40 dark:bg-indigo-500/10 dark:text-indigo-300">
+              {extractingPdf ? (
+                <Sparkles className="h-3.5 w-3.5 animate-pulse" />
+              ) : (
+                <Upload className="h-3.5 w-3.5" />
+              )}
+              <span>
+                {extractingPdf
+                  ? "Analyse OCR du devis PDF…"
+                  : pdfFile
+                    ? `PDF joint : ${pdfFile.name}`
+                    : "Déposer un devis PDF (OCR auto-remplissage)"}
+              </span>
               <input
                 type="file"
                 accept=".pdf,application/pdf"
                 className="sr-only"
-                onChange={(e) => setPdfFile(e.target.files?.[0] ?? null)}
+                onChange={(e) =>
+                  void handleQuotePdfPick(e.target.files?.[0] ?? null)
+                }
               />
             </label>
 
             <button
               type="submit"
-              disabled={saving}
-              className="rounded-xl bg-rose-600 px-5 py-2 text-xs font-semibold text-white hover:bg-rose-700 disabled:opacity-50"
+              disabled={saving || extractingPdf}
+              className="rounded-xl bg-indigo-600 px-5 py-2 text-xs font-semibold text-white hover:bg-indigo-700 disabled:opacity-50"
             >
               {saving ? "Enregistrement..." : "Créer le devis"}
             </button>
@@ -386,21 +458,61 @@ export function QuotesPanel({
         </form>
       )}
 
+      {/* Search & Status Filter Bar */}
+      {quotes.length > 0 && (
+        <div className="flex flex-wrap items-center justify-between gap-2.5">
+          <div className="relative min-w-[200px] flex-1 sm:max-w-xs">
+            <Search className="pointer-events-none absolute top-1/2 left-3 h-3.5 w-3.5 -translate-y-1/2 text-slate-500 dark:text-slate-400" />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Rechercher un devis ou prestataire…"
+              className="w-full rounded-xl border border-slate-200 bg-white py-1.5 pr-3 pl-8 text-xs text-slate-900 placeholder:text-slate-500 focus:border-indigo-500 focus:outline-none dark:border-slate-700 dark:bg-[#111827] dark:text-white dark:placeholder:text-slate-400"
+            />
+          </div>
+          <div className="flex flex-wrap items-center gap-1">
+            {[
+              { id: "ALL", label: "Tous" },
+              { id: "EN_ATTENTE", label: "En attente" },
+              { id: "ACCEPTE", label: "Acceptés" },
+              { id: "FACTURE", label: "Facturés" },
+            ].map((tab) => (
+              <button
+                key={tab.id}
+                type="button"
+                onClick={() => setStatusFilter(tab.id)}
+                className={`rounded-lg px-2.5 py-1 text-[11px] font-semibold transition-colors ${
+                  statusFilter === tab.id
+                    ? "bg-indigo-600 text-white"
+                    : "bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-800 dark:text-slate-300"
+                }`}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Quotes List */}
-      {quotes.length === 0 ? (
+      {filteredQuotes.length === 0 ? (
         <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-10 text-center dark:border-slate-700 dark:bg-[#111827]">
           <FileText className="mx-auto h-9 w-9 text-slate-300" />
           <p className="mt-2.5 text-sm font-semibold text-slate-800 dark:text-white">
-            Aucun devis pour ce projet
+            {quotes.length === 0
+              ? "Aucun devis pour ce projet"
+              : "Aucun devis ne correspond à ce filtre"}
           </p>
           <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-            Ajoutez vos devis prestataires et reliez-les à une ou plusieurs
-            factures (acompte, solde...) pour suivre le reste à facturer.
+            Ajoutez vos devis prestataires (PDF OCR automatique) et reliez-les à
+            une ou plusieurs factures (acompte, solde...) pour suivre le reste à
+            facturer.
           </p>
         </div>
       ) : (
         <div className="space-y-3">
-          {quotes.map((q) => {
+          {filteredQuotes.map((q) => {
             const meta = QUOTE_STATUS_META[q.status] ?? QUOTE_STATUS_META.EN_ATTENTE;
             return (
               <div
@@ -480,22 +592,38 @@ export function QuotesPanel({
                       Relier factures ({q.invoices.length})
                     </button>
 
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (
-                          window.confirm(
-                            `Supprimer le devis ${q.quoteNumber} (${q.vendorName}) ? Les factures associées seront simplement déliées.`
-                          )
-                        ) {
-                          void handleDeleteQuote(q);
-                        }
-                      }}
-                      title="Supprimer le devis"
-                      className="rounded-xl p-1.5 text-slate-400 hover:bg-rose-50 hover:text-rose-600 dark:hover:bg-rose-500/15 dark:hover:text-rose-400"
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </button>
+                    {confirmDeleteId === q.id ? (
+                      <div className="inline-flex items-center gap-1 rounded-xl border border-rose-200 bg-rose-50 px-2 py-1 text-[11px] font-semibold text-rose-700 dark:border-rose-500/30 dark:bg-rose-500/15 dark:text-rose-200">
+                        <span>Supprimer ?</span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setConfirmDeleteId(null);
+                            void handleDeleteQuote(q);
+                          }}
+                          className="rounded bg-rose-600 px-1.5 py-0.5 text-white hover:bg-rose-700"
+                        >
+                          Oui
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setConfirmDeleteId(null)}
+                          className="rounded border border-rose-300 bg-white px-1.5 py-0.5 text-rose-700 dark:bg-slate-900 dark:text-rose-200"
+                        >
+                          Non
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => setConfirmDeleteId(q.id)}
+                        title="Supprimer le devis"
+                        aria-label={`Supprimer le devis ${q.quoteNumber}`}
+                        className="rounded-xl p-1.5 text-slate-500 hover:bg-rose-50 hover:text-rose-600 dark:text-slate-400 dark:hover:bg-rose-500/15 dark:hover:text-rose-400"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    )}
                   </div>
                 </div>
 
@@ -596,9 +724,14 @@ export function QuotesPanel({
       )}
 
       {/* Link Invoices Modal */}
-      {linkingQuote && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/45 p-4 backdrop-blur-xs">
-          <div className="w-full max-w-lg rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl dark:border-slate-700 dark:bg-[#111827]">
+      <Modal
+        open={Boolean(linkingQuote)}
+        onClose={() => setLinkingQuote(null)}
+        ariaLabel="Relier des factures au devis"
+        maxWidthClass="max-w-lg"
+      >
+        {linkingQuote && (
+          <div className="p-6">
             <div className="flex items-start justify-between gap-2">
               <div>
                 <h3 className="text-base font-bold text-slate-900 dark:text-white">
@@ -707,8 +840,8 @@ export function QuotesPanel({
               </div>
             </div>
           </div>
-        </div>
-      )}
+        )}
+      </Modal>
 
       {/* Accessible PDF Preview Modal */}
       <PdfPreviewModal

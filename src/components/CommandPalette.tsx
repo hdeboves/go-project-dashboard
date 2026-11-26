@@ -3,6 +3,7 @@
 import {
   BarChart3,
   Calendar,
+  CheckSquare,
   FileSpreadsheet,
   FolderGit2,
   GanttChartSquare,
@@ -44,6 +45,13 @@ interface CommandPaletteProps {
 
 const QUICK_ACTIONS = [
   {
+    href: "/my-tasks",
+    label: "Voir mes tâches du jour",
+    hint: "Priorités multi-projets",
+    icon: CheckSquare,
+    tone: "text-indigo-600 dark:text-indigo-400",
+  },
+  {
     href: "/retroplanning",
     label: "Ajouter une tâche",
     hint: "Planning & tâches",
@@ -53,7 +61,7 @@ const QUICK_ACTIONS = [
   {
     href: "/budget?tab=quotes",
     label: "Créer / Gérer les devis",
-    hint: "Devis & liaison multi-factures",
+    hint: "Devis PDF & liaison factures",
     icon: FileSpreadsheet,
     tone: "text-indigo-600 dark:text-indigo-400",
   },
@@ -62,14 +70,14 @@ const QUICK_ACTIONS = [
     label: "Déposer une facture PDF",
     hint: "Budget & Pennylane",
     icon: Receipt,
-    tone: "text-rose-600 dark:text-rose-400",
+    tone: "text-indigo-600 dark:text-indigo-400",
   },
   {
     href: "/retroplanning?tab=template",
     label: "Modèle vierge Rétroplanning",
     hint: "Personnaliser les tâches sans dates",
     icon: Sparkles,
-    tone: "text-rose-600 dark:text-rose-400",
+    tone: "text-indigo-600 dark:text-indigo-400",
   },
   {
     href: "/meetings",
@@ -96,6 +104,12 @@ const QUICK_ACTIONS = [
 
 const NAV_COMMANDS = [
   {
+    href: "/my-tasks",
+    label: "Mes Tâches (Multi-projets)",
+    hint: "Toutes mes priorités, retards & échéances",
+    icon: CheckSquare,
+  },
+  {
     href: "/projects",
     label: "Vue d'ensemble (Tous les projets)",
     hint: "Portefeuille multi-projets, santé & marges",
@@ -116,7 +130,7 @@ const NAV_COMMANDS = [
   {
     href: "/budget",
     label: "Budget & Factures",
-    hint: "Graphiques, postes & Pennylane",
+    hint: "Graphiques, postes, devis & Pennylane",
     icon: FileSpreadsheet,
   },
   {
@@ -134,7 +148,7 @@ const NAV_COMMANDS = [
   {
     href: "/calendar",
     label: "Agenda & Rappels",
-    hint: "Jalons projet & décalages automatiques",
+    hint: "Jalons multi-projets & échéances",
     icon: Calendar,
   },
   {
@@ -152,7 +166,7 @@ const NAV_COMMANDS = [
   {
     href: "/team",
     label: "Équipe & Administration",
-    hint: "Annuaire, rôles admin, backups & journal d'audit",
+    hint: "Annuaire, charge équipe, URSSAF, backups & audit",
     icon: Users,
   },
   {
@@ -180,6 +194,7 @@ export function CommandPalette({
 }: CommandPaletteProps) {
   const router = useRouter();
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const itemRefs = useRef<Record<number, HTMLButtonElement | null>>({});
   const [query, setQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
 
@@ -218,11 +233,21 @@ export function CommandPalette({
     return q ? res : res.slice(0, 5);
   }, [projects, q]);
 
+  const showThemeCommand =
+    !q ||
+    "theme".includes(q) ||
+    "thème".includes(q) ||
+    "sombre".includes(q) ||
+    "clair".includes(q) ||
+    "dark".includes(q) ||
+    "mode".includes(q);
+
   const flatItems = useMemo(() => {
     const list: Array<
       | { kind: "action"; href: string }
       | { kind: "project"; id: string }
       | { kind: "nav"; href: string }
+      | { kind: "theme" }
     > = [];
     for (const a of matchedActions) {
       list.push({ kind: "action", href: a.href });
@@ -233,8 +258,11 @@ export function CommandPalette({
     for (const item of matchedNav) {
       list.push({ kind: "nav", href: item.href });
     }
+    if (showThemeCommand) {
+      list.push({ kind: "theme" });
+    }
     return list;
-  }, [matchedActions, matchedProjects, matchedNav]);
+  }, [matchedActions, matchedProjects, matchedNav, showThemeCommand]);
 
   const safeIndex =
     flatItems.length === 0 ? 0 : Math.min(selectedIndex, flatItems.length - 1);
@@ -248,6 +276,11 @@ export function CommandPalette({
     }, 10);
     return () => clearTimeout(t);
   }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    itemRefs.current[safeIndex]?.scrollIntoView({ block: "nearest" });
+  }, [open, safeIndex]);
 
   useEffect(() => {
     if (!open) return;
@@ -273,6 +306,9 @@ export function CommandPalette({
         if (chosen.kind === "project") {
           void onSelectProject(chosen.id);
           onClose();
+        } else if (chosen.kind === "theme") {
+          onToggleTheme(theme === "dark" ? "light" : "dark");
+          onClose();
         } else {
           router.push(chosen.href);
           onClose();
@@ -283,13 +319,25 @@ export function CommandPalette({
     return () => {
       window.removeEventListener("keydown", onKeyDown);
     };
-  }, [open, onClose, flatItems, selectedIndex, onSelectProject, router]);
+  }, [
+    open,
+    onClose,
+    flatItems,
+    selectedIndex,
+    onSelectProject,
+    onToggleTheme,
+    theme,
+    router,
+  ]);
 
   if (!open) return null;
 
+  const themeFlatIdx =
+    matchedActions.length + matchedProjects.length + matchedNav.length;
+
   return (
     <div
-      className="fixed inset-0 z-50 flex items-start justify-center bg-slate-900/40 px-4 pt-20 backdrop-blur-xs"
+      className="fixed inset-0 z-50 flex items-start justify-center bg-slate-900/45 px-4 pt-16 backdrop-blur-xs sm:pt-20"
       onClick={onClose}
     >
       <div
@@ -300,28 +348,44 @@ export function CommandPalette({
         className="w-full max-w-lg overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl dark:border-slate-700 dark:bg-[#111827]"
       >
         <div className="flex items-center gap-3 border-b border-slate-100 px-4 py-3 dark:border-slate-800">
-          <Search className="h-4 w-4 text-slate-400" />
+          <Search className="h-4 w-4 text-slate-500 dark:text-slate-400" />
           <input
             ref={inputRef}
             type="text"
             value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Aller à une page, changer de projet..."
-            className="flex-1 bg-transparent text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none dark:text-white"
+            onChange={(e) => {
+              setQuery(e.target.value);
+              setSelectedIndex(0);
+            }}
+            placeholder="Aller à une page, changer de projet…"
+            className="flex-1 bg-transparent text-sm text-slate-900 placeholder:text-slate-500 focus:outline-none dark:text-white dark:placeholder:text-slate-400"
           />
           <button
             type="button"
             onClick={onClose}
-            className="rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-slate-800 dark:hover:text-slate-200"
+            aria-label="Fermer la recherche"
+            className="rounded-lg p-1 text-slate-500 hover:bg-slate-100 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-200"
           >
             <X className="h-4 w-4" />
           </button>
         </div>
 
         <div className="max-h-96 space-y-4 overflow-y-auto p-3">
+          {flatItems.length === 0 && (
+            <div className="px-4 py-8 text-center">
+              <p className="text-xs font-semibold text-slate-700 dark:text-slate-300">
+                Aucun résultat pour « {query} »
+              </p>
+              <p className="mt-1 text-[11px] text-slate-500 dark:text-slate-400">
+                Essayez un nom de client, un code projet ou une page (budget,
+                tâches, devis…).
+              </p>
+            </div>
+          )}
+
           {matchedActions.length > 0 && (
             <div>
-              <p className="mb-1.5 px-2 text-[10px] font-bold tracking-wider text-slate-400 uppercase">
+              <p className="mb-1.5 px-2 text-[10px] font-bold tracking-wider text-slate-500 uppercase dark:text-slate-400">
                 Actions rapides
               </p>
               <div className="space-y-0.5">
@@ -331,6 +395,9 @@ export function CommandPalette({
                   return (
                     <button
                       key={act.label}
+                      ref={(el) => {
+                        itemRefs.current[idx] = el;
+                      }}
                       type="button"
                       onMouseEnter={() => setSelectedIndex(idx)}
                       onClick={() => {
@@ -349,7 +416,7 @@ export function CommandPalette({
                           {act.label}
                         </span>
                       </span>
-                      <span className="text-[11px] text-slate-400">
+                      <span className="text-[11px] text-slate-500 dark:text-slate-400">
                         {act.hint}
                       </span>
                     </button>
@@ -361,7 +428,7 @@ export function CommandPalette({
 
           {matchedProjects.length > 0 && (
             <div>
-              <p className="mb-1.5 px-2 text-[10px] font-bold tracking-wider text-slate-400 uppercase">
+              <p className="mb-1.5 px-2 text-[10px] font-bold tracking-wider text-slate-500 uppercase dark:text-slate-400">
                 Projets
               </p>
               <div className="space-y-0.5">
@@ -372,6 +439,9 @@ export function CommandPalette({
                   return (
                     <button
                       key={p.id}
+                      ref={(el) => {
+                        itemRefs.current[flatIdx] = el;
+                      }}
                       type="button"
                       onMouseEnter={() => setSelectedIndex(flatIdx)}
                       onClick={() => {
@@ -384,13 +454,13 @@ export function CommandPalette({
                           : "hover:bg-slate-100 dark:hover:bg-slate-800"
                       }`}
                     >
-                      <span className="flex items-center gap-2.5">
-                        <span className="h-2 w-2 rounded-full bg-rose-600" />
-                        <span className="font-semibold text-slate-900 dark:text-white">
+                      <span className="flex min-w-0 items-center gap-2.5">
+                        <span className="h-2 w-2 shrink-0 rounded-full bg-indigo-600 dark:bg-indigo-400" />
+                        <span className="truncate font-semibold text-slate-900 dark:text-white">
                           {p.client} — {p.nomJeu}
                         </span>
-                        <span className="font-mono text-[11px] text-slate-400">
-                          CP {p.codeProjet}
+                        <span className="shrink-0 font-mono text-[11px] text-slate-500 dark:text-slate-400">
+                          {p.codeProjet}
                         </span>
                       </span>
                       {isCurrent && (
@@ -407,7 +477,7 @@ export function CommandPalette({
 
           {matchedNav.length > 0 && (
             <div>
-              <p className="mb-1.5 px-2 text-[10px] font-bold tracking-wider text-slate-400 uppercase">
+              <p className="mb-1.5 px-2 text-[10px] font-bold tracking-wider text-slate-500 uppercase dark:text-slate-400">
                 Pages
               </p>
               <div className="space-y-0.5">
@@ -419,6 +489,9 @@ export function CommandPalette({
                   return (
                     <button
                       key={item.href}
+                      ref={(el) => {
+                        itemRefs.current[flatIdx] = el;
+                      }}
                       type="button"
                       onMouseEnter={() => setSelectedIndex(flatIdx)}
                       onClick={() => {
@@ -437,7 +510,7 @@ export function CommandPalette({
                           {item.label}
                         </span>
                       </span>
-                      <span className="text-[11px] text-slate-400">
+                      <span className="text-[11px] text-slate-500 dark:text-slate-400">
                         {item.hint}
                       </span>
                     </button>
@@ -447,30 +520,40 @@ export function CommandPalette({
             </div>
           )}
 
-          <div>
-            <p className="mb-1.5 px-2 text-[10px] font-bold tracking-wider text-slate-400 uppercase">
-              Préférence
-            </p>
-            <button
-              type="button"
-              onClick={() => {
-                onToggleTheme(theme === "dark" ? "light" : "dark");
-                onClose();
-              }}
-              className="flex w-full items-center justify-between rounded-xl px-3 py-2 text-left text-xs transition-colors hover:bg-slate-100 dark:hover:bg-slate-800"
-            >
-              <span className="flex items-center gap-2.5">
-                {theme === "dark" ? (
-                  <Sun className="h-4 w-4 text-indigo-400" />
-                ) : (
-                  <Moon className="h-4 w-4 text-indigo-600" />
-                )}
-                <span className="font-semibold text-slate-800 dark:text-slate-100">
-                  Passer en mode {theme === "dark" ? "clair" : "sombre"}
+          {showThemeCommand && (
+            <div>
+              <p className="mb-1.5 px-2 text-[10px] font-bold tracking-wider text-slate-500 uppercase dark:text-slate-400">
+                Préférence
+              </p>
+              <button
+                ref={(el) => {
+                  itemRefs.current[themeFlatIdx] = el;
+                }}
+                type="button"
+                onMouseEnter={() => setSelectedIndex(themeFlatIdx)}
+                onClick={() => {
+                  onToggleTheme(theme === "dark" ? "light" : "dark");
+                  onClose();
+                }}
+                className={`flex w-full items-center justify-between rounded-xl px-3 py-2 text-left text-xs transition-colors ${
+                  safeIndex === themeFlatIdx
+                    ? "bg-indigo-50 dark:bg-indigo-500/20"
+                    : "hover:bg-slate-100 dark:hover:bg-slate-800"
+                }`}
+              >
+                <span className="flex items-center gap-2.5">
+                  {theme === "dark" ? (
+                    <Sun className="h-4 w-4 text-indigo-400" />
+                  ) : (
+                    <Moon className="h-4 w-4 text-indigo-600" />
+                  )}
+                  <span className="font-semibold text-slate-800 dark:text-slate-100">
+                    Passer en mode {theme === "dark" ? "clair" : "sombre"}
+                  </span>
                 </span>
-              </span>
-            </button>
-          </div>
+              </button>
+            </div>
+          )}
         </div>
       </div>
     </div>

@@ -92,12 +92,19 @@ export function NotificationBell() {
     };
     window.addEventListener("go:shell-refresh", onRefresh);
     const interval = window.setInterval(() => {
+      if (typeof document !== "undefined" && document.hidden) return;
       void fetchNotifications(true);
-    }, 20_000);
+    }, 30_000);
+
+    const onVisibility = () => {
+      if (!document.hidden) void fetchNotifications(true);
+    };
+    document.addEventListener("visibilitychange", onVisibility);
 
     return () => {
       active = false;
       window.removeEventListener("go:shell-refresh", onRefresh);
+      document.removeEventListener("visibilitychange", onVisibility);
       window.clearInterval(interval);
     };
   }, [fetchNotifications]);
@@ -197,7 +204,7 @@ export function NotificationBell() {
           role="dialog"
           aria-label="Centre de notifications"
           data-testid="notification-popover"
-          className="absolute right-0 mt-2 w-80 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xl sm:w-96 dark:border-slate-800 dark:bg-[#111827]"
+          className="fixed top-14 right-4 left-4 z-50 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xl sm:absolute sm:inset-auto sm:right-0 sm:mt-2 sm:w-96 dark:border-slate-800 dark:bg-[#111827]"
         >
           <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3 dark:border-slate-800">
             <div className="flex items-center gap-1.5">
@@ -257,7 +264,11 @@ export function NotificationBell() {
                 .map((n) => (
                 <div
                   key={n.id}
-                  className={`px-4 py-3 text-xs transition-colors ${
+                  onClick={() => {
+                    if (n.actionUrl) void handleOpenNotification(n);
+                    else void markOneRead(n.id);
+                  }}
+                  className={`cursor-pointer px-4 py-3 text-xs transition-colors hover:bg-slate-50 dark:hover:bg-slate-800/60 ${
                     n.read
                       ? "bg-white dark:bg-[#111827]"
                       : "bg-indigo-50/40 dark:bg-indigo-500/10"

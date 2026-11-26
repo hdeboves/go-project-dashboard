@@ -557,7 +557,7 @@ export function BudgetDashboardClient() {
           <button
             type="button"
             onClick={() => setActiveTab("invoices")}
-            className="inline-flex items-center gap-2 rounded-xl bg-rose-600 px-4 py-2 text-xs font-semibold text-white shadow-xs transition-colors hover:bg-rose-700"
+            className="inline-flex items-center gap-2 rounded-xl bg-indigo-600 px-4 py-2 text-xs font-semibold text-white shadow-xs transition-colors hover:bg-indigo-700"
           >
             <Receipt className="h-4 w-4" />
             Ajouter une facture
@@ -619,6 +619,55 @@ export function BudgetDashboardClient() {
           className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-xs text-rose-800 dark:border-rose-500/30 dark:bg-rose-950/40 dark:text-rose-200"
         >
           {actionError}
+        </div>
+      )}
+
+      {/* Radar Factures Manquantes (FNP — Devis acceptés non soldés) */}
+      {budget?.fnpAlerts && budget.fnpAlerts.length > 0 && (
+        <div
+          data-testid="fnp-radar-banner"
+          className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-amber-200 bg-amber-50/80 px-5 py-3.5 text-xs text-amber-950 dark:border-amber-500/30 dark:bg-amber-950/30 dark:text-amber-100"
+        >
+          <div className="flex items-start gap-2.5">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
+            <div>
+              <p className="font-semibold">
+                Radar Factures à recevoir (FNP) : {budget.fnpAlerts.length} devis
+                accepté(s) avec{" "}
+                <span className="font-mono font-bold">
+                  {formatEur(
+                    budget.fnpAlerts.reduce((s, a) => s + a.remainingHt, 0)
+                  )}{" "}
+                  HT
+                </span>{" "}
+                non facturés
+              </p>
+              <p className="mt-0.5 text-[11px] text-amber-800 dark:text-amber-200">
+                {budget.fnpAlerts
+                  .slice(0, 3)
+                  .map(
+                    (a) => `${a.vendorName} (${a.quoteNumber} : reste ${formatEur(a.remainingHt)})`
+                  )
+                  .join(" · ")}
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setActiveTab("quotes")}
+              className="rounded-xl border border-amber-300 bg-white px-3 py-1.5 text-[11px] font-semibold text-amber-900 hover:bg-amber-100 dark:border-amber-500/40 dark:bg-slate-900 dark:text-amber-200"
+            >
+              Voir les devis
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab("invoices")}
+              className="rounded-xl bg-indigo-600 px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-indigo-700"
+            >
+              Déposer une facture
+            </button>
+          </div>
         </div>
       )}
 

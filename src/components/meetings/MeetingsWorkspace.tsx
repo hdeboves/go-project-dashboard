@@ -20,6 +20,7 @@ import {
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useShell } from "@/components/ShellContext";
 import { showToast } from "@/lib/toast";
 
 interface ActionItemView {
@@ -39,6 +40,7 @@ interface MeetingNoteView {
   summary: string;
   keyDecisions: string[];
   actionItems: ActionItemView[];
+  convertedActionIndexes?: number[];
   rawTranscript: string | null;
   driveFileId: string | null;
   driveFileName: string | null;
@@ -72,6 +74,8 @@ interface ShellInfo {
 export function MeetingsWorkspace() {
   const searchParams = useSearchParams();
   const queryMeetingId = searchParams.get("meetingId");
+  const { status: shellStatus } = useShell();
+  const isSandbox = Boolean(shellStatus?.sandboxMode);
 
   const [projectId, setProjectId] = useState<string | null>(null);
   const [projectLabel, setProjectLabel] = useState("");
@@ -96,12 +100,56 @@ export function MeetingsWorkspace() {
   const [showTranscript, setShowTranscript] = useState(false);
 
   // Import form state
+  const [rawPaste, setRawPaste] = useState("");
   const [formTitle, setFormTitle] = useState("");
   const [formParticipants, setFormParticipants] = useState("");
   const [formSummary, setFormSummary] = useState("");
   const [formDecisions, setFormDecisions] = useState("");
   const [formActions, setFormActions] = useState("");
   const [formTranscript, setFormTranscript] = useState("");
+
+  function handleSmartParsePaste() {
+    const raw = rawPaste.trim();
+    if (!raw) return;
+    const lines = raw
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter(Boolean);
+    if (lines.length === 0) return;
+
+    if (!formTitle) {
+      setFormTitle(lines[0].replace(/^#+\s*/, "").slice(0, 120));
+    }
+    const decisions: string[] = [];
+    const actions: string[] = [];
+    const summaryLines: string[] = [];
+    let section: "summary" | "decisions" | "actions" = "summary";
+
+    for (const line of lines.slice(1)) {
+      if (/^(?:d[eé]cisions?|key\s*decisions?)/i.test(line)) {
+        section = "decisions";
+        continue;
+      }
+      if (/^(?:actions?|action\s*items?|next\s*steps?|prochaines?\s*[eé]tapes?|[àa]\s*faire)/i.test(line)) {
+        section = "actions";
+        continue;
+      }
+      if (/^(?:r[eé]sum[eé]|summary|overview)/i.test(line)) {
+        section = "summary";
+        continue;
+      }
+      const clean = line.replace(/^[-*•\[\]\sxX0-9.)]+\s*/, "").trim();
+      if (!clean) continue;
+      if (section === "decisions") decisions.push(clean);
+      else if (section === "actions") actions.push(clean);
+      else summaryLines.push(clean);
+    }
+
+    setFormSummary(summaryLines.join("\n") || raw.slice(0, 500));
+    if (decisions.length > 0) setFormDecisions(decisions.join("\n"));
+    if (actions.length > 0) setFormActions(actions.join("\n"));
+    showToast("Notes Krisp analysées et pré-remplies !");
+  }
 
   const loadData = useCallback(async () => {
     setLoading(true);
@@ -261,11 +309,17 @@ export function MeetingsWorkspace() {
   }
 
   function getSelectedActionIndices(meeting: MeetingNoteView): number[] {
-    if (meeting.id in checkedActions) return checkedActions[meeting.id];
-    // Pre-select internal agency actions, leave Client actions unchecked by default
+    const alreadyConverted = new Set(meeting.convertedActionIndexes ?? []);
+    if (meeting.id in checkedActions) {
+      return checkedActions[meeting.id].filter((i) => !alreadyConverted.has(i));
+    }
+    // Pre-select internal agency actions not yet converted, leave Client actions unchecked
     return meeting.actionItems
       .map((item, idx) =>
-        (item.owner ?? "").toLowerCase().includes("client") ? -1 : idx
+        alreadyConverted.has(idx) ||
+        (item.owner ?? "").toLowerCase().includes("client")
+          ? -1
+          : idx
       )
       .filter((idx) => idx >= 0);
   }
@@ -281,8 +335,11 @@ export function MeetingsWorkspace() {
   async function handleConvertActionsToTasks(meeting: MeetingNoteView) {
     const indices = getSelectedActionIndices(meeting);
     const chosenItems = indices
-      .map((idx) => meeting.actionItems[idx])
-      .filter(Boolean);
+      .map((idx) => {
+        const item = meeting.actionItems[idx];
+        return item ? { ...item, index: idx } : null;
+      })
+      .filter((x): x is ActionItemView & { index: number } => Boolean(x));
     if (!projectId || chosenItems.length === 0) return;
     setCreatingTasks(true);
     try {
@@ -296,16 +353,26 @@ export function MeetingsWorkspace() {
       );
       const json = (await res.json()) as {
         createdCount?: number;
+        convertedActionIndexes?: number[];
         error?: string;
       };
       if (!res.ok) {
         showToast(json.error ?? "Impossible de créer les tâches.", "error");
         return;
       }
+      const nextConverted = json.convertedActionIndexes ?? indices;
+      setMeetings((prev) =>
+        prev.map((m) =>
+          m.id === meeting.id
+            ? { ...m, convertedActionIndexes: nextConverted }
+            : m
+        )
+      );
       setConvertedMeetingIds((prev) => new Set(prev).add(meeting.id));
       showToast(
         `${json.createdCount ?? 0} tâche(s) ajoutée(s) au rétroplanning !`
       );
+      window.dispatchEvent(new CustomEvent("go:shell-refresh"));
     } finally {
       setCreatingTasks(false);
     }
@@ -479,6 +546,30 @@ export function MeetingsWorkspace() {
             </button>
           </div>
 
+          <div className="rounded-xl border border-indigo-200/80 bg-indigo-50/40 p-3 dark:border-indigo-500/30 dark:bg-indigo-500/10">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <label className="text-[11px] font-bold text-indigo-800 dark:text-indigo-200">
+                Import express (1 clic) : collez vos notes brutes Krisp
+              </label>
+              <button
+                type="button"
+                disabled={!rawPaste.trim()}
+                onClick={handleSmartParsePaste}
+                className="inline-flex items-center gap-1 rounded-lg bg-indigo-600 px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-indigo-700 disabled:opacity-40"
+              >
+                <Sparkles className="h-3 w-3" />
+                Analyser &amp; pré-remplir
+              </button>
+            </div>
+            <textarea
+              rows={2}
+              value={rawPaste}
+              onChange={(e) => setRawPaste(e.target.value)}
+              placeholder="Collez ici tout le bloc Krisp (Titre, Résumé, Décisions, Actions)…"
+              className="mt-2 w-full rounded-lg border border-indigo-200/80 bg-white px-3 py-1.5 text-xs text-slate-900 placeholder:text-slate-400 focus:border-indigo-500 focus:outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-white"
+            />
+          </div>
+
           <div className="grid gap-3 md:grid-cols-2">
             <input
               type="text"
@@ -542,7 +633,7 @@ export function MeetingsWorkspace() {
             <button
               type="submit"
               disabled={importing}
-              className="rounded-xl bg-rose-600 px-4 py-2 text-xs font-semibold text-white hover:bg-rose-700 disabled:opacity-50"
+              className="rounded-xl bg-indigo-600 px-4 py-2 text-xs font-semibold text-white hover:bg-indigo-700 disabled:opacity-50"
             >
               {importing ? "Enregistrement..." : "Créer le Google Doc & notifier"}
             </button>
@@ -563,20 +654,30 @@ export function MeetingsWorkspace() {
             Aucun compte rendu Krisp reçu sur ce projet
           </h2>
           <p className="mx-auto mt-1 max-w-md text-xs text-slate-500 dark:text-slate-400">
-            Reliez votre webhook Krisp (ou testez dès maintenant avec un CR
-            simulé) : chaque réunion est classée automatiquement dans le dossier
-            Drive <strong>002.3 Comptes Rendus</strong> avec une notification.
+            Reliez votre webhook Krisp ou importez directement vos notes de
+            réunion : chaque CR est classé dans le dossier Drive{" "}
+            <strong>002.3 Comptes Rendus</strong>.
           </p>
           <div className="mt-5 flex flex-wrap justify-center gap-2.5">
             <button
               type="button"
-              disabled={!projectId || simulating}
-              onClick={() => void handleSimulateKrisp()}
-              className="inline-flex items-center gap-1.5 rounded-xl bg-rose-600 px-4 py-2 text-xs font-semibold text-white hover:bg-rose-700 disabled:opacity-50"
+              onClick={() => setImportOpen(true)}
+              className="inline-flex items-center gap-1.5 rounded-xl bg-indigo-600 px-4 py-2 text-xs font-semibold text-white hover:bg-indigo-700"
             >
-              <Sparkles className="h-3.5 w-3.5" />
-              Tester un CR Krisp maintenant
+              <Plus className="h-3.5 w-3.5" />
+              Importer un compte rendu
             </button>
+            {isSandbox && (
+              <button
+                type="button"
+                disabled={!projectId || simulating}
+                onClick={() => void handleSimulateKrisp()}
+                className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+              >
+                <Sparkles className="h-3.5 w-3.5" />
+                Tester un CR Krisp (pilote)
+              </button>
+            )}
             <button
               type="button"
               onClick={() => setSetupOpen(true)}
@@ -740,16 +841,21 @@ export function MeetingsWorkspace() {
 
               {/* Action Items + Selective 1-Click to Tasks */}
               {selectedMeeting.actionItems.length > 0 && (() => {
+                const persistedConverted = new Set(
+                  selectedMeeting.convertedActionIndexes ?? []
+                );
+                const allConverted =
+                  persistedConverted.size >= selectedMeeting.actionItems.length ||
+                  convertedMeetingIds.has(selectedMeeting.id);
                 const chosenIdx = getSelectedActionIndices(selectedMeeting);
-                const alreadySent = convertedMeetingIds.has(selectedMeeting.id);
                 return (
                   <div className="rounded-xl border border-slate-200/80 bg-slate-50/60 p-4 dark:border-slate-800 dark:bg-slate-800/40">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <h3 className="text-xs font-bold tracking-wider text-indigo-700 uppercase dark:text-indigo-300">
                         Actions détectées ({chosenIdx.length}/
-                        {selectedMeeting.actionItems.length} sélectionnées)
+                        {selectedMeeting.actionItems.length} à créer)
                       </h3>
-                      {alreadySent ? (
+                      {allConverted && chosenIdx.length === 0 ? (
                         <div className="flex items-center gap-2">
                           <span className="inline-flex items-center gap-1 rounded-lg bg-emerald-50 px-3 py-1.5 text-[11px] font-semibold text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300">
                             <CheckCircle2 className="h-3.5 w-3.5" />
@@ -781,7 +887,8 @@ export function MeetingsWorkspace() {
                     </div>
                     <ul className="mt-3 divide-y divide-slate-200/70 dark:divide-slate-800">
                       {selectedMeeting.actionItems.map((a, idx) => {
-                        const checked = chosenIdx.includes(idx);
+                        const isItemConverted = persistedConverted.has(idx);
+                        const checked = isItemConverted || chosenIdx.includes(idx);
                         return (
                           <li
                             key={idx}
@@ -791,15 +898,26 @@ export function MeetingsWorkspace() {
                               <input
                                 type="checkbox"
                                 checked={checked}
-                                disabled={alreadySent}
+                                disabled={isItemConverted}
                                 onChange={() =>
                                   toggleActionIndex(selectedMeeting, idx)
                                 }
                                 className="h-3.5 w-3.5 accent-indigo-600"
                               />
-                              <span className="font-medium text-slate-800 dark:text-slate-100">
+                              <span
+                                className={`font-medium ${
+                                  isItemConverted
+                                    ? "text-slate-500 line-through dark:text-slate-400"
+                                    : "text-slate-800 dark:text-slate-100"
+                                }`}
+                              >
                                 {a.text}
                               </span>
+                              {isItemConverted && (
+                                <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300">
+                                  Créée
+                                </span>
+                              )}
                             </label>
                             <div className="flex items-center gap-2 text-[11px] text-slate-500 dark:text-slate-400">
                               {a.owner && (

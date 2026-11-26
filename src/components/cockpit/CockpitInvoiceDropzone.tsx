@@ -18,7 +18,7 @@ import {
   X,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   evaluateInvoiceVerificationWarnings,
   normalizeProjectCodesList,
@@ -192,8 +192,32 @@ export function CockpitInvoiceDropzone({
   const [deletingInvoice, setDeletingInvoice] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [modalError, setModalError] = useState<string | null>(null);
+  const [mobilePane, setMobilePane] = useState<"pdf" | "form">("form");
+  const blobUrlsRef = useRef<Record<string, string>>({});
 
   const currentInvoice = queue[queueIdx] ?? null;
+
+  useEffect(() => {
+    blobUrlsRef.current = localBlobUrls;
+  }, [localBlobUrls]);
+
+  useEffect(() => {
+    return () => {
+      for (const url of Object.values(blobUrlsRef.current)) {
+        URL.revokeObjectURL(url);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!currentInvoice) return;
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, [currentInvoice]);
 
   function hydrateStep1(inv: CockpitInvoiceItem) {
     setStep(1);
@@ -736,8 +760,8 @@ export function CockpitInvoiceDropzone({
         }}
         className={`col-span-2 rounded-xl border-2 border-dashed p-3 transition-all ${
           dragOver
-            ? "border-rose-500 bg-rose-50/80 dark:border-rose-400 dark:bg-rose-500/20"
-            : "border-rose-200/90 bg-rose-50/30 hover:border-rose-400 hover:bg-rose-50/60 dark:border-rose-500/30 dark:bg-rose-500/5 dark:hover:border-rose-400/60 dark:hover:bg-rose-500/10"
+            ? "border-indigo-500 bg-indigo-50/80 dark:border-indigo-400 dark:bg-indigo-500/20"
+            : "border-indigo-200/90 bg-indigo-50/30 hover:border-indigo-400 hover:bg-indigo-50/60 dark:border-indigo-500/30 dark:bg-indigo-500/5 dark:hover:border-indigo-400/60 dark:hover:bg-indigo-500/10"
         }`}
       >
         <input
@@ -761,7 +785,7 @@ export function CockpitInvoiceDropzone({
           className="flex w-full items-center justify-between gap-2.5 text-left disabled:opacity-60"
         >
           <div className="flex min-w-0 items-center gap-2.5">
-            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-rose-600 text-white shadow-2xs">
+            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-indigo-600 text-white shadow-2xs">
               {uploading ? (
                 <Upload className="h-4 w-4 animate-bounce" />
               ) : (
@@ -778,19 +802,19 @@ export function CockpitInvoiceDropzone({
               </p>
             </div>
           </div>
-          <Upload className="h-4 w-4 shrink-0 text-rose-500" />
+          <Upload className="h-4 w-4 shrink-0 text-indigo-500" />
         </button>
 
         {pendingList.length > 0 && (
-          <div className="mt-2.5 flex flex-wrap items-center justify-between gap-1.5 border-t border-rose-200/60 pt-2 dark:border-rose-500/20">
-            <span className="text-[11px] font-semibold text-rose-700 dark:text-rose-300">
+          <div className="mt-2.5 flex flex-wrap items-center justify-between gap-1.5 border-t border-indigo-200/60 pt-2 dark:border-indigo-500/20">
+            <span className="text-[11px] font-semibold text-indigo-700 dark:text-indigo-300">
               {pendingList.length} facture{pendingList.length > 1 ? "s" : ""} à
               vérifier
             </span>
             <button
               type="button"
               onClick={() => openVerifierFor(pendingList, 0)}
-              className="inline-flex items-center gap-1 rounded-lg bg-rose-600 px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-rose-700"
+              className="inline-flex items-center gap-1 rounded-lg bg-indigo-600 px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-indigo-700"
             >
               Ouvrir visionneuse
               <ArrowRight className="h-3 w-3" />
@@ -804,13 +828,24 @@ export function CockpitInvoiceDropzone({
         <div
           role="dialog"
           aria-modal="true"
-          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/75 p-3 backdrop-blur-xs sm:p-5"
+          onKeyDown={(e) => {
+            if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+              e.preventDefault();
+              if (step === 1 && !loadingPreview) void handleProceedToStep2();
+              else if (step === 2 && !submittingDraft)
+                void handleConfirmAndCreateGmailDraft();
+            } else if (e.key === "Escape") {
+              e.preventDefault();
+              closeModal(true);
+            }
+          }}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/75 p-2 backdrop-blur-xs sm:p-5"
         >
-          <div className="flex h-[92vh] w-full max-w-7xl flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl dark:border-slate-700 dark:bg-[#111827]">
+          <div className="flex h-[94vh] w-full max-w-7xl flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl dark:border-slate-700 dark:bg-[#111827]">
             {/* Top Bar with Step Indicator & Batch Progress */}
             <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-5 py-3 dark:border-slate-800">
               <div className="flex flex-wrap items-center gap-2.5">
-                <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-rose-50 text-rose-600 dark:bg-rose-500/15 dark:text-rose-400">
+                <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-50 text-indigo-600 dark:bg-indigo-500/15 dark:text-indigo-400">
                   <FileText className="h-4 w-4" />
                 </div>
                 <div>
@@ -821,10 +856,40 @@ export function CockpitInvoiceDropzone({
                         : "Étape 2/2 · Confirmation du brouillon Gmail compta"}
                     </h3>
                     {queue.length > 1 && (
-                      <span className="rounded-full bg-indigo-50 px-2 py-0.5 font-mono text-[11px] font-bold tabular-nums text-indigo-700 dark:bg-indigo-500/20 dark:text-indigo-300">
-                        Facture {queueIdx + 1} / {queue.length} · 1 mail par
-                        facture
-                      </span>
+                      <div className="inline-flex items-center gap-1 rounded-full bg-indigo-50 px-2 py-0.5 font-mono text-[11px] font-bold tabular-nums text-indigo-700 dark:bg-indigo-500/20 dark:text-indigo-300">
+                        <button
+                          type="button"
+                          disabled={queueIdx === 0}
+                          onClick={() => {
+                            const prevIdx = Math.max(0, queueIdx - 1);
+                            setQueueIdx(prevIdx);
+                            hydrateStep1(queue[prevIdx]);
+                          }}
+                          aria-label="Facture précédente"
+                          className="rounded px-1 hover:bg-indigo-100 disabled:opacity-30 dark:hover:bg-indigo-500/30"
+                        >
+                          ←
+                        </button>
+                        <span>
+                          {queueIdx + 1}/{queue.length}
+                        </span>
+                        <button
+                          type="button"
+                          disabled={queueIdx >= queue.length - 1}
+                          onClick={() => {
+                            const nextIdx = Math.min(queue.length - 1, queueIdx + 1);
+                            setQueueIdx(nextIdx);
+                            hydrateStep1(queue[nextIdx]);
+                          }}
+                          aria-label="Facture suivante"
+                          className="rounded px-1 hover:bg-indigo-100 disabled:opacity-30 dark:hover:bg-indigo-500/30"
+                        >
+                          →
+                        </button>
+                        <span className="hidden font-sans font-medium sm:inline">
+                          · 1 mail / facture
+                        </span>
+                      </div>
                     )}
                   </div>
                   <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[11px] text-slate-500 dark:text-slate-400">
@@ -902,10 +967,42 @@ export function CockpitInvoiceDropzone({
               </div>
             </div>
 
+            {/* Mobile Tabs Switcher (< 1024px) */}
+            <div className="flex border-b border-slate-200 bg-slate-50 px-4 py-1.5 lg:hidden dark:border-slate-800 dark:bg-slate-900/60">
+              <div className="grid w-full grid-cols-2 gap-1 rounded-xl bg-slate-200/70 p-0.5 dark:bg-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setMobilePane("form")}
+                  className={`rounded-lg py-1.5 text-xs font-semibold transition-colors ${
+                    mobilePane === "form"
+                      ? "bg-white text-indigo-700 shadow-2xs dark:bg-slate-900 dark:text-indigo-300"
+                      : "text-slate-600 dark:text-slate-400"
+                  }`}
+                >
+                  Vérification
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setMobilePane("pdf")}
+                  className={`rounded-lg py-1.5 text-xs font-semibold transition-colors ${
+                    mobilePane === "pdf"
+                      ? "bg-white text-indigo-700 shadow-2xs dark:bg-slate-900 dark:text-indigo-300"
+                      : "text-slate-600 dark:text-slate-400"
+                  }`}
+                >
+                  Aperçu PDF
+                </button>
+              </div>
+            </div>
+
             {/* Split-View Pennylane Body */}
             <div className="grid min-h-0 flex-1 lg:grid-cols-12">
               {/* LEFT (7 cols): Full-Height Embedded PDF Viewer */}
-              <div className="flex min-h-[300px] flex-col border-b border-slate-200 bg-slate-100 lg:col-span-7 lg:border-r lg:border-b-0 dark:border-slate-800 dark:bg-slate-950">
+              <div
+                className={`${
+                  mobilePane === "pdf" ? "flex" : "hidden lg:flex"
+                } min-h-[300px] flex-col border-b border-slate-200 bg-slate-100 lg:col-span-7 lg:border-r lg:border-b-0 dark:border-slate-800 dark:bg-slate-950`}
+              >
                 <iframe
                   key={currentInvoice.id}
                   src={`${currentPdfUrl}#view=FitH`}
@@ -915,7 +1012,11 @@ export function CockpitInvoiceDropzone({
               </div>
 
               {/* RIGHT (5 cols): Step 1 Form OR Step 2 Email Confirmation */}
-              <div className="flex min-h-0 flex-col overflow-y-auto p-5 lg:col-span-5">
+              <div
+                className={`${
+                  mobilePane === "form" ? "flex" : "hidden lg:flex"
+                } min-h-0 flex-col overflow-y-auto p-5 lg:col-span-5`}
+              >
                 {modalError && (
                   <div
                     role="alert"
@@ -1165,6 +1266,26 @@ export function CockpitInvoiceDropzone({
                               </option>
                             ))}
                           </select>
+                          {quoteId && (() => {
+                            const matched = quotes.find((q) => q.id === quoteId);
+                            if (!matched) return null;
+                            const delta = Math.round((parsedHt - matched.amountHt) * 100) / 100;
+                            return (
+                              <p
+                                className={`mt-1 text-[11px] font-semibold ${
+                                  delta > 0.01
+                                    ? "text-rose-700 dark:text-rose-300"
+                                    : "text-emerald-700 dark:text-emerald-300"
+                                }`}
+                              >
+                                {delta > 0.01
+                                  ? `Écart vs devis : +${formatEur(delta)} HT au-dessus du devis`
+                                  : delta < -0.01
+                                    ? `Dans le devis (reste ${formatEur(Math.abs(delta))} HT)`
+                                    : "Montant exact du devis (0 € d'écart)"}
+                              </p>
+                            );
+                          })()}
                         </div>
                       )}
                     </div>

@@ -79,6 +79,10 @@ export function WeeklysWorkspace() {
   const [selectedVisualIds, setSelectedVisualIds] = useState<string[]>([]);
   const [nextStepsClient, setNextStepsClient] = useState<string[]>([]);
   const [nextStepsGo, setNextStepsGo] = useState<string[]>([]);
+  const [suggestedClient, setSuggestedClient] = useState<string[]>([]);
+  const [suggestedGo, setSuggestedGo] = useState<string[]>([]);
+  const [krispMeetingsCount, setKrispMeetingsCount] = useState(0);
+  const [krispHighlights, setKrispHighlights] = useState<string[]>([]);
   const [newClientStep, setNewClientStep] = useState("");
   const [newGoStep, setNewGoStep] = useState("");
   const [weeklys, setWeeklys] = useState<WeeklyReportView[]>([]);
@@ -145,6 +149,10 @@ export function WeeklysWorkspace() {
       setSelectedVisualIds([]);
       setNextStepsClient([]);
       setNextStepsGo([]);
+      setSuggestedClient([]);
+      setSuggestedGo([]);
+      setKrispMeetingsCount(0);
+      setKrispHighlights([]);
       setNewClientStep("");
       setNewGoStep("");
       setApiWarnings([]);
@@ -163,6 +171,10 @@ export function WeeklysWorkspace() {
         preview?: {
           tasks: WeeklyDigestTaskView[];
           availableVisuals: WeeklyVisualView[];
+          suggestedNextStepsClient?: string[];
+          suggestedNextStepsGo?: string[];
+          krispMeetingsCount?: number;
+          krispHighlights?: string[];
         };
         error?: string;
       };
@@ -170,6 +182,10 @@ export function WeeklysWorkspace() {
       if (res.ok) {
         setWeeklys(json.weeklys ?? []);
         setTasks(json.preview?.tasks ?? []);
+        setSuggestedClient(json.preview?.suggestedNextStepsClient ?? []);
+        setSuggestedGo(json.preview?.suggestedNextStepsGo ?? []);
+        setKrispMeetingsCount(json.preview?.krispMeetingsCount ?? 0);
+        setKrispHighlights(json.preview?.krispHighlights ?? []);
         const avail = json.preview?.availableVisuals ?? [];
         setVisuals(avail);
         setSelectedVisualIds((prev) => {
@@ -476,38 +492,59 @@ export function WeeklysWorkspace() {
                     <RotateCcw className="h-3 w-3" />
                     Charger modèle vierge
                   </button>
-                  {tasks.length > 0 && (
+                  {(tasks.length > 0 ||
+                    suggestedClient.length > 0 ||
+                    suggestedGo.length > 0) && (
                     <button
                       type="button"
                       onClick={() => {
-                        const clientFromTasks = tasks
-                          .filter((t) => t.status === "EN_ATTENTE_CLIENT")
-                          .slice(0, 4)
-                          .map((t) => t.tache);
-                        const goFromTasks = tasks
-                          .filter((t) => t.status === "EN_COURS")
-                          .slice(0, 4)
-                          .map((t) => t.tache);
-                        if (clientFromTasks.length > 0) {
-                          setNextStepsClient(clientFromTasks);
-                        }
-                        if (goFromTasks.length > 0) {
-                          setNextStepsGo(goFromTasks);
-                        }
+                        const nextC =
+                          suggestedClient.length > 0
+                            ? suggestedClient
+                            : tasks
+                                .filter((t) => t.status === "EN_ATTENTE_CLIENT")
+                                .slice(0, 4)
+                                .map((t) => t.tache);
+                        const nextG =
+                          suggestedGo.length > 0
+                            ? suggestedGo
+                            : tasks
+                                .filter((t) => t.status === "EN_COURS")
+                                .slice(0, 4)
+                                .map((t) => t.tache);
+                        if (nextC.length > 0) setNextStepsClient(nextC);
+                        if (nextG.length > 0) setNextStepsGo(nextG);
                         showToast(
-                          clientFromTasks.length + goFromTasks.length > 0
-                            ? "Prochaines étapes suggérées depuis votre planning !"
-                            : "Aucune tâche En cours ou Attente client sur la période."
+                          nextC.length + nextG.length > 0
+                            ? krispMeetingsCount > 0
+                              ? `Pré-rempli depuis le planning + ${krispMeetingsCount} CR Krisp de la semaine !`
+                              : "Prochaines étapes pré-remplies depuis votre planning !"
+                            : "Aucune tâche ou action Krisp détectée sur la période."
                         );
                       }}
-                      className="inline-flex items-center gap-1.5 rounded-lg border border-indigo-200 bg-indigo-50/70 px-2.5 py-1 text-[11px] font-semibold text-indigo-700 hover:bg-indigo-100/70 dark:border-indigo-500/30 dark:bg-indigo-500/15 dark:text-indigo-300"
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-indigo-200 bg-indigo-50/80 px-2.5 py-1 text-[11px] font-semibold text-indigo-700 hover:bg-indigo-100/80 dark:border-indigo-500/30 dark:bg-indigo-500/15 dark:text-indigo-300"
                     >
                       <Sparkles className="h-3 w-3" />
-                      Suggérer depuis le planning
+                      {krispMeetingsCount > 0
+                        ? `Pré-remplir (Planning + ${krispMeetingsCount} CR Krisp)`
+                        : "Pré-remplir depuis le planning"}
                     </button>
                   )}
                 </div>
               </div>
+
+              {krispHighlights.length > 0 && (
+                <div className="mb-4 rounded-xl border border-indigo-200/70 bg-indigo-50/40 px-3.5 py-2.5 text-[11px] text-indigo-950 dark:border-indigo-500/30 dark:bg-indigo-500/10 dark:text-indigo-200">
+                  <p className="font-semibold text-indigo-700 dark:text-indigo-300">
+                    Décisions clés issues de vos CR Krisp de la semaine :
+                  </p>
+                  <ul className="mt-1 list-disc space-y-0.5 pl-4">
+                    {krispHighlights.map((h, i) => (
+                      <li key={i}>{h}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
 
               <div className="grid gap-5 md:grid-cols-2 md:divide-x md:divide-slate-100 dark:md:divide-slate-800/80">
                 {/* Côté Client */}

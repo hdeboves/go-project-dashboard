@@ -16,6 +16,7 @@ export interface BudgetLineLike {
   postOpDays: number;
   postOpUnitCost: number;
   postOpTotalHt: number;
+  committedHt?: number;
   sheetRowIndex?: number | null;
   invoiceNumbersNote?: string | null;
 }
@@ -28,6 +29,7 @@ export interface BudgetSummary {
   preOpExternalHt: number;
   preOpRhHt: number;
   preOpAmortHt: number;
+  committedTotalHt: number;
   postOpTotalHt: number;
   postOpHt: number;
   postOpExternalHt: number;
@@ -143,6 +145,8 @@ export function computeBudgetMetrics(
   let postOpExternalCents = 0;
   let postOpRhCents = 0;
   let postOpAmortCents = 0;
+  let committedTotalCents = 0;
+  let forecastCostCentsAcc = 0;
   let remainingToCommitCents = 0;
 
   interface CategoryAcc {
@@ -167,10 +171,21 @@ export function computeBudgetMetrics(
 
     const lineSoldCents = toCents(line.saleTotalHt);
     const linePreCents = toCents(line.preOpTotalHt);
+    const lineCommittedCents = toCents(line.committedHt ?? 0);
     const linePostCents = toCents(line.postOpTotalHt);
-    const lineRemainingCents = Math.max(0, linePreCents - linePostCents);
+    const lineForecastCents = Math.max(
+      linePreCents,
+      lineCommittedCents,
+      linePostCents
+    );
+    const lineRemainingCents = Math.max(
+      0,
+      linePreCents - Math.max(linePostCents, lineCommittedCents)
+    );
 
     soldCents += lineSoldCents;
+    committedTotalCents += lineCommittedCents;
+    forecastCostCentsAcc += lineForecastCents;
     remainingToCommitCents += lineRemainingCents;
 
     let acc = categoryMap.get(categoryName);
@@ -294,7 +309,8 @@ export function computeBudgetMetrics(
   const realMarginPct =
     soldCents > 0 ? round2((realMarginCents / soldCents) * 100) : 0;
 
-  const forecastCostCents = postOpTotalCents + remainingToCommitCents;
+  const committedTotalHt = fromCents(committedTotalCents);
+  const forecastCostCents = forecastCostCentsAcc;
   const forecastCostHt = fromCents(forecastCostCents);
   const forecastMarginCents = soldCents - forecastCostCents;
   const forecastMarginHt = fromCents(forecastMarginCents);
@@ -309,6 +325,7 @@ export function computeBudgetMetrics(
     preOpExternalHt,
     preOpRhHt,
     preOpAmortHt,
+    committedTotalHt,
     postOpTotalHt,
     postOpHt: postOpTotalHt,
     postOpExternalHt,

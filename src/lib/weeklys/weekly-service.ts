@@ -33,6 +33,9 @@ export interface WeeklyPreviewData {
   availableVisuals: DriveNode[];
   suggestedNextStepsClient: string[];
   suggestedNextStepsGo: string[];
+  krispMeetingsCount?: number;
+  krispHighlights?: string[];
+  previousWeeklyTitle?: string | null;
 }
 
 function resolveWeekWindow(
@@ -98,7 +101,7 @@ export async function getWeeklyPreview(
     weekEndRaw
   );
 
-  const [tasks, prodNodes] = await Promise.all([
+  const [tasks, prodNodes, weekMeetings, lastWeekly] = await Promise.all([
     collectWeeklyTasks(prisma, projectId, weekStart, weekEnd),
     prisma.driveNode.findMany({
       where: {
@@ -109,25 +112,81 @@ export async function getWeeklyPreview(
       },
       orderBy: { createdAt: "desc" },
     }),
+    prisma.meetingNote.findMany({
+      where: {
+        projectId,
+        meetingDate: {
+          gte: addUtcDays(weekStart, -2),
+          lte: addUtcDays(weekEnd, 2),
+        },
+      },
+      orderBy: { meetingDate: "desc" },
+      take: 5,
+    }),
+    prisma.weeklyReport.findFirst({
+      where: { projectId },
+      orderBy: { createdAt: "desc" },
+      select: { title: true },
+    }),
   ]);
 
   const availableVisuals = prodNodes.filter((n) => isEligibleVisualNode(n));
 
-  const suggestedNextStepsClient = tasks
-    .filter((t) => t.status === "EN_ATTENTE_CLIENT")
-    .map((t) => `Valider : ${t.tache}`);
-  const suggestedNextStepsGo = tasks
-    .filter((t) => t.status === "EN_COURS" || t.status === "A_FAIRE")
-    .slice(0, 5)
-    .map((t) => `Finaliser : ${t.tache}`);
+  const clientSet = new Set<string>(
+    tasks
+      .filter((t) => t.status === "EN_ATTENTE_CLIENT")
+      .map((t) => `Valider : ${t.tache}`)
+  );
+  const agencySet = new Set<string>(
+    tasks
+      .filter((t) => t.status === "EN_COURS" || t.status === "A_FAIRE")
+      .slice(0, 5)
+      .map((t) => `Finaliser : ${t.tache}`)
+  );
+  const krispHighlights: string[] = [];
+
+  for (const m of weekMeetings) {
+    try {
+      const decisions = JSON.parse(m.keyDecisionsJson);
+      if (Array.isArray(decisions)) {
+        for (const d of decisions.slice(0, 3)) {
+          if (typeof d === "string" && d.trim()) {
+            krispHighlights.push(`${m.title} : ${d.trim()}`);
+          }
+        }
+      }
+    } catch {
+      // ignore malformed json
+    }
+    try {
+      const actions = JSON.parse(m.actionItemsJson) as Array<{
+        text?: string;
+        owner?: string | null;
+      }>;
+      if (Array.isArray(actions)) {
+        for (const a of actions) {
+          const text = a?.text?.trim();
+          if (!text) continue;
+          const isClient = (a.owner ?? "").toLowerCase().includes("client");
+          if (isClient) clientSet.add(text);
+          else agencySet.add(text);
+        }
+      }
+    } catch {
+      // ignore malformed json
+    }
+  }
 
   return {
     weekStart: weekStartIso,
     weekEnd: weekEndIso,
     tasks,
     availableVisuals,
-    suggestedNextStepsClient,
-    suggestedNextStepsGo,
+    suggestedNextStepsClient: Array.from(clientSet).slice(0, 6),
+    suggestedNextStepsGo: Array.from(agencySet).slice(0, 6),
+    krispMeetingsCount: weekMeetings.length,
+    krispHighlights: krispHighlights.slice(0, 5),
+    previousWeeklyTitle: lastWeekly?.title ?? null,
   };
 }
 
