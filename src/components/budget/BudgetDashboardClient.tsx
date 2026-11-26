@@ -3,11 +3,9 @@
 import {
   AlertTriangle,
   CheckCircle2,
-  ChevronDown,
   Copy,
   ExternalLink,
   FileSpreadsheet,
-  FileText,
   PieChart,
   Receipt,
   RefreshCw,
@@ -32,7 +30,6 @@ import {
   formatEur,
 } from "@/components/budget/types";
 import {
-  PROJECT_CATEGORIES,
   PROJECT_CATEGORY_META,
   normalizeProjectCategory,
   type ProjectCategory,
@@ -89,7 +86,6 @@ export function BudgetDashboardClient() {
             ? "table"
             : "overview"
   );
-  const [importMenuOpen, setImportMenuOpen] = useState(false);
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [overrunsOnly, setOverrunsOnly] = useState(queryOverruns);
   const autoOpenedBlankTableRef = useRef<string | null>(null);
@@ -215,7 +211,6 @@ export function BudgetDashboardClient() {
   async function handleXlsxUpload(file: File) {
     if (!projectId) return;
     setImporting(true);
-    setImportMenuOpen(false);
     setActionError(null);
     setSetupRequiredMessage(null);
     try {
@@ -246,7 +241,6 @@ export function BudgetDashboardClient() {
   async function handleCopyProdBudget() {
     if (!projectId) return;
     setImporting(true);
-    setImportMenuOpen(false);
     setActionError(null);
     setSetupRequiredMessage(null);
     try {
@@ -278,7 +272,6 @@ export function BudgetDashboardClient() {
   ) {
     if (!projectId) return;
     setImporting(true);
-    setImportMenuOpen(false);
     setActionError(null);
     setSetupRequiredMessage(null);
     try {
@@ -316,7 +309,6 @@ export function BudgetDashboardClient() {
   ) {
     if (!projectId) return;
     setSyncing(true);
-    setImportMenuOpen(false);
     setActionError(null);
     setSetupRequiredMessage(null);
     try {
@@ -369,9 +361,6 @@ export function BudgetDashboardClient() {
     [overrunAlerts]
   );
 
-  const pendingInvoicesCount = invoices.filter(
-    (inv) => inv.status === "PENDING_VALIDATION"
-  ).length;
   const blockedInvoices = invoices.filter(
     (inv) => inv.cpConflict || inv.status === "CONFLICT_BLOCKED"
   );
@@ -501,98 +490,25 @@ export function BudgetDashboardClient() {
             </a>
           )}
 
-          <div className="relative">
-            <button
-              type="button"
-              onClick={() => setImportMenuOpen((v) => !v)}
-              className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs font-semibold text-slate-700 shadow-2xs transition-colors hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
-            >
-              <FileSpreadsheet className="h-4 w-4 text-indigo-600 dark:text-indigo-400" />
-              {importing ? "Import..." : "Importer / Options"}
-              <ChevronDown className="h-3.5 w-3.5 text-slate-400" />
-            </button>
-
-            {importMenuOpen && (
-              <>
-                <div
-                  className="fixed inset-0 z-20"
-                  onClick={() => setImportMenuOpen(false)}
-                />
-                <div className="absolute right-0 z-30 mt-1.5 w-64 rounded-xl border border-slate-200 bg-white p-1.5 shadow-lg dark:border-slate-700 dark:bg-slate-900">
-                  <label className="flex cursor-pointer items-center gap-2.5 rounded-lg px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 dark:text-slate-200 dark:hover:bg-slate-800">
-                    <Upload className="h-4 w-4 text-slate-400" />
-                    <span>Importer un fichier Excel (.xlsx)</span>
-                    <input
-                      type="file"
-                      accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                      className="sr-only"
-                      disabled={importing}
-                      onChange={(e) => {
-                        const file = e.target.files?.[0];
-                        if (file) {
-                          void handleXlsxUpload(file);
-                          e.target.value = "";
-                        }
-                      }}
-                    />
-                  </label>
-                  <button
-                    type="button"
-                    disabled={importing}
-                    onClick={() => void handleCopyProdBudget()}
-                    className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 dark:text-slate-200 dark:hover:bg-slate-800"
-                  >
-                    <Copy className="h-4 w-4 text-slate-400" />
-                    <span>Importer le budget modèle</span>
-                  </button>
-                  <div className="my-1 border-t border-slate-100 pt-1 dark:border-slate-800">
-                    <button
-                      type="button"
-                      disabled={syncing || !budget?.budgetSheetId}
-                      onClick={() => void handleSmartSync("pull")}
-                      className="flex w-full items-center gap-2.5 rounded-lg px-3 py-1.5 text-left text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-40 dark:text-slate-200 dark:hover:bg-slate-800"
-                    >
-                      <RefreshCw className="h-3.5 w-3.5 text-slate-400" />
-                      <span>Forcer : Google Sheets → Site</span>
-                    </button>
-                    <button
-                      type="button"
-                      disabled={syncing}
-                      onClick={() => void handleSmartSync("push")}
-                      className="flex w-full items-center gap-2.5 rounded-lg px-3 py-1.5 text-left text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-40 dark:text-slate-200 dark:hover:bg-slate-800"
-                    >
-                      <RefreshCw className="h-3.5 w-3.5 text-indigo-500" />
-                      <span>Forcer : Site → Google Sheets</span>
-                    </button>
-                  </div>
-                  <div className="my-1.5 border-t border-slate-100 pt-1.5 dark:border-slate-800">
-                    <p className="px-3 py-1 text-[10px] font-bold tracking-wider text-slate-400 uppercase">
-                      Modèle vierge (0 €) par catégorie
-                    </p>
-                    {PROJECT_CATEGORIES.map((cat) => (
-                      <button
-                        key={cat}
-                        type="button"
-                        disabled={importing}
-                        onClick={() => void handleApplyBlankCategoryTemplate(cat)}
-                        className="flex w-full items-center justify-between rounded-lg px-3 py-1.5 text-left text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 dark:text-slate-200 dark:hover:bg-slate-800"
-                      >
-                        <span className="flex items-center gap-2">
-                          <Sparkles className="h-3.5 w-3.5 text-indigo-500" />
-                          {PROJECT_CATEGORY_META[cat].label}
-                        </span>
-                        {cat === projectCategory && (
-                          <span className="text-[10px] font-semibold text-indigo-600 dark:text-indigo-400">
-                            Actuel
-                          </span>
-                        )}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              </>
-            )}
-          </div>
+          <label className="inline-flex cursor-pointer items-center gap-2 rounded-xl border border-slate-200 bg-white px-3.5 py-2 text-xs font-semibold text-slate-700 shadow-2xs transition-colors hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700">
+            <Upload className="h-3.5 w-3.5 text-indigo-600 dark:text-indigo-400" />
+            <span>
+              {importing ? "Import..." : "Importer un fichier Excel"}
+            </span>
+            <input
+              type="file"
+              accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+              className="sr-only"
+              disabled={importing}
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) {
+                  void handleXlsxUpload(file);
+                  e.target.value = "";
+                }
+              }}
+            />
+          </label>
 
           <button
             type="button"
@@ -839,38 +755,6 @@ export function BudgetDashboardClient() {
           >
             <Table2 className="h-3.5 w-3.5" />
             Tableau ({budget?.lines.length ?? 0})
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setActiveTab("quotes")}
-            data-testid="budget-tab-quotes"
-            className={`inline-flex items-center gap-2 border-b-2 pb-3 text-xs font-semibold transition-colors ${
-              activeTab === "quotes"
-                ? "border-indigo-600 text-slate-900 dark:border-indigo-400 dark:text-white"
-                : "border-transparent text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white"
-            }`}
-          >
-            <FileText className="h-3.5 w-3.5" />
-            Devis ({quotes.length})
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setActiveTab("invoices")}
-            className={`inline-flex items-center gap-2 border-b-2 pb-3 text-xs font-semibold transition-colors ${
-              activeTab === "invoices"
-                ? "border-indigo-600 text-slate-900 dark:border-indigo-400 dark:text-white"
-                : "border-transparent text-slate-500 hover:text-slate-900 dark:text-slate-400 dark:hover:text-white"
-            }`}
-          >
-            <Receipt className="h-3.5 w-3.5" />
-            Factures ({invoices.length})
-            {pendingInvoicesCount > 0 && (
-              <span className="rounded-full bg-indigo-100 px-1.5 py-0.5 text-[10px] font-bold text-indigo-700 dark:bg-indigo-500/20 dark:text-indigo-300">
-                {pendingInvoicesCount}
-              </span>
-            )}
           </button>
         </div>
 
