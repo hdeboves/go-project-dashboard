@@ -59,6 +59,29 @@ function formatShortDate(date: Date | null): string {
   }).format(date);
 }
 
+function extractFirstName(
+  name: string | null | undefined,
+  email: string | null | undefined
+): string | null {
+  const raw = (name ?? "").trim();
+  if (raw) {
+    const firstToken = raw.split(/\s+/)[0]?.split(".")[0]?.trim() ?? "";
+    if (firstToken) {
+      return firstToken.charAt(0).toUpperCase() + firstToken.slice(1);
+    }
+  }
+  const local = (email ?? "").split("@")[0]?.trim() ?? "";
+  if (!local) return null;
+  const parts = local
+    .replace(/[._-]+/g, " ")
+    .split(/\s+/)
+    .filter(Boolean);
+  const candidate = parts.find((p) => p.length > 1) ?? parts[0] ?? "";
+  return candidate
+    ? candidate.charAt(0).toUpperCase() + candidate.slice(1)
+    : null;
+}
+
 export default async function CommandCenterPage({
   searchParams,
 }: {
@@ -353,12 +376,17 @@ export default async function CommandCenterPage({
       : []),
   ];
 
+  const firstName = extractFirstName(currentUser?.name, currentUser?.email);
+
   return (
     <div className="mx-auto max-w-6xl space-y-6">
       {/* 1. CLEAN EXECUTIVE HEADER */}
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
-          <div className="flex flex-wrap items-center gap-2">
+          <p className="text-sm font-semibold text-slate-600 dark:text-slate-300">
+            {firstName ? `Bonjour ${firstName}` : "Bonjour"}
+          </p>
+          <div className="mt-1.5 flex flex-wrap items-center gap-2">
             <p className="text-xs font-semibold text-indigo-600 dark:text-indigo-400">
               {activeProject
                 ? `Code projet ${activeProject.codeProjet} · Vue du jour`
