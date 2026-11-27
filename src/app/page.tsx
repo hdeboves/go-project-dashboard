@@ -10,7 +10,6 @@ import {
   FolderGit2,
   FolderKanban,
   Mic,
-  Plus,
   Presentation,
   Receipt,
   Settings,
@@ -24,6 +23,10 @@ import {
   type CockpitQuoteOption,
 } from "@/components/cockpit/CockpitInvoiceDropzone";
 import { CockpitQuoteDropzone } from "@/components/cockpit/CockpitQuoteDropzone";
+import {
+  CockpitTaskCreator,
+  type CockpitTeamUserOption,
+} from "@/components/cockpit/CockpitTaskModal";
 import { UpcomingTasksCard } from "@/components/cockpit/UpcomingTasksCard";
 import {
   buildVisibleInvoicesWhere,
@@ -126,6 +129,8 @@ export default async function CommandCenterPage({
   let cockpitBudgetLines: CockpitBudgetLineOption[] = [];
   let cockpitQuotes: CockpitQuoteOption[] = [];
   let cockpitPendingInvoices: CockpitInvoiceItem[] = [];
+  let cockpitTaskPhases: string[] = [];
+  let cockpitTeamUsers: CockpitTeamUserOption[] = [];
 
   if (activeProject) {
     const [
@@ -138,6 +143,8 @@ export default async function CommandCenterPage({
       tasksDoneCount,
       tasksLateCount,
       nextTasks,
+      phaseRows,
+      teamUserRows,
     ] = await Promise.all([
       prisma.budgetLine.findMany({
         where: { projectId: activeProject.id },
@@ -222,6 +229,16 @@ export default async function CommandCenterPage({
           status: true,
         },
       }),
+      prisma.retroTask.findMany({
+        where: { projectId: activeProject.id },
+        select: { phase: true },
+        distinct: ["phase"],
+        orderBy: [{ sheetRowIndex: "asc" }, { createdAt: "asc" }],
+      }),
+      prisma.user.findMany({
+        select: { id: true, name: true, email: true },
+        orderBy: { name: "asc" },
+      }),
     ]);
 
     budgetSoldHt = budgetLines.reduce((s, l) => s + l.saleTotalHt, 0);
@@ -252,6 +269,10 @@ export default async function CommandCenterPage({
     doneTasks = tasksDoneCount;
     lateTasksCount = tasksLateCount;
     upcomingTasks = nextTasks;
+    cockpitTaskPhases = phaseRows
+      .map((r) => r.phase.trim())
+      .filter((p) => p.length > 0);
+    cockpitTeamUsers = teamUserRows;
   }
 
   const budgetPct =
@@ -609,6 +630,7 @@ export default async function CommandCenterPage({
             <UpcomingTasksCard
               key={activeProject.id}
               projectId={activeProject.id}
+              phases={cockpitTaskPhases}
               initialTasks={upcomingTasks.map((t) => ({
                 id: t.id,
                 tache: t.tache,
@@ -661,15 +683,14 @@ export default async function CommandCenterPage({
                   }))}
                   budgetLines={cockpitBudgetLines}
                 />
-                <Link
-                  href="/retroplanning"
-                  className="group flex flex-col gap-2 rounded-xl border border-slate-200/80 bg-slate-50/40 p-3 text-xs font-semibold text-slate-800 transition-all hover:border-rose-300 hover:bg-rose-50/40 dark:border-slate-800 dark:bg-slate-800/30 dark:text-slate-100 dark:hover:border-rose-500/40 dark:hover:bg-rose-500/10"
-                >
-                  <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-slate-100 text-slate-600 transition-colors group-hover:bg-rose-100 group-hover:text-rose-600 dark:bg-slate-800 dark:text-slate-300 dark:group-hover:bg-rose-500/20 dark:group-hover:text-rose-300">
-                    <Plus className="h-4 w-4" />
-                  </span>
-                  <span>Nouvelle tâche</span>
-                </Link>
+                <CockpitTaskCreator
+                  key={`task-creator-${activeProject.id}`}
+                  projectId={activeProject.id}
+                  projectLabel={`${activeProject.client} — ${activeProject.nomJeu}`}
+                  phases={cockpitTaskPhases}
+                  teamUsers={cockpitTeamUsers}
+                  currentUserId={currentUser?.id ?? null}
+                />
                 <Link
                   href="/budget?tab=quotes"
                   className="group flex flex-col gap-2 rounded-xl border border-slate-200/80 bg-slate-50/40 p-3 text-xs font-semibold text-slate-800 transition-all hover:border-rose-300 hover:bg-rose-50/40 dark:border-slate-800 dark:bg-slate-800/30 dark:text-slate-100 dark:hover:border-rose-500/40 dark:hover:bg-rose-500/10"

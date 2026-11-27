@@ -21,7 +21,7 @@ import { seedBlankRetroForProject } from "@/lib/templates/project-templates";
 
 const CreateTaskSchema = z.object({
   phase: z.string(),
-  etape: z.string(),
+  etape: z.string().optional(),
   tache: z.string(),
   owner: z.string().nullable().optional(),
   ownerUserId: z.string().nullable().optional(),
@@ -264,7 +264,15 @@ export async function POST(
 
     const parsed = CreateTaskSchema.parse(rawBody);
     const gateway = await tryGetGoogleGateway(id);
-    const result = await createRetroTask(prisma, id, parsed, gateway);
+    const result = await createRetroTask(
+      prisma,
+      id,
+      {
+        ...parsed,
+        etape: parsed.etape === undefined ? "Général" : parsed.etape,
+      },
+      gateway
+    );
 
     return NextResponse.json(
       {

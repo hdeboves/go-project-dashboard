@@ -212,6 +212,7 @@ export interface CreateRetroTaskInput {
   etape: string;
   tache: string;
   owner?: string | null;
+  ownerUserId?: string | null;
   startDate?: string | null;
   endDate?: string | null;
   status?: string;
