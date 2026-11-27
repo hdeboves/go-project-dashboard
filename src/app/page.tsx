@@ -1,7 +1,6 @@
 import { cookies } from "next/headers";
 import Link from "next/link";
 import {
-  AlertTriangle,
   ArrowRight,
   BarChart3,
   CheckCircle2,
@@ -111,7 +110,6 @@ export default async function CommandCenterPage({
   let budgetPreOpHt = 0;
   let budgetPostOpHt = 0;
   let forecastCostHt = 0;
-  let overrunCount = 0;
   let pendingInvoices = 0;
   let extDrift = 0;
   let retroProposals = 0;
@@ -248,9 +246,6 @@ export default async function CommandCenterPage({
       (s, l) => s + Math.max(l.preOpTotalHt, l.postOpTotalHt),
       0
     );
-    overrunCount = budgetLines.filter(
-      (l) => l.postOpTotalHt > l.preOpTotalHt
-    ).length;
     pendingInvoices = pendingInvoiceRows.filter(
       (i) => i.status === "PENDING_VALIDATION"
     ).length;
@@ -283,7 +278,6 @@ export default async function CommandCenterPage({
     budgetPreOpHt > 0 &&
     Math.round(budgetPostOpHt * 100) === Math.round(budgetPreOpHt * 100);
   const budgetOverrunStrict =
-    overrunCount > 0 ||
     Math.round(budgetPostOpHt * 100) > Math.round(budgetPreOpHt * 100);
   const budgetWarning90 =
     !budgetOverrunStrict && !budgetExactSold && budgetPct >= 90;
@@ -313,17 +307,6 @@ export default async function CommandCenterPage({
     totalTasks > 0 ? Math.round((doneTasks / totalTasks) * 100) : 0;
 
   const urgentItems = [
-    ...(overrunCount > 0
-      ? [
-          {
-            href: "/budget?overruns=1",
-            label: `${overrunCount} poste${overrunCount > 1 ? "s" : ""} en dépassement budgétaire`,
-            cta: "Voir le budget",
-            tone: "rose" as const,
-            icon: AlertTriangle,
-          },
-        ]
-      : []),
     ...(lateTasksCount > 0
       ? [
           {
@@ -586,7 +569,7 @@ export default async function CommandCenterPage({
 
               {urgentItems.length === 0 ? (
                 <p className="text-xs text-slate-500 dark:text-slate-400">
-                  Aucune facture bloquée, aucun dépassement budgétaire et tous
+                  Aucune facture bloquée, aucune tâche en retard et tous
                   vos livrables client sont à jour.
                 </p>
               ) : (
